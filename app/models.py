@@ -97,6 +97,7 @@ class Poll(Base):
     reminded_24h: Mapped[bool] = mapped_column(Boolean, default=False)
     reminded_2h: Mapped[bool] = mapped_column(Boolean, default=False)
     group_message_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    campaign_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)  # сбор на параллель
 
     targets: Mapped[list["PollTarget"]] = relationship(
         back_populates="poll", cascade="all, delete-orphan", lazy="selectin", order_by="PollTarget.name"
@@ -127,6 +128,7 @@ class FaqEntry(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     teacher_id: Mapped[int] = mapped_column(BigInteger, index=True)
     chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)  # None — для всех чатов
+    school_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)  # общая база школы
     question: Mapped[str] = mapped_column(Text)
     keywords: Mapped[str] = mapped_column(Text, default="")
     answer: Mapped[str] = mapped_column(Text)
@@ -181,4 +183,70 @@ class Metric(Base):
     teacher_id: Mapped[int] = mapped_column(BigInteger, index=True)
     kind: Mapped[str] = mapped_column(String(30))
     minutes: Mapped[float] = mapped_column(Float, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+# ---------------------------------------------------------------- Школа и роли
+class School(Base):
+    """Образовательная организация: общая база ответов, сводка и сборы на параллель для завуча."""
+    __tablename__ = "schools"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(300))
+    code: Mapped[str] = mapped_column(String(32), unique=True, index=True)  # код приглашения учителей
+    admin_code: Mapped[str] = mapped_column(String(32), unique=True)       # код приглашения администрации
+    created_by: Mapped[int] = mapped_column(BigInteger)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class SchoolMember(Base):
+    __tablename__ = "school_members"
+    __table_args__ = (UniqueConstraint("school_id", "user_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    school_id: Mapped[int] = mapped_column(Integer, index=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    role: Mapped[str] = mapped_column(String(20), default="teacher")  # teacher | admin
+    joined_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class SubjectTeacher(Base):
+    """Учитель-предметник, приглашённый классным руководителем в класс (без прав администратора чата)."""
+    __tablename__ = "subject_teachers"
+    __table_args__ = (UniqueConstraint("chat_id", "user_id", "subject"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    subject: Mapped[str] = mapped_column(String(100), default="")
+    added_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class Campaign(Base):
+    """Сбор, запущенный администрацией сразу в нескольких классах."""
+    __tablename__ = "campaigns"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    school_id: Mapped[int] = mapped_column(Integer, index=True)
+    author_id: Mapped[int] = mapped_column(BigInteger)
+    title: Mapped[str] = mapped_column(String(300))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+# ---------------------------------------------------------------- «Доска класса»
+class Announcement(Base):
+    """Домашнее задание или объявление. Бот отвечает по нему на «что задали?» и публикует в чат по расписанию."""
+    __tablename__ = "announcements"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    author_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    kind: Mapped[str] = mapped_column(String(10), default="hw")  # hw | news
+    subject: Mapped[str] = mapped_column(String(100), default="")
+    text: Mapped[str] = mapped_column(Text)
+    for_date: Mapped[str | None] = mapped_column(String(10), nullable=True)  # YYYY-MM-DD — к какому дню
+    publish_mode: Mapped[str] = mapped_column(String(10), default="now")    # now | later | silent
+    publish_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # UTC
+    published: Mapped[bool] = mapped_column(Boolean, default=False)
+    message_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)

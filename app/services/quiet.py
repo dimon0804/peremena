@@ -130,7 +130,20 @@ async def build_digest(teacher: User, include_empty: bool = False) -> tuple[str,
             lines.append(f"…и ещё {len(items) - 15}")
         lines.append("")
 
-    if not items and not polls and not closed_recent and not include_empty:
+    weekly = False
+    if now_local.weekday() == 0:
+        # понедельник — итоги прошлой недели из «Счётчика пользы»
+        week = await stats.summary(teacher.user_id, days=7)
+        if week["minutes"] >= 1:
+            weekly = True
+            lines.append(f"⏱ <b>Итоги недели:</b> бот сэкономил вам {stats.fmt_minutes(week['minutes'])}.")
+            for kind, label in stats.LABELS.items():
+                v = week["by_kind"].get(kind)
+                if v:
+                    lines.append(f"   {label}: {v['count']}")
+            lines.append("")
+
+    if not items and not polls and not closed_recent and not weekly and not include_empty:
         return None
     if not items and not polls and not closed_recent:
         lines.append("Ничего срочного. Хорошего дня!")

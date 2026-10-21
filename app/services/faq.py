@@ -7,10 +7,10 @@ from __future__ import annotations
 
 import html
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 
 from ..db import session, utcnow
-from ..models import ClassChat, FaqEntry, User
+from ..models import ClassChat, FaqEntry, SchoolMember, User
 from ..timeutil import fmt_date
 from . import search
 
@@ -21,10 +21,10 @@ GROUP_SCORE = 0.70    # отвечаем в общем чате (только е
 
 
 async def add_entry(teacher_id: int, question: str, answer: str, keywords: str | None = None,
-                    chat_id: int | None = None) -> FaqEntry:
+                    chat_id: int | None = None, school_id: int | None = None) -> FaqEntry:
     async with session() as s:
         e = FaqEntry(
-            teacher_id=teacher_id, chat_id=chat_id, question=question.strip()[:1000],
+            teacher_id=teacher_id, chat_id=chat_id, school_id=school_id, question=question.strip()[:1000],
             answer=answer.strip()[:3500], keywords=(keywords if keywords is not None else search.auto_keywords(question)),
         )
         s.add(e)
@@ -37,9 +37,9 @@ async def update_entry(entry_id: int, teacher_id: int, **fields) -> FaqEntry | N
         e = await s.get(FaqEntry, entry_id)
         if e is None or e.teacher_id != teacher_id:
             return None
-        for k in ("question", "answer", "keywords", "chat_id"):
+        for k in ("question", "answer", "keywords", "chat_id", "school_id"):
             if k in fields and fields[k] is not None:
-                setattr(e, k, fields[k] if k != "chat_id" else (fields[k] or None))
+                setattr(e, k, fields[k] if k not in ("chat_id", "school_id") else (fields[k] or None))
         e.updated_at = utcnow()
         return e
 
@@ -53,10 +53,21 @@ async def delete_entry(entry_id: int, teacher_id: int) -> bool:
         return True
 
 
-async def list_entries(teacher_id: int) -> list[FaqEntry]:
+async def list_entries(teacher_id: int, with_school: bool = False) -> list[FaqEntry]:
+    """Карточки учителя; with_school — плюс общая база его школы (то, что увидят родители его классов)."""
+    async with session() as s:
+        cond = FaqEntry.teacher_id == teacher_id
+        if with_school:
+            sid = await s.scalar(select(SchoolMember.school_id).where(SchoolMember.user_id == teacher_id))
+            if sid:
+                cond = or_(cond, FaqEntry.school_id == sid)
+        return list((await s.scalars(select(FaqEntry).where(cond).order_by(FaqEntry.updated_at.desc()))).all())
+
+
+async def list_school(school_id: int) -> list[FaqEntry]:
     async with session() as s:
         return list((await s.scalars(
-            select(FaqEntry).where(FaqEntry.teacher_id == teacher_id).order_by(FaqEntry.updated_at.desc())
+            select(FaqEntry).where(FaqEntry.school_id == school_id).order_by(FaqEntry.updated_at.desc())
         )).all())
 
 
@@ -66,7 +77,8 @@ async def get_entry(entry_id: int) -> FaqEntry | None:
 
 
 async def candidates_for_chats(chat_ids: list[int]) -> list[FaqEntry]:
-    """Карточки, видимые в данных чатах: общие карточки учителя этих чатов + карточки конкретного чата."""
+    """Карточки, видимые в данных чатах: карточки учителя этих чатов (общие и конкретного чата)
+    плюс общая база ответов школы, в которой состоит учитель."""
     if not chat_ids:
         return []
     async with session() as s:
@@ -75,12 +87,17 @@ async def candidates_for_chats(chat_ids: list[int]) -> list[FaqEntry]:
         )).all() if t]
         if not teacher_ids:
             return []
-        return list((await s.scalars(
-            select(FaqEntry).where(
-                FaqEntry.teacher_id.in_(teacher_ids),
-                or_(FaqEntry.chat_id.is_(None), FaqEntry.chat_id.in_(chat_ids)),
-            )
+        school_ids = list((await s.scalars(
+            select(SchoolMember.school_id).where(SchoolMember.user_id.in_(teacher_ids))
         )).all())
+        own = and_(FaqEntry.teacher_id.in_(teacher_ids),
+                   or_(FaqEntry.chat_id.is_(None), FaqEntry.chat_id.in_(chat_ids)))
+        cond = or_(own, FaqEntry.school_id.in_(school_ids)) if school_ids else own
+        entries = list((await s.scalars(select(FaqEntry).where(cond))).all())
+    # своя карточка учителя важнее школьной с тем же вопросом
+    own_q = {search.normalize(e.question) for e in entries if e.teacher_id in teacher_ids and not e.school_id}
+    return [e for e in entries if not e.school_id or e.teacher_id in teacher_ids
+            or search.normalize(e.question) not in own_q]
 
 
 def rank(query: str, entries: list[FaqEntry], limit: int = 3) -> list[search.Hit[FaqEntry]]:
@@ -108,10 +125,11 @@ async def render_answer(e: FaqEntry) -> str:
         teacher = await s.get(User, e.teacher_id)
     who = teacher.display_name if teacher else "учителем"
     tz = teacher.tz if teacher else None
-    return (
-        f"{html.escape(e.answer)}\n\n"
-        f"<i>📖 Из справочника класса · сохранено учителем ({html.escape(who)}) {fmt_date(e.updated_at, tz)}</i>"
-    )
+    if e.school_id:
+        source = f"📖 Из базы ответов школы · обновлено {fmt_date(e.updated_at, tz)}"
+    else:
+        source = f"📖 Из справочника класса · сохранено учителем ({html.escape(who)}) {fmt_date(e.updated_at, tz)}"
+    return f"{html.escape(e.answer)}\n\n<i>{source}</i>"
 
 
 async def render_list(teacher_id: int) -> tuple[str, list[FaqEntry]]:

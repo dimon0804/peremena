@@ -45,6 +45,27 @@ async def init_db(url: str) -> None:
 
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(_add_missing_columns)
+
+
+def _add_missing_columns(conn) -> None:
+    """Лёгкая миграция: новые nullable-столбцы и столбцы со значением по умолчанию добавляются в старые таблицы."""
+    from sqlalchemy import inspect
+
+    insp = inspect(conn)
+    for table in Base.metadata.sorted_tables:
+        if not insp.has_table(table.name):
+            continue
+        existing = {c["name"] for c in insp.get_columns(table.name)}
+        for col in table.columns:
+            if col.name in existing:
+                continue
+            ddl_type = col.type.compile(dialect=conn.dialect)
+            default = ""
+            if col.default is not None and getattr(col.default, "is_scalar", False):
+                v = col.default.arg
+                default = f" DEFAULT {'TRUE' if v is True else 'FALSE' if v is False else repr(v)}"
+            conn.exec_driver_sql(f'ALTER TABLE {table.name} ADD COLUMN {col.name} {ddl_type}{default}')
 
 
 async def close_db() -> None:
