@@ -203,8 +203,7 @@ async def after_answer(poll: Poll, uid: int, opt: int, status: str) -> None:
     if poll.clarify_option is not None and opt == poll.clarify_option and status != "same":
         name = await chats.member_name(poll.chat_id, uid)
         option = poll.options[opt]
-        text = (f"💬 <b>Нужно уточнить</b> по сбору «{html.escape(poll.title)}»
-"
+        text = (f"💬 <b>Нужно уточнить</b> по сбору «{html.escape(poll.title)}»\n"
                 f"<a href=\"max://user/{uid}\">{html.escape(name)}</a> выбрал(а) «{html.escape(option)}» — "
                 f"напишите ему(ей) напрямую.")
         await notify_teacher(poll.teacher_id, text, kind="clarify", chat_id=poll.chat_id,
@@ -212,9 +211,7 @@ async def after_answer(poll: Poll, uid: int, opt: int, status: str) -> None:
     answered, total, _ = counts(poll)
     if total and answered == total and not poll.closed and status in ("ok",):
         text, buttons = await status_card(poll)
-        await notify_teacher(poll.teacher_id, "🎉 Ответили все!
-
-" + text, kind="report",
+        await notify_teacher(poll.teacher_id, "🎉 Ответили все!\n\n" + text, kind="report",
                              chat_id=poll.chat_id, raw_text=f"«{poll.title}»: ответили все {total}",
                              buttons=buttons)
 
