@@ -1,0 +1,27 @@
+# Веб-сервер и API
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+pydantic==2.10.4
+pydantic-settings==2.7.1
+
+# HTTP-клиент MAX Bot API
+httpx==0.28.1
+certifi==2024.12.14
+
+# «Память класса»: PostgreSQL (прод) или SQLite (локально)
+SQLAlchemy==2.0.36
+asyncpg==0.30.0
+aiosqlite==0.20.0
+
+# Очереди и состояние диалогов
+redis==5.2.1
+
+# Планировщик: напоминания и утренняя сводка
+APScheduler==3.11.0
+
+# Поиск без ИИ: стемминг русского языка
+snowballstemmer==2.2.0
+
+# Часовые пояса в контейнере
+tzdata==2024.2

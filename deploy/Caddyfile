@@ -1,0 +1,6 @@
+# HTTPS с автоматическим сертификатом Let's Encrypt.
+# MAX принимает вебхуки только по HTTPS на порту 443 с сертификатом доверенного центра.
+{$DOMAIN} {
+	encode gzip
+	reverse_proxy bot:8080
+}

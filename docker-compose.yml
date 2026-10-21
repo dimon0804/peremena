@@ -1,0 +1,69 @@
+# Полный стек: бот + PostgreSQL + Redis.
+#   docker compose up -d --build
+# С HTTPS-прокси (нужен для вебхука и мини-приложения — домен должен смотреть на сервер):
+#   docker compose --profile https up -d --build
+services:
+  bot:
+    build: .
+    image: peremena:latest
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+asyncpg://peremena:${POSTGRES_PASSWORD:-peremena}@db:5432/peremena
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "${BOT_PORT:-8080}:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: peremena
+      POSTGRES_USER: peremena
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-peremena}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U peremena -d peremena"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "60", "1", "--appendonly", "no"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["https"]
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+    depends_on:
+      - bot
+
+volumes:
+  pgdata:
+  redisdata:
+  caddydata:
