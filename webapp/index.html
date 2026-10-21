@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>Перемена</title>
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+  <script src="https://st.max.ru/js/max-web-app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">ПЕРЕМЕНА</div>
+    <div class="topbar-sub" id="who"></div>
+  </header>
+
+  <main id="view" class="view" aria-live="polite">
+    <div class="loading">Загружаю…</div>
+  </main>
+
+  <nav class="tabbar" id="tabbar" hidden></nav>
+
+  <div class="toast" id="toast" role="status" hidden></div>
+
+  <dialog id="modal" class="modal">
+    <form method="dialog" class="modal-body" id="modal-body"></form>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>
