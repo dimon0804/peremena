@@ -47,7 +47,13 @@
     let payload;
     if (form) payload = form;
     else if (body !== undefined) { headers["Content-Type"] = "application/json"; payload = JSON.stringify(body); }
-    const res = await fetch(url, { method, headers, body: payload });
+    let res;
+    try {
+      res = await fetch(url, { method, headers, body: payload });
+    } catch (_) {
+      // «Failed to fetch»: запрос не дошёл до сервера — сервис остановлен или нет сети
+      throw new Error("Нет связи с сервером «Перемены». Проверьте интернет; если вы разработчик — запущен ли сервис (python -m app run).");
+    }
     let data = null;
     try { data = await res.json(); } catch (_) { /* пустой ответ */ }
     if (!res.ok) {
@@ -838,6 +844,11 @@
 
   // ------------------------------------------------------------------ старт
   async function boot() {
+    if (location.protocol === "file:") {
+      render(`<div class="empty"><b>Страница открыта как файл</b>Мини-приложение работает только через сервер «Перемены»: данные приходят с него.<br><br>
+        Запустите сервис (<code>python -m app run</code> или <code>docker compose up</code>) и откройте<br><code>http://localhost:8080/app/</code></div>`);
+      return;
+    }
     if (!WA?.initData && !DEV_USER) {
       render('<div class="empty"><b>Откройте «Перемену» в MAX</b>Мини-приложение работает внутри мессенджера: кнопка «Открыть» в чате с ботом.</div>');
       return;
