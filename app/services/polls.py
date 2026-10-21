@@ -264,7 +264,7 @@ async def status_card(poll: Poll) -> tuple[str, list[list[dict]]]:
         buttons.append(row)
         buttons.append([kb.cb("🔄 Обновить", f"ps:{poll.id}"), kb.cb("Закрыть сбор", f"pc:{poll.id}")])
     else:
-        buttons.append([kb.cb("Список", f"pl:{poll.id}")])
+        buttons.append([kb.cb("Список", f"pl:{poll.id}"), kb.cb("🔁 Повторить", f"prp:{poll.id}")])
     if c.bot_username:
         buttons.append([kb.app("Открыть в приложении", c.bot_username, f"poll_{poll.id}")])
     return "\n".join(lines), buttons

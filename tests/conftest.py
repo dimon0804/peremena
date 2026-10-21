@@ -23,6 +23,10 @@ PARENTS = [
 ]
 BOT = {"user_id": 999, "first_name": "Перемена", "is_bot": True}
 CHAT_ID = -5000
+TEACHER2 = {"user_id": 110, "first_name": "Игорь", "last_name": "Смирнов", "is_bot": False}
+PARENT2 = {"user_id": 301, "first_name": "Ольга", "last_name": "Морозова", "is_bot": False}
+SUBJ = {"user_id": 120, "first_name": "Елена", "last_name": "Орлова", "is_bot": False}
+CHAT2_ID = -6000
 
 
 class FakeApi:
@@ -56,11 +60,17 @@ class FakeApi:
         return {"success": True}
 
     async def get_chat(self, chat_id):
-        return {"chat_id": chat_id, "title": "9Б Родители", "type": "chat"}
+        return {"chat_id": chat_id, "title": "9Б Родители" if chat_id == CHAT_ID else "9А Родители", "type": "chat"}
 
     async def get_members(self, chat_id, limit=2000):
+        if chat_id == CHAT2_ID:
+            return [dict(TEACHER2, is_owner=True, is_admin=True), dict(PARENT2, is_owner=False, is_admin=False),
+                    dict(BOT, is_admin=True)]
         owner = dict(TEACHER, is_owner=True, is_admin=True)
         return [owner, *[dict(p, is_owner=False, is_admin=False) for p in PARENTS], dict(BOT, is_admin=True)]
+
+    async def delete_message(self, message_id):
+        return {"success": True}
 
     async def get_my_membership(self, chat_id):
         return {"user_id": BOT["user_id"], "is_admin": True, "is_owner": False}

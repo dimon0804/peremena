@@ -6,7 +6,7 @@ import logging
 from .. import keyboards as kb
 from ..core import ctx
 from ..services import chats, polls
-from . import callbacks, dialog, group
+from . import callbacks, dialog, group, staff
 from .common import send
 
 log = logging.getLogger(__name__)
@@ -62,6 +62,8 @@ async def on_bot_started(update: dict) -> None:
         return
     await chats.upsert_user(user, dialog_open=True)
     payload = update.get("payload") or ""
+    if await staff.handle_start_payload(uid, payload):
+        return
     if payload.startswith("poll_") and payload[5:].isdigit():
         poll = await polls.get_poll(int(payload[5:]))
         if poll and not poll.closed:

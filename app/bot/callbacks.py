@@ -8,8 +8,8 @@ from .. import keyboards as kb
 from ..core import ctx
 from ..db import session
 from ..models import ClassChat, User
-from ..services import chats, faq, polls, quiet, shelf, stats
-from . import dialog
+from ..services import chats, faq, polls, quiet, school, shelf, stats
+from . import dialog, staff
 from .common import ack, clear_state, get_state, send, set_state
 
 log = logging.getLogger(__name__)
@@ -71,6 +71,18 @@ async def on_callback(update: dict) -> None:
         if head == "c":
             await on_chat_admin(cid, uid, tail)
             return
+        if head == "bd":
+            await staff.on_board_cb(cid, uid, tail)
+            return
+        if head == "iv":
+            await staff.on_invite_cb(cid, uid, tail)
+            return
+        if head == "sc":
+            await staff.on_school_cb(cid, uid, tail)
+            return
+        if head == "prp":
+            await on_repeat_poll(cid, uid, tail)
+            return
         await ack(cid, "Кнопка устарела")
     except Exception:
         log.exception("Ошибка обработки кнопки %s", payload)
@@ -119,13 +131,15 @@ async def on_menu(uid: int, action: str) -> None:
     mapping = {
         "poll": dialog.start_poll, "faq": dialog.show_faq, "quiet": dialog.show_quiet,
         "stats": dialog.show_stats, "chats": dialog.show_chats, "my": dialog.show_my_polls,
-        "help": dialog.show_start,
+        "help": dialog.show_start, "board": staff.show_board, "school": staff.show_school,
     }
     if action == "shelf":
         await dialog.ask_shelf(uid)
     elif action == "ask":
         await set_state(uid, "ask", "q", {})
         await send(uid, "❓ Напишите вопрос — отвечу тем, что сохранил учитель.")
+    elif action == "hwq":
+        await dialog.answer_text(uid, "что задали", False)
     elif action in mapping:
         await mapping[action](uid)
 
@@ -254,6 +268,14 @@ async def on_faq(cid: str, uid: int, tail: str) -> None:
         await ack(cid, "Сохранено в справочник")
         await send(uid, f"✅ В справочнике: «{html.escape(e.question[:100])}»\n<i>Ключевые слова: "
                         f"{html.escape(e.keywords or '—')}</i>. Поправить можно в приложении.")
+    elif action == "share":
+        e = await faq.get_entry(int(arg))
+        sid = await school.school_of_teacher(uid)
+        if not e or e.teacher_id != uid or not sid:
+            await ack(cid, "Сначала вступите в школу: /school")
+            return
+        await faq.update_entry(e.id, uid, school_id=sid)
+        await ack(cid, "Карточка добавлена в базу школы")
     elif action == "nosave":
         await c.kv.delete(f"sv:{arg}")
         await ack(cid, "Хорошо, не сохраняю")
@@ -394,3 +416,17 @@ async def on_chat_admin(cid: str, uid: int, tail: str) -> None:
     else:
         await ack(cid)
 
+
+
+# ---------------------------------------------------------------- повторить сбор
+async def on_repeat_poll(cid: str, uid: int, tail: str) -> None:
+    """Тот же сбор ещё раз (например, ежемесячный): текст и варианты берутся из прошлого, нужен только срок."""
+    poll = await _own_poll(cid, uid, int(tail))
+    if poll is None:
+        return
+    await ack(cid)
+    data = {"chat_id": poll.chat_id, "template": poll.template if poll.template in polls.TEMPLATES else "choice",
+            "text": poll.text, "options": poll.options}
+    await set_state(uid, "poll", "deadline", data)
+    await send(uid, f"🔁 Повторяем «{html.escape(poll.title)}» — тот же текст и варианты.")
+    await dialog.ask_deadline(uid)

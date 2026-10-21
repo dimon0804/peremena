@@ -7,7 +7,7 @@ import secrets
 
 from .. import keyboards as kb
 from ..core import ctx
-from ..services import chats, faq, quiet, search, shelf, stats
+from ..services import board, chats, faq, quiet, search, shelf, stats
 
 log = logging.getLogger(__name__)
 
@@ -124,7 +124,17 @@ async def on_message(update: dict) -> None:
     if not search.looks_like_question(text):
         return
 
-    # 1) автоответ из справочника — только если учитель его включил и совпадение точное
+    # 1) автоответ — только если учитель его включил: сначала доска («что задали?»), потом справочник
+    if chat.autoanswer and board.is_homework_question(text):
+        teacher = await chats.get_user(chat.teacher_id) if chat.teacher_id else None
+        tz = teacher.tz if teacher else c.settings.default_tz
+        items = await board.find_homework(text, [chat_id], tz)
+        if items:
+            sent = await c.safe_send(chat_id=chat_id, text=await board.render_answer(items, text, tz),
+                                     reply_to=body.get("mid"))
+            if sent:
+                await stats.add(chat.teacher_id, "faq_answer")
+                return
     if chat.autoanswer:
         hits = faq.rank(text, await faq.candidates_for_chats([chat_id]), limit=1)
         if hits and hits[0].score >= faq.GROUP_SCORE:

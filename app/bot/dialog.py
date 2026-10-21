@@ -8,11 +8,12 @@ import secrets
 from .. import keyboards as kb
 from ..core import ctx
 from ..models import User
-from ..services import chats, faq, polls, quiet, shelf, stats
+from ..services import chats, faq, polls, quiet, school, shelf, stats
 from ..timeutil import fmt_dt, fmt_minutes, parse_deadline, parse_hours, preset_deadline
+from . import staff
 from .common import (
-    ONBOARD_HELP, PARENT_HELP, TEACHER_HELP, clear_state, get_state, parent_menu, parse_command, send, set_state,
-    teacher_menu,
+    ADMIN_HELP, ONBOARD_HELP, PARENT_HELP, SUBJECT_HELP, TEACHER_HELP, admin_menu, clear_state, get_state,
+    parent_menu, parse_command, send, set_state, subject_menu, teacher_menu,
 )
 
 log = logging.getLogger(__name__)
@@ -46,9 +47,10 @@ async def on_message(update: dict) -> None:
         return
 
     media = shelf.extract_media(msg)
-    is_teacher = await chats.is_teacher(uid)
+    roles = await school.roles(uid)
+    is_teacher = roles.is_class_teacher
     if media:
-        if is_teacher:
+        if roles.is_class_teacher or roles.is_subject_teacher:
             await save_to_shelf(uid, media, text)
         else:
             await send(uid, "Файлы на полку класса может класть только учитель. Если это справка — "
@@ -63,8 +65,13 @@ async def run_command(uid: int, cmd: str, rest: str) -> None:
         "start": show_start, "help": show_start, "poll": start_poll, "status": show_status_list,
         "faq": show_faq, "add": start_faq_add, "quiet": show_quiet, "morning": send_morning,
         "stats": show_stats, "chats": show_chats, "app": show_app, "my": show_my_polls,
-        "cancel": cancel,
+        "cancel": cancel, "board": staff.show_board, "invite": staff.start_invite, "school": staff.show_school,
     }
+    if cmd == "start" and rest and await staff.handle_start_payload(uid, rest):
+        return
+    if cmd in ("hw", "news"):
+        await staff.start_board(uid, cmd)
+        return
     if cmd == "shelf":
         await (shelf_search(uid, rest) if rest else ask_shelf(uid))
         return
@@ -76,14 +83,24 @@ async def run_command(uid: int, cmd: str, rest: str) -> None:
 
 
 async def menu_for(uid: int) -> list[list[dict]]:
-    if await chats.is_teacher(uid):
+    r = await school.roles(uid)
+    if r.is_class_teacher:
         return teacher_menu()
+    if r.is_subject_teacher:
+        return subject_menu()
+    if r.is_admin:
+        return admin_menu()
     return parent_menu()
 
 
 async def show_start(uid: int) -> None:
-    if await chats.is_teacher(uid):
+    r = await school.roles(uid)
+    if r.is_class_teacher:
         await send(uid, TEACHER_HELP, teacher_menu())
+    elif r.is_subject_teacher:
+        await send(uid, SUBJECT_HELP, subject_menu())
+    elif r.is_admin:
+        await send(uid, ADMIN_HELP, admin_menu())
     elif await chats.member_chats(uid):
         await send(uid, PARENT_HELP, parent_menu())
     else:
@@ -120,6 +137,12 @@ async def handle_state(uid: int, state: dict, text: str, msg: dict) -> bool:
         return await faq_add_step(uid, step, data, text)
     if flow == "faq_reply":
         return await faq_reply_step(uid, data, text)
+    if flow == "board":
+        return await staff.board_step(uid, step, data, text)
+    if flow == "subj_name":
+        return await staff.subj_name_step(uid, data, text) if text else False
+    if flow == "school_name":
+        return await staff.school_name_step(uid, text) if text else False
     if flow == "shelf_search":
         await clear_state(uid)
         if text:
@@ -354,8 +377,12 @@ async def show_faq(uid: int) -> None:
         return
     text, entries = await faq.render_list(uid)
     rows = [[kb.cb("➕ Добавить", "fq:add")]]
+    in_school = bool(await school.school_of_teacher(uid))
     for e in entries[:10]:
-        rows.append([kb.cb(f"🗑 {e.question[:50]}", f"fq:del:{e.id}")])
+        row = [kb.cb(f"🗑 {e.question[:40]}", f"fq:del:{e.id}")]
+        if in_school and not e.school_id:
+            row.append(kb.cb("🏛 В базу школы", f"fq:share:{e.id}"))
+        rows.append(row)
     c = ctx()
     if c.bot_username:
         rows.append([kb.app("Править в приложении", c.bot_username, "faq")])
@@ -416,15 +443,23 @@ async def answer_text(uid: int, text: str, is_teacher: bool) -> None:
         await shelf_search(uid, text.split(" ", 1)[1] if " " in text else "")
         return
 
+    user = await chats.get_user(uid)
+    tz = user.tz if user else ctx().settings.default_tz
     if is_teacher:
-        entries = await faq.list_entries(uid)
+        entries = await faq.list_entries(uid, with_school=True)
         chat_ids = []
+        board_chats = [c.chat_id for c, _ in await staff.staff_chats(uid)]
     else:
         chat_ids = [c.chat_id for c in await chats.member_chats(uid)]
-        if not chat_ids:
+        board_chats = chat_ids + [c.chat_id for c, _ in await staff.staff_chats(uid)]
+        if not board_chats:
             await send(uid, ONBOARD_HELP)
             return
         entries = await faq.candidates_for_chats(chat_ids)
+
+    # «Что задали?» и «какие объявления?» — по доске класса
+    if await staff.answer_board_question(uid, text, board_chats, tz):
+        return
 
     hits = faq.rank(text, entries)
     if hits and hits[0].score >= faq.ANSWER_SCORE:
