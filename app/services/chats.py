@@ -111,6 +111,10 @@ async def sync_members(chat_id: int) -> int:
         chat = await s.get(ClassChat, chat_id)
         if chat:
             chat.members_synced_at = utcnow()
+            if not chat.teacher_id:
+                owner = next((r for r in raw if r.get("is_owner") and not r.get("is_bot")), None)
+                if owner:
+                    chat.teacher_id = owner["user_id"]
     return len(seen)
 
 
