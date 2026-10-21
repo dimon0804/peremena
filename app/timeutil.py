@@ -70,7 +70,7 @@ def preset_deadline(key: str, tz: str | None) -> datetime:
 _dt_re = re.compile(
     r"(?P<d>\d{1,2})[./](?P<m>\d{1,2})(?:[./](?P<y>\d{2,4}))?(?:\s+(?:в\s+)?(?P<h>\d{1,2})[:.](?P<mi>\d{2}))?"
 )
-_time_only_re = re.compile(r"^(?:сегодня\s+)?(?:в\s+)?(?P<h>\d{1,2})[:.](?P<mi>\d{2})$")
+_time_only_re = re.compile(r"^(?:сегодня\s+)?(?:в\s+)?(?P<h>\d{1,2}):(?P<mi>\d{2})$")
 _tomorrow_re = re.compile(r"^завтра(?:\s+(?:в\s+)?(?P<h>\d{1,2})[:.](?P<mi>\d{2}))?$")
 
 
@@ -81,10 +81,14 @@ def parse_deadline(text: str, tz: str | None) -> datetime | None:
     m = _tomorrow_re.match(t)
     if m:
         h, mi = int(m["h"] or 18), int(m["mi"] or 0)
+        if h > 23 or mi > 59:
+            return None
         d = (now + timedelta(days=1)).replace(hour=h, minute=mi, second=0, microsecond=0)
         return to_utc(d)
     m = _time_only_re.match(t)
     if m:
+        if int(m["h"]) > 23 or int(m["mi"]) > 59:
+            return None
         d = now.replace(hour=int(m["h"]), minute=int(m["mi"]), second=0, microsecond=0)
         if d <= now:
             d += timedelta(days=1)
