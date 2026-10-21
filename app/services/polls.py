@@ -198,6 +198,27 @@ async def record_answer(poll_id: int, user: dict, option: int, chat_id_hint: int
     return poll, status
 
 
+async def after_answer(poll: Poll, uid: int, opt: int, status: str) -> None:
+    """«Нужно уточнить» — сразу учителю (с учётом тихого режима); все ответили — сообщаем итог."""
+    if poll.clarify_option is not None and opt == poll.clarify_option and status != "same":
+        name = await chats.member_name(poll.chat_id, uid)
+        option = poll.options[opt]
+        text = (f"💬 <b>Нужно уточнить</b> по сбору «{html.escape(poll.title)}»
+"
+                f"<a href=\"max://user/{uid}\">{html.escape(name)}</a> выбрал(а) «{html.escape(option)}» — "
+                f"напишите ему(ей) напрямую.")
+        await notify_teacher(poll.teacher_id, text, kind="clarify", chat_id=poll.chat_id,
+                             from_user_id=uid, from_name=name, raw_text=f"«{poll.title}»: {option}")
+    answered, total, _ = counts(poll)
+    if total and answered == total and not poll.closed and status in ("ok",):
+        text, buttons = await status_card(poll)
+        await notify_teacher(poll.teacher_id, "🎉 Ответили все!
+
+" + text, kind="report",
+                             chat_id=poll.chat_id, raw_text=f"«{poll.title}»: ответили все {total}",
+                             buttons=buttons)
+
+
 def counts(poll: Poll) -> tuple[int, int, list[int]]:
     per = [0] * len(poll.options)
     answered = 0
