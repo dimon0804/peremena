@@ -62,11 +62,22 @@ def canonical_subject(text: str) -> str:
     return (t[:1].upper() + t[1:])[:100] if t else ""
 
 
+ABBREVIATIONS = {
+    "гео": "География", "физ": "Физика", "мат": "Математика", "лит": "Литература", "общ": "Обществознание",
+    "био": "Биология", "инф": "Информатика", "хим": "Химия", "ист": "История", "алг": "Алгебра",
+    "геом": "Геометрия", "рус": "Русский язык", "англ": "Английский язык", "нем": "Немецкий язык",
+}
+
+
 def subject_in(text: str) -> str | None:
-    for w in search.words(text.replace("-", "")) + search.words(text):
+    ws = search.words(text.replace("-", "")) + search.words(text)
+    for w in ws:  # полные формы и устойчивые сокращения: «физ-ра» → «физра», «английскому»
         for name, aliases in SUBJECTS.items():
             if any(w.startswith(a) for a in aliases):
                 return name
+    for w in ws:  # короткие школьные сокращения: «хим», «гео», «физ»
+        if w in ABBREVIATIONS:
+            return ABBREVIATIONS[w]
     return None
 
 
