@@ -62,13 +62,24 @@
   function fail(e) { render(`<div class="empty"><b>Не получилось</b>${esc(e.message || e)}</div>`); }
 
   // ------------------------------------------------------------------ навигация
-  const TEACHER_TABS = [
-    ["polls", "📋", "Сборы"], ["faq", "📖", "Справочник"], ["shelf", "🗂", "Полка"], ["more", "⏱", "Ещё"],
-  ];
-  const PARENT_TABS = [["my", "📋", "Сборы"], ["ask", "❓", "Спросить"], ["shelf", "🗂", "Материалы"]];
+  const PARENT_TABS = [["my", "📋", "Сборы"], ["board", "📌", "Доска"], ["ask", "❓", "Спросить"], ["shelf", "🗂", "Материалы"]];
+  const PARENT_ROUTES = new Set(["my", "board", "ask", "shelf"]);
+
+  // вкладки собираются из ролей: классный руководитель, предметник, администратор, родитель
+  function tabsFor(me) {
+    const t = [];
+    if (me.is_teacher) t.push(["polls", "📋", "Сборы"]);
+    if (me.is_teacher || me.is_subject_teacher) t.push(["board", "📌", "Доска"]);
+    if (me.is_teacher) t.push(["faq", "📖", "Справочник"]);
+    if (me.is_teacher || me.is_subject_teacher) t.push(["shelf", "🗂", "Полка"]);
+    if (me.is_admin || ((me.is_teacher || me.is_subject_teacher) && !me.is_teacher)) t.push(["school", "🏛", "Школа"]);
+    if (me.is_teacher) t.push(["more", "⏱", "Ещё"]);
+    return t.length ? t : PARENT_TABS;
+  }
+  const isStaff = () => S.me.is_teacher || S.me.is_subject_teacher || S.me.is_admin;
 
   function drawTabs(active) {
-    const tabs = S.me.is_teacher ? TEACHER_TABS : PARENT_TABS;
+    const tabs = tabsFor(S.me);
     $tabbar.hidden = false;
     $tabbar.innerHTML = tabs.map(([k, ico, label]) =>
       `<button data-tab="${k}" class="${k === active ? "on" : ""}"><span class="ico">${ico}</span>${label}</button>`).join("");
@@ -78,19 +89,21 @@
     if (b) { S.stack = []; go(b.dataset.tab, {}, false); }
   });
 
+  const TAB_OF = { pollDetail: "polls", newPoll: "polls", campaign: "school", newCampaign: "school" };
+
   function go(name, args = {}, push = true) {
     if (push && S.route) S.stack.push(S.route);
     S.route = { name, args };
-    const tab = { pollDetail: "polls", newPoll: "polls" }[name] || name;
+    const tab = TAB_OF[name] || name;
     drawTabs(tab);
     syncBack();
-    (VIEWS[name] || VIEWS[S.me.is_teacher ? "polls" : "my"])(args);
+    (VIEWS[name] || VIEWS[tabsFor(S.me)[0][0]])(args);
   }
   function back() {
     const prev = S.stack.pop();
     if (!prev) return;
     S.route = prev;
-    drawTabs({ pollDetail: "polls", newPoll: "polls" }[prev.name] || prev.name);
+    drawTabs(TAB_OF[prev.name] || prev.name);
     syncBack();
     VIEWS[prev.name](prev.args);
   }
@@ -122,7 +135,7 @@
         if (keep !== true) $modal.close();
       } catch (err) { toast(err.message, true); }
     };
-    $modal.showModal();
+    if (!$modal.open) $modal.showModal();
   }
 
   // ================================================================== УЧИТЕЛЬ
@@ -259,7 +272,7 @@
           ${items.map((e) => `<div class="card faq tap" data-act="editFaq" data-id="${e.id}">
             <div class="card-title">${esc(e.question)}</div>
             <div style="margin-top:4px">${esc(e.answer)}</div>
-            <div class="row" style="margin-top:8px"><span class="chip">ответов: ${e.hits}</span>${e.misses ? `<span class="chip">«не то»: ${e.misses}</span>` : ""}${e.keywords ? `<span class="muted small">🔑 ${esc(e.keywords)}</span>` : ""}</div>
+            <div class="row" style="margin-top:8px">${e.shared ? '<span class="chip accent">🏛 база школы</span>' : ""}<span class="chip">ответов: ${e.hits}</span>${e.misses ? `<span class="chip">«не то»: ${e.misses}</span>` : ""}${e.keywords ? `<span class="muted small">🔑 ${esc(e.keywords)}</span>` : ""}</div>
           </div>`).join("")}
           <button class="btn fab" data-act="editFaq">＋ Добавить</button>`);
         S.faq = items;
@@ -268,7 +281,7 @@
 
     async shelf() {
       loading();
-      const teacher = S.me.is_teacher;
+      const teacher = S.me.is_teacher || S.me.is_subject_teacher;
       render(`<h1>${teacher ? "Полка" : "Материалы класса"}</h1>
         <div class="row" style="margin-bottom:12px"><input type="search" id="shelf-q" placeholder="памятка, #экскурсия, бланк…" style="flex:1" value="${esc(S.shelfQ || "")}"><button class="btn sm" data-act="shelfSearch">Найти</button></div>
         ${teacher ? `<label class="btn outline block" style="margin-bottom:12px">⬆️ Загрузить файл<input type="file" id="shelf-file" hidden></label>
@@ -293,6 +306,7 @@
         }).join("");
         const pending = inbox.filter((i) => !i.delivered);
         render(`<h1>Польза и настройки</h1>
+          <button class="btn ghost block" data-act="goSchool" style="margin-bottom:12px">🏛 ${S.me.school ? esc(S.me.school.name) : "Школа: общая база ответов и сводка"}</button>
           <div class="card">
             <div class="muted small" style="font-weight:600">СЭКОНОМЛЕНО ЗА 7 ДНЕЙ</div>
             <div class="stat-big" style="margin:8px 0">${fmtMinutes(st.week.minutes)}</div>
@@ -320,7 +334,7 @@
             ${S.me.chats.map((c) => `<div style="padding:10px 0;border-top:1px solid var(--line)">
               <div class="row spread"><b>${esc(c.title || c.chat_id)}</b><span class="chip ${c.bot_is_admin ? "done" : ""}">${c.bot_is_admin ? "бот — администратор" : "бот не администратор"}</span></div>
               <label class="switch"><span>Автоответ прямо в чате</span><input type="checkbox" data-chat-auto="${c.chat_id}" ${c.autoanswer ? "checked" : ""}></label>
-              <div class="row"><button class="btn sm ghost" data-act="syncChat" data-id="${c.chat_id}">🔄 Обновить список</button><button class="btn sm ghost" data-act="history" data-id="${c.chat_id}">📥 Файлы из истории</button></div>
+              <div class="row"><button class="btn sm ghost" data-act="syncChat" data-id="${c.chat_id}">🔄 Обновить список</button><button class="btn sm ghost" data-act="history" data-id="${c.chat_id}">📥 Файлы из истории</button><button class="btn sm ghost" data-act="invite" data-id="${c.chat_id}">🔗 Пригласить предметника</button></div>
             </div>`).join("")}
           </div>
 
@@ -362,6 +376,264 @@
     },
   };
 
+  // ================================================================== ДОСКА, ШКОЛА
+  function share(text, link) {
+    try {
+      if (WA?.shareMaxContent) { WA.shareMaxContent({ text, link }); return; }
+    } catch (_) { /* не на всех платформах */ }
+    try { navigator.clipboard?.writeText(link); toast("Ссылка скопирована"); } catch (_) { toast("Скопируйте ссылку вручную"); }
+  }
+
+  function boardCard(a, staff) {
+    const head = a.kind === "hw" ? `📚 ${esc(a.subject || "Без предмета")}` : "📣 Объявление";
+    const when = a.for_date_text ? `<span class="chip accent">на ${esc(a.for_date_text)}</span>` : "";
+    let status = "";
+    if (staff) {
+      status = a.publish_mode === "silent" ? '<span class="chip">🤫 только для ответов</span>'
+        : a.published ? '<span class="chip done">в чате</span>' : `<span class="chip">⏳ выйдет ${esc(a.publish_at_text)}</span>`;
+    }
+    return `<div class="card ${a.kind === "hw" ? "faq" : "quiet"}">
+      <div class="row spread"><div class="card-title">${head}</div>${when}</div>
+      <div class="muted small">${esc(a.chat_title)} · ${esc(a.date)}</div>
+      <div style="margin-top:8px;white-space:pre-wrap">${esc(a.text)}</div>
+      ${staff ? `<div class="row spread" style="margin-top:10px">${status}${a.can_delete ? `<button class="btn sm ghost" data-act="delBoard" data-id="${a.id}">🗑</button>` : ""}</div>` : ""}
+    </div>`;
+  }
+
+  function quietNow() {
+    const s = S.me.settings;
+    if (!s || !s.quiet_enabled) return false;
+    const d = new Date(), m = d.getHours() * 60 + d.getMinutes();
+    if (s.weekends_off && (d.getDay() === 0 || d.getDay() === 6)) return true;
+    return m < s.work_start || m >= s.work_end;
+  }
+
+  Object.assign(VIEWS, {
+    async board() {
+      loading();
+      try {
+        const staff = S.me.is_teacher || S.me.is_subject_teacher;
+        const [items, subjects] = await Promise.all([api("/api/board"), staff ? api("/api/subjects") : []]);
+        if (!staff) {
+          const hw = items.filter((a) => a.kind === "hw"), news = items.filter((a) => a.kind === "news");
+          render(`<h1>Доска класса</h1>
+            ${items.length ? "" : '<div class="empty"><b>Пока пусто</b>Здесь появятся домашние задания и объявления учителей.</div>'}
+            ${hw.length ? `<h2>📚 Домашние задания</h2>${hw.map((a) => boardCard(a, false)).join("")}` : ""}
+            ${news.length ? `<h2>📣 Объявления</h2>${news.map((a) => boardCard(a, false)).join("")}` : ""}`);
+          return;
+        }
+        const draft = S.boardDraft || (S.boardDraft = { kind: "hw", for_date: "tomorrow", publish: quietNow() ? "later" : "now" });
+        const chats = S.me.board_chats;
+        const draw = () => {
+          const chat = chats.find((c) => String(c.chat_id) === String(draft.chat_id)) || chats[0];
+          draft.chat_id = chat.chat_id;
+          const subj = draft.subject ?? chat.subject ?? "";
+          render(`<h1>Доска класса</h1>
+            <div class="card">
+              <div class="seg">${[["hw", "📚 Домашка"], ["news", "📣 Объявление"]].map(([k, l]) => `<button data-act="bdKind" data-k="${k}" class="${draft.kind === k ? "on" : ""}">${l}</button>`).join("")}</div>
+              <label class="field" style="margin-top:14px"><span>Класс</span><select id="bd-chat">${chats.map((c) => `<option value="${c.chat_id}" ${c.chat_id === chat.chat_id ? "selected" : ""}>${esc(c.title)}${c.subject ? " · " + esc(c.subject) : ""}</option>`).join("")}</select></label>
+              ${draft.kind === "hw" ? `<label class="field"><span>Предмет</span><input type="text" id="bd-subj" list="bd-subjects" value="${esc(subj)}" placeholder="Алгебра"><datalist id="bd-subjects">${subjects.map((x) => `<option value="${esc(x)}">`).join("")}</datalist></label>` : ""}
+              <label class="field"><span>${draft.kind === "hw" ? "Задание" : "Текст объявления"}</span><textarea id="bd-text" placeholder="${draft.kind === "hw" ? "№245, 247; правило на с. 63" : "Завтра субботник, форма свободная"}">${esc(draft.text || "")}</textarea></label>
+              ${draft.kind === "hw" ? `<div class="field"><span class="muted small" style="font-weight:600">К какому дню</span><div class="seg" style="margin-top:6px">${[["tomorrow", "Завтра"], ["after", "Послезавтра"], ["monday", "К понедельнику"], ["", "Без даты"]].map(([k, l]) => `<button data-act="bdDate" data-k="${k}" class="${draft.for_date === k ? "on" : ""}">${l}</button>`).join("")}</div></div>` : ""}
+              <div class="field" style="margin-top:14px"><span class="muted small" style="font-weight:600">Публикация в чат</span><div class="seg" style="margin-top:6px">${[["now", "Сейчас"], ["later", "🌙 Утром"], ["silent", "🤫 Не публиковать"]].map(([k, l]) => `<button data-act="bdPub" data-k="${k}" class="${draft.publish === k ? "on" : ""}">${l}</button>`).join("")}</div>
+                <p class="muted small">${quietNow() ? "Сейчас нерабочее время — утренняя публикация избавит родителей от ночных уведомлений. " : ""}В любом случае бот ответит по записи на «что задали?».</p></div>
+              <button class="btn block" data-act="bdSave">Записать</button>
+            </div>
+            <h2>Последние записи</h2>
+            ${items.length ? items.map((a) => boardCard(a, true)).join("") : '<p class="muted">Пока пусто.</p>'}`);
+        };
+        const save = () => {
+          draft.chat_id = document.getElementById("bd-chat")?.value ?? draft.chat_id;
+          const subjEl = document.getElementById("bd-subj");
+          if (subjEl) draft.subject = subjEl.value;
+          draft.text = document.getElementById("bd-text")?.value ?? draft.text;
+        };
+        ACTIONS.bdKind = (el) => { save(); draft.kind = el.dataset.k; draw(); };
+        ACTIONS.bdDate = (el) => { save(); draft.for_date = el.dataset.k; draw(); };
+        ACTIONS.bdPub = (el) => { save(); draft.publish = el.dataset.k; draw(); };
+        ACTIONS.bdSave = async (el) => {
+          save();
+          if (!draft.text || draft.text.trim().length < 2) return toast("Напишите текст", true);
+          el.disabled = true;
+          try {
+            const a = await api("/api/board", { method: "POST", body: { chat_id: Number(draft.chat_id), kind: draft.kind,
+              subject: draft.subject || "", text: draft.text, for_date: draft.for_date || null, publish_mode: draft.publish } });
+            haptic("success");
+            toast(a.publish_mode === "later" ? `Опубликую ${a.publish_at_text}` : a.publish_mode === "silent" ? "Записано без публикации" : "Опубликовано в чате");
+            draft.text = "";
+            VIEWS.board();
+          } catch (e) { toast(e.message, true); el.disabled = false; }
+        };
+        const drawAndBind = () => {
+          draw();
+          // при смене класса подставляем предмет предметника
+          document.getElementById("bd-chat").addEventListener("change", () => { save(); draft.subject = undefined; drawAndBind(); });
+        };
+        ACTIONS.bdKind = (el) => { save(); draft.kind = el.dataset.k; drawAndBind(); };
+        ACTIONS.bdDate = (el) => { save(); draft.for_date = el.dataset.k; drawAndBind(); };
+        ACTIONS.bdPub = (el) => { save(); draft.publish = el.dataset.k; drawAndBind(); };
+        drawAndBind();
+      } catch (e) { fail(e); }
+    },
+
+    async school() {
+      loading();
+      const me = S.me;
+      if (!me.school) {
+        render(`<h1>Школа</h1>
+          <p class="muted">Объедините классы школы: общая база ответов (звонки, форма, справки) сразу работает у каждого классного руководителя, а администрация видит сводку и запускает сборы на параллель одной кнопкой.</p>
+          <div class="card"><div class="card-title">Вступить по коду</div>
+            <div class="row" style="margin-top:8px"><input type="text" id="sc-code" placeholder="Код от завуча" style="flex:1;text-transform:uppercase"><button class="btn sm" data-act="scJoin">Вступить</button></div></div>
+          ${me.is_teacher || me.is_subject_teacher ? `<div class="card"><div class="card-title">Создать школу</div>
+            <p class="muted small">Вы станете администратором и получите код для коллег.</p>
+            <div class="row"><input type="text" id="sc-name" placeholder="МБОУ СОШ № 7" style="flex:1"><button class="btn sm" data-act="scCreate">Создать</button></div></div>` : ""}`);
+        return;
+      }
+      try {
+        if (!me.is_admin) {
+          const faqs = await api("/api/school/faq");
+          render(`<h1>${esc(me.school.name)}</h1>
+            <p class="muted">Общая база ответов школы — бот отвечает по ней родителям всех классов. Добавить карточку в базу можно в «Справочнике».</p>
+            ${faqs.map((e) => `<div class="card faq"><div class="card-title">${esc(e.question)}</div><div>${esc(e.answer)}</div></div>`).join("") || '<p class="muted">Пока пусто.</p>'}`);
+          return;
+        }
+        const d = await api("/api/school");
+        render(`<h1>${esc(me.school.name)}</h1>
+          <div class="card">
+            <div class="card-title">🔑 Пригласить коллег</div>
+            <p class="muted small">Классные руководители вступают по коду <b>${esc(me.school.code)}</b> или по ссылке.</p>
+            <div class="row"><button class="btn sm" data-act="shareLink" data-link="${esc(me.school.teacher_link)}" data-text="Подключитесь к школе в «Перемене»">Ссылка для учителей</button>
+            <button class="btn sm ghost" data-act="shareLink" data-link="${esc(me.school.admin_link)}" data-text="Доступ администратора школы в «Перемене»">Для администрации</button></div>
+          </div>
+          <button class="btn block" data-act="newCampaign" style="margin-bottom:12px">📣 Сбор на параллель</button>
+          <h2>Классы</h2>
+          ${d.classes.length ? d.classes.map((c) => {
+            const pct = c.total ? Math.round((100 * c.answered) / c.total) : 0;
+            return `<div class="card"><div class="row spread"><b>${esc(c.title || c.chat_id)}</b>${c.bot_is_admin ? "" : '<span class="chip">⚠️ бот не админ</span>'}</div>
+              <div class="muted small">${esc(c.teacher)} · ${c.open_polls ? `открытых сборов: ${c.open_polls}` : "открытых сборов нет"}</div>
+              ${c.open_polls ? `<div class="bar"><i style="width:${pct}%"></i></div><div class="small">${c.answered}/${c.total} ответили</div>` : ""}</div>`;
+          }).join("") : '<p class="muted">Пока никто из классных руководителей не вступил в школу. Отправьте им ссылку.</p>'}
+          ${d.campaigns.length ? `<h2>Сборы на параллель</h2>${d.campaigns.map((c) => {
+            const pct = c.total ? Math.round((100 * c.answered) / c.total) : 0;
+            return `<div class="card tap" data-act="openCampaign" data-id="${c.id}"><div class="card-title">${esc(c.title)}</div>
+              <div class="row spread" style="margin-top:8px"><div class="big" style="font-size:28px">${c.answered}<small>/${c.total}</small></div><span class="muted small">${c.classes.length} ${plural(c.classes.length, "класс", "класса", "классов")}</span></div>
+              <div class="bar"><i style="width:${pct}%"></i></div></div>`;
+          }).join("")}` : ""}`);
+        S.schoolClasses = d.classes;
+      } catch (e) { fail(e); }
+    },
+
+    async newCampaign() {
+      S.templates = S.templates || await api("/api/templates");
+      const classes = S.schoolClasses || (await api("/api/school")).classes;
+      const draft = { template: "consent", deadline: "friday", chats: new Set(classes.map((c) => c.chat_id)) };
+      const draw = () => {
+        const tpl = S.templates.find((t) => t.key === draft.template);
+        render(`<h1>Сбор на параллель</h1>
+          <p class="muted">Каждый класс получит сбор, который ведёт его классный руководитель: рассылка в личку, напоминания, итог. Вы видите общий результат.</p>
+          <div class="card"><div class="card-title">Классы</div>
+            ${classes.map((c) => `<label class="switch"><span>${esc(c.title || c.chat_id)} <span class="muted small">${esc(c.teacher)}</span></span><input type="checkbox" data-camp-chat="${c.chat_id}" ${draft.chats.has(c.chat_id) ? "checked" : ""}></label>`).join("")}</div>
+          <div class="seg" style="margin:6px 0 14px">${S.templates.map((t) => `<button data-act="cmpTpl" data-key="${t.key}" class="${t.key === draft.template ? "on" : ""}">${esc(t.label)}</button>`).join("")}</div>
+          <label class="field"><span>Текст (первая строка — заголовок)</span><textarea id="cmp-text">${esc(draft.text || "")}</textarea></label>
+          ${draft.template === "choice" ? `<label class="field"><span>Варианты — каждый с новой строки</span><textarea id="cmp-opts" style="min-height:90px">${esc(draft.opts || "")}</textarea></label>` : `<p class="muted small">Кнопки: ${tpl.options.map(esc).join(" · ")}</p>`}
+          <div class="seg">${[["tomorrow", "Завтра 18:00"], ["friday", "Пятница 18:00"], ["week", "Через неделю"], ["", "Без срока"]].map(([k, l]) => `<button data-act="cmpDl" data-k="${k}" class="${draft.deadline === k ? "on" : ""}">${l}</button>`).join("")}</div>
+          <button class="btn block" data-act="cmpSend" style="margin-top:18px">Запустить в ${draft.chats.size} ${plural(draft.chats.size, "классе", "классах", "классах")}</button>`);
+        $view.querySelectorAll("[data-camp-chat]").forEach((el) => el.addEventListener("change", () => {
+          save(); const id = Number(el.dataset.campChat); el.checked ? draft.chats.add(id) : draft.chats.delete(id); draw();
+        }));
+      };
+      const save = () => {
+        draft.text = document.getElementById("cmp-text")?.value ?? draft.text;
+        draft.opts = document.getElementById("cmp-opts")?.value ?? draft.opts;
+      };
+      ACTIONS.cmpTpl = (el) => { save(); draft.template = el.dataset.key; draw(); };
+      ACTIONS.cmpDl = (el) => { save(); draft.deadline = el.dataset.k; draw(); };
+      ACTIONS.cmpSend = async (el) => {
+        save();
+        if (!draft.chats.size) return toast("Выберите классы", true);
+        if (!draft.text || draft.text.trim().length < 3) return toast("Напишите текст", true);
+        el.disabled = true; el.textContent = "Запускаю…";
+        try {
+          const options = draft.template === "choice" ? (draft.opts || "").split("\n").map((s) => s.trim()).filter(Boolean) : [];
+          const res = await api("/api/school/campaigns", { method: "POST", body: { chat_ids: [...draft.chats], template: draft.template, text: draft.text, options, deadline: draft.deadline || null } });
+          haptic("success");
+          toast(`Запущено в ${res.reports.length} ${plural(res.reports.length, "классе", "классах", "классах")}`);
+          S.stack = [{ name: "school", args: {} }];
+          S.route = null;
+          go("campaign", { id: res.campaign.id }, false);
+          S.stack = [{ name: "school", args: {} }];
+          syncBack();
+        } catch (e) { toast(e.message, true); el.disabled = false; }
+      };
+      draw();
+    },
+
+    async campaign({ id }) {
+      loading();
+      try {
+        const c = await api(`/api/school/campaigns/${id}`);
+        const pct = c.total ? Math.round((100 * c.answered) / c.total) : 0;
+        render(`<div class="card">
+            <div class="card-title" style="font-size:19px">${esc(c.title)}</div>
+            <div class="muted small">${c.classes.length} ${plural(c.classes.length, "класс", "класса", "классов")}${c.deadline_text && c.deadline_text !== "без срока" ? " · срок: " + esc(c.deadline_text) : ""}</div>
+            <div class="big" style="margin-top:18px">${c.answered}/${c.total}</div>
+            <div class="bar"><i style="width:${pct}%"></i></div>
+            <ul class="list">${c.options.map((o, i) => `<li><span>${esc(o)}</span><b>${c.per_option[i] || 0}</b></li>`).join("")}</ul>
+            <button class="btn block" data-act="cmpRemind" data-id="${c.id}" style="margin-top:12px" ${c.answered < c.total ? "" : "disabled"}>Напомнить всем, кто молчит</button>
+          </div>
+          <h2>По классам</h2>
+          ${c.classes.sort((a, b) => (a.answered / (a.total || 1)) - (b.answered / (b.total || 1))).map((r) => {
+            const p = r.total ? Math.round((100 * r.answered) / r.total) : 0;
+            return `<div class="card"><div class="row spread"><b>${esc(r.title)}</b><span>${r.answered}/${r.total}</span></div>
+              <div class="bar"><i style="width:${p}%"></i></div>
+              ${r.missing.length ? `<div class="muted small">Не ответили: ${r.missing.slice(0, 15).map(esc).join(", ")}${r.missing.length > 15 ? " …" : ""}</div>` : '<div class="ok small">Все ответили ✓</div>'}</div>`;
+          }).join("")}`);
+      } catch (e) { fail(e); }
+    },
+  });
+
+  ACTIONS.delBoard = async (el) => {
+    try { await api(`/api/board/${el.dataset.id}`, { method: "DELETE" }); toast("Удалено"); VIEWS.board(); }
+    catch (e) { toast(e.message, true); }
+  };
+  ACTIONS.goSchool = () => go("school");
+  ACTIONS.shareLink = (el) => share(el.dataset.text, el.dataset.link);
+  ACTIONS.newCampaign = () => go("newCampaign");
+  ACTIONS.openCampaign = (el) => go("campaign", { id: el.dataset.id });
+  ACTIONS.cmpRemind = async (el) => {
+    el.disabled = true;
+    try { const r = await api(`/api/school/campaigns/${el.dataset.id}/remind`, { method: "POST" }); toast(`Напомнил: ${r.sent + r.group}`); }
+    catch (e) { toast(e.message, true); }
+    el.disabled = false;
+  };
+  async function reloadMe() { S.me = await api("/api/me"); }
+  ACTIONS.scJoin = async () => {
+    const code = document.getElementById("sc-code").value.trim();
+    if (!code) return;
+    try { const r = await api("/api/school/join", { method: "POST", body: { code } }); await reloadMe(); toast(`Вы в школе «${r.name}»`); go("school", {}, false); }
+    catch (e) { toast(e.message, true); }
+  };
+  ACTIONS.scCreate = async () => {
+    const name = document.getElementById("sc-name").value.trim();
+    if (name.length < 3) return toast("Укажите название", true);
+    try { await api("/api/school", { method: "POST", body: { name } }); await reloadMe(); haptic("success"); toast("Школа создана"); go("school", {}, false); }
+    catch (e) { toast(e.message, true); }
+  };
+  ACTIONS.invite = async (el) => {
+    try {
+      const [inv, subs] = await Promise.all([api(`/api/chats/${el.dataset.id}/invite`, { method: "POST" }), api(`/api/chats/${el.dataset.id}/subjects`)]);
+      modal(`<h2 style="margin-top:0">Пригласить предметника</h2>
+        <p class="muted small">По ссылке учитель сможет публиковать домашку и объявления в этот класс — без прав администратора в чате. Ссылка действует 7 дней.</p>
+        <div class="bubble small" style="word-break:break-all">${esc(inv.link)}</div>
+        ${subs.length ? `<h2>Уже подключены</h2><ul class="list">${subs.map((x) => `<li><span>${esc(x.name)} · ${esc(x.subject || "—")}</span><button class="btn sm ghost" value="rm:${x.user_id}" formnovalidate>Отключить</button></li>`).join("")}</ul>` : ""}
+        <div class="btns"><button class="btn ghost" value="cancel" formnovalidate>Закрыть</button><button class="btn" value="share">Поделиться</button></div>`,
+      async (_fd, action) => {
+        if (action === "share") { share("Приглашение в класс в «Перемене»", inv.link); return true; }
+        if (action?.startsWith("rm:")) { await api(`/api/chats/${el.dataset.id}/subjects/${action.slice(3)}`, { method: "DELETE" }); toast("Отключено"); }
+      });
+    } catch (e) { toast(e.message, true); }
+  };
+
   // ------------------------------------------------------------------ действия: сборы
   ACTIONS.openPoll = (el) => go("pollDetail", { id: el.dataset.id });
   ACTIONS.newPoll = () => go("newPoll");
@@ -400,17 +672,27 @@
     } catch (e) { toast(e.message, true); }
   };
   ACTIONS.editFaq = (el) => {
-    const e = (S.faq || []).find((x) => String(x.id) === el.dataset.id) || { question: "", answer: "", keywords: "" };
+    const e = (S.faq || []).find((x) => String(x.id) === el.dataset.id) || { question: "", answer: "", keywords: "", own: true };
+    if (e.id && !e.own) {
+      modal(`<h2 style="margin-top:0">${esc(e.question)}</h2><p>${esc(e.answer)}</p>
+        <p class="muted small">🏛 Карточка из общей базы школы — её ведёт автор. Если нужен другой ответ для вашего класса, создайте свою карточку: она будет важнее школьной.</p>
+        <div class="btns"><button class="btn ghost" value="cancel" formnovalidate>Закрыть</button><button class="btn" value="copy">Сделать свою</button></div>`,
+      async () => { S.faqCopy = e; ACTIONS.editFaq({ dataset: {} }); return true; });
+      return;
+    }
+    const base = !e.id && S.faqCopy ? { ...S.faqCopy, id: undefined, shared: false } : e;
+    S.faqCopy = null;
     modal(`<h2 style="margin-top:0">${e.id ? "Карточка справочника" : "Новая карточка"}</h2>
-      <label class="field"><span>Вопрос — так, как спрашивают</span><input type="text" name="question" required value="${esc(e.question)}"></label>
-      <label class="field"><span>Ваш ответ</span><textarea name="answer" required>${esc(e.answer)}</textarea></label>
-      <label class="field"><span>Ключевые слова через запятую (необязательно)</span><input type="text" name="keywords" value="${esc(e.keywords)}" placeholder="собрание, родительское"></label>
+      <label class="field"><span>Вопрос — так, как спрашивают</span><input type="text" name="question" required value="${esc(base.question)}"></label>
+      <label class="field"><span>Ваш ответ</span><textarea name="answer" required>${esc(base.answer)}</textarea></label>
+      <label class="field"><span>Ключевые слова через запятую (необязательно)</span><input type="text" name="keywords" value="${esc(base.keywords)}" placeholder="собрание, родительское"></label>
+      ${S.me.school ? `<label class="switch"><span>🏛 В общую базу школы — бот ответит родителям всех классов</span><input type="checkbox" name="shared" ${base.shared ? "checked" : ""}></label>` : ""}
       <div class="btns"><button class="btn ghost" value="cancel" formnovalidate>Отмена</button><button class="btn" value="save">Сохранить</button></div>
       ${e.id ? '<button class="btn danger block" value="delete" style="margin-top:10px" formnovalidate>Удалить карточку</button>' : ""}`,
     async (fd, action) => {
       if (action === "delete") { await api(`/api/faq/${e.id}`, { method: "DELETE" }); toast("Удалено"); }
       else {
-        const body = { question: fd.get("question"), answer: fd.get("answer"), keywords: fd.get("keywords") || null };
+        const body = { question: fd.get("question"), answer: fd.get("answer"), keywords: fd.get("keywords") || null, shared: fd.get("shared") === "on" };
         await api(e.id ? `/api/faq/${e.id}` : "/api/faq", { method: e.id ? "PUT" : "POST", body });
         haptic("success"); toast("Сохранено");
       }
@@ -431,7 +713,7 @@
           <div class="muted small" style="margin-top:4px">${m.chat_title ? "отправляли в " + esc(m.chat_title) + " " : "на полке с "}${esc(m.date)}${m.tags ? " · " + m.tags.split(",").map((t) => "#" + esc(t.trim())).join(" ") : ""}</div>
           <div class="row" style="margin-top:10px">
             <button class="btn sm outline" data-act="sendMe" data-id="${m.id}">📥 Прислать мне</button>
-            ${S.me.is_teacher ? `<button class="btn sm ghost" data-act="sendChat" data-id="${m.id}">➡️ В чат</button><button class="btn sm ghost" data-act="editMat" data-id="${m.id}">✏️</button>` : ""}
+            ${(S.me.is_teacher || S.me.is_subject_teacher) ? `<button class="btn sm ghost" data-act="sendChat" data-id="${m.id}">➡️ В чат</button><button class="btn sm ghost" data-act="editMat" data-id="${m.id}">✏️</button>` : ""}
           </div></div>`).join("")
         : `<div class="empty"><b>${q ? "Ничего не нашлось" : "Пока пусто"}</b>${q ? "Попробуйте другие слова или тег." : (S.me.is_teacher ? "Перешлите боту файл с подписью — он появится здесь." : "Здесь появятся материалы, которые учитель отправлял в чат класса.")}</div>`;
     } catch (e) { box.innerHTML = `<p class="err">${esc(e.message)}</p>`; }
@@ -442,7 +724,7 @@
     catch (e) { toast(e.message, true); }
   };
   ACTIONS.sendChat = (el) => {
-    const chats = S.me.chats;
+    const chats = S.me.board_chats;
     modal(`<h2 style="margin-top:0">Переслать в чат</h2>
       <label class="field"><span>Класс</span><select name="chat">${chats.map((c) => `<option value="${c.chat_id}">${esc(c.title)}</option>`).join("")}</select></label>
       <div class="btns"><button class="btn ghost" value="cancel" formnovalidate>Отмена</button><button class="btn" value="ok">Отправить</button></div>`,
@@ -563,14 +845,17 @@
     try {
       S.me = await api("/api/me");
     } catch (e) { fail(e); return; }
-    document.getElementById("who").textContent = S.me.user.name + (S.me.is_teacher ? " · учитель" : "");
+    const role = S.me.is_teacher ? "классный руководитель" : S.me.is_subject_teacher ? "предметник"
+      : S.me.is_admin ? "администрация" : "";
+    document.getElementById("who").textContent = S.me.user.name + (role ? " · " + role : "");
     const start = WA?.initDataUnsafe?.start_param || params.get("start") || "";
-    if (S.me.is_teacher) {
-      if (/^poll_\d+$/.test(start)) { S.route = { name: "polls", args: {} }; go("pollDetail", { id: start.slice(5) }); return; }
-      go(["faq", "shelf", "more"].includes(start) ? start : "polls", {}, false);
-    } else {
-      go(start === "ask" ? "ask" : start === "shelf" ? "shelf" : "my", {}, false);
+    const tabs = tabsFor(S.me).map((t) => t[0]);
+    if (S.me.is_teacher && /^poll_\d+$/.test(start)) {
+      S.route = { name: "polls", args: {} };
+      go("pollDetail", { id: start.slice(5) });
+      return;
     }
+    go(tabs.includes(start) ? start : tabs[0], {}, false);
   }
   boot();
 })();
