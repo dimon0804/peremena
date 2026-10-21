@@ -16,7 +16,7 @@ from ..core import ctx
 from ..db import session
 from ..max_api import MaxApiError
 from ..models import ClassChat, InboxItem, User
-from ..services import chats, faq, polls, quiet, shelf, stats
+from ..services import board, chats, faq, polls, quiet, school, shelf, stats
 from ..timeutil import fmt_dt, local_now, parse_deadline, preset_deadline, to_local, to_utc, zone
 from .auth import InitDataError, validate_init_data
 
@@ -55,6 +55,21 @@ async def teacher_user(user: User = Depends(current_user)) -> User:
     return user
 
 
+async def staff_user(user: User = Depends(current_user)) -> User:
+    """Классный руководитель или предметник."""
+    r = await school.roles(user.user_id)
+    if not (r.is_class_teacher or r.is_subject_teacher):
+        raise HTTPException(403, "Только для учителя")
+    return user
+
+
+async def admin_user(user: User = Depends(current_user)) -> tuple[User, "school.Roles"]:
+    r = await school.roles(user.user_id)
+    if not r.is_admin or not r.school:
+        raise HTTPException(403, "Только для администрации школы")
+    return user, r
+
+
 def _sign(*parts) -> str:
     msg = ":".join(str(p) for p in parts).encode()
     return hmac.new(ctx().settings.signing_key, msg, hashlib.sha256).hexdigest()[:32]
@@ -85,8 +100,9 @@ def poll_out(p, tz: str, with_targets: bool = False, chat_titles: dict | None = 
     return out
 
 
-def faq_out(e) -> dict:
+def faq_out(e, me: int | None = None) -> dict:
     return {"id": e.id, "question": e.question, "answer": e.answer, "keywords": e.keywords, "chat_id": e.chat_id,
+            "shared": bool(e.school_id), "own": me is None or e.teacher_id == me,
             "hits": e.hits, "misses": e.misses, "updated_at": e.updated_at.isoformat() + "Z"}
 
 
@@ -105,11 +121,23 @@ async def _titles() -> dict[int, str]:
 @router.get("/me")
 async def me(user: User = Depends(current_user)):
     c = ctx()
-    t_chats = await chats.teacher_chats(user.user_id)
+    r = await school.roles(user.user_id)
+    t_chats = r.class_chats
     m_chats = await chats.member_chats(user.user_id)
+    sch = None
+    if r.school:
+        sch = {"id": r.school.id, "name": r.school.name, "role": r.school_role}
+        if r.is_admin:
+            sch |= {"code": r.school.code, "admin_code": r.school.admin_code,
+                    "teacher_link": c.start_link("school_" + r.school.code) if c.bot_username else "",
+                    "admin_link": c.start_link("school_" + r.school.admin_code) if c.bot_username else ""}
     return {
         "user": {"id": user.user_id, "name": user.display_name, "first_name": user.first_name},
         "is_teacher": bool(t_chats),
+        "is_subject_teacher": r.is_subject_teacher,
+        "is_admin": r.is_admin,
+        "school": sch,
+        "board_chats": [{"chat_id": c_.chat_id, "title": c_.title, "subject": subj} for c_, subj in r.board_chats()],
         "chats": [chat_out(c_) for c_ in t_chats],
         "member_chats": [{"chat_id": c_.chat_id, "title": c_.title} for c_ in m_chats],
         "bot_username": c.bot_username,
@@ -313,30 +341,49 @@ class FaqIn(BaseModel):
     answer: str = Field(min_length=1, max_length=3500)
     keywords: str | None = None
     chat_id: int | None = None
+    shared: bool = False  # в общую базу ответов школы
 
 
 @router.get("/faq")
-async def list_faq(user: User = Depends(teacher_user)):
-    return [faq_out(e) for e in await faq.list_entries(user.user_id)]
+async def list_faq(user: User = Depends(current_user)):
+    r = await school.roles(user.user_id)
+    if not (r.is_class_teacher or r.is_admin):
+        raise HTTPException(403, "Только для учителя")
+    return [faq_out(e, user.user_id) for e in await faq.list_entries(user.user_id, with_school=True)]
+
+
+async def _school_for_share(user: User, shared: bool) -> int | None:
+    if not shared:
+        return None
+    sid = await school.school_of_teacher(user.user_id)
+    if not sid:
+        raise HTTPException(400, "Чтобы делиться со школой, вступите в школу")
+    return sid
 
 
 @router.post("/faq")
-async def add_faq(body: FaqIn, user: User = Depends(teacher_user)):
-    e = await faq.add_entry(user.user_id, body.question, body.answer, body.keywords or None, body.chat_id)
-    return faq_out(e)
+async def add_faq(body: FaqIn, user: User = Depends(current_user)):
+    r = await school.roles(user.user_id)
+    if not (r.is_class_teacher or r.is_admin):
+        raise HTTPException(403, "Только для учителя")
+    sid = await _school_for_share(user, body.shared)
+    e = await faq.add_entry(user.user_id, body.question, body.answer, body.keywords or None, body.chat_id, sid)
+    return faq_out(e, user.user_id)
 
 
 @router.put("/faq/{fid}")
-async def edit_faq(fid: int, body: FaqIn, user: User = Depends(teacher_user)):
+async def edit_faq(fid: int, body: FaqIn, user: User = Depends(current_user)):
+    sid = await _school_for_share(user, body.shared)
     e = await faq.update_entry(fid, user.user_id, question=body.question, answer=body.answer,
-                               keywords=body.keywords if body.keywords is not None else None, chat_id=body.chat_id or 0)
+                               keywords=body.keywords if body.keywords is not None else None, chat_id=body.chat_id or 0,
+                               school_id=sid or 0)
     if not e:
         raise HTTPException(404, "Карточка не найдена")
     return faq_out(e)
 
 
 @router.delete("/faq/{fid}")
-async def del_faq(fid: int, user: User = Depends(teacher_user)):
+async def del_faq(fid: int, user: User = Depends(current_user)):
     if not await faq.delete_entry(fid, user.user_id):
         raise HTTPException(404, "Карточка не найдена")
     return {"ok": True}
@@ -353,7 +400,8 @@ async def test_faq(q: str, user: User = Depends(teacher_user)):
 @router.get("/materials")
 async def list_materials(q: str = "", user: User = Depends(current_user)):
     titles = await _titles()
-    if await chats.is_teacher(user.user_id):
+    r = await school.roles(user.user_id)
+    if r.is_class_teacher or r.is_subject_teacher:
         items = await shelf.list_for_teacher(user.user_id, q)
     elif q:
         items = [h.item for h in await shelf.find(user.user_id, q, teacher_view=False, limit=30)]
@@ -368,7 +416,7 @@ class MaterialIn(BaseModel):
 
 
 @router.put("/materials/{mid}")
-async def edit_material(mid: int, body: MaterialIn, user: User = Depends(teacher_user)):
+async def edit_material(mid: int, body: MaterialIn, user: User = Depends(staff_user)):
     m = await shelf.update(mid, user.user_id, body.title, body.tags)
     if not m:
         raise HTTPException(404, "Материал не найден")
@@ -376,7 +424,7 @@ async def edit_material(mid: int, body: MaterialIn, user: User = Depends(teacher
 
 
 @router.delete("/materials/{mid}")
-async def del_material(mid: int, user: User = Depends(teacher_user)):
+async def del_material(mid: int, user: User = Depends(staff_user)):
     if not await shelf.delete(mid, user.user_id):
         raise HTTPException(404, "Материал не найден")
     return {"ok": True}
@@ -392,8 +440,8 @@ async def send_material(mid: int, body: SendIn, user: User = Depends(current_use
     if m is None:
         raise HTTPException(404, "Материал не найден")
     if body.chat_id:
-        chat = await chats.get_chat(body.chat_id)
-        if m.teacher_id != user.user_id or not chat or chat.teacher_id != user.user_id:
+        allowed = {c.chat_id for c, _ in (await school.roles(user.user_id)).board_chats()}
+        if m.teacher_id != user.user_id or body.chat_id not in allowed:
             raise HTTPException(403, "Пересылать в чат может только учитель")
         ok = await shelf.send_material(m, chat_id=body.chat_id, caption=m.title or None)
     else:
@@ -416,7 +464,7 @@ async def upload_material(
     file: UploadFile = File(...),
     title: str = Form(""),
     tags: str = Form(""),
-    user: User = Depends(teacher_user),
+    user: User = Depends(staff_user),
 ):
     content = await file.read()
     if not content:
@@ -518,3 +566,201 @@ async def inbox(user: User = Depends(teacher_user)):
     return [{"id": i.id, "kind": i.kind, "label": labels.get(i.kind, ""), "text": i.text, "from_name": i.from_name,
              "from_user_id": i.from_user_id, "delivered": i.delivered,
              "time": f"{to_local(i.created_at, user.tz):%d.%m %H:%M}"} for i in items]
+
+
+# ====================================================================== «Доска класса»
+def board_out(a, titles: dict, tz: str | None) -> dict:
+    return {"id": a.id, "chat_id": a.chat_id, "chat_title": titles.get(a.chat_id, ""), "kind": a.kind,
+            "subject": a.subject, "text": a.text, "for_date": a.for_date, "for_date_text": board.fmt_day(a.for_date),
+            "published": a.published, "publish_mode": a.publish_mode, "author_id": a.author_id,
+            "publish_at_text": f"{to_local(a.publish_at, tz):%d.%m %H:%M}" if a.publish_at else "",
+            "date": f"{to_local(a.created_at, tz):%d.%m %H:%M}"}
+
+
+@router.get("/subjects")
+async def subjects(_: User = Depends(current_user)):
+    return list(board.SUBJECTS.keys())
+
+
+@router.get("/board")
+async def list_board(user: User = Depends(current_user)):
+    r = await school.roles(user.user_id)
+    staff = [c.chat_id for c, _ in r.board_chats()]
+    member = [c.chat_id for c in await chats.member_chats(user.user_id)]
+    titles = await _titles()
+    items = await board.list_for_chats(list(dict.fromkeys(staff + member)), days=30)
+    out = []
+    for a in items:
+        if a.chat_id not in staff and not (a.published or a.publish_mode == "silent"):
+            continue  # запланированное родителям не показываем
+        d = board_out(a, titles, user.tz)
+        d["can_delete"] = a.author_id == user.user_id or any(c.chat_id == a.chat_id for c in r.class_chats)
+        out.append(d)
+    return out
+
+
+class BoardIn(BaseModel):
+    chat_id: int
+    kind: str = "hw"
+    subject: str = ""
+    text: str = Field(min_length=2, max_length=3500)
+    for_date: str | None = None          # tomorrow | after | monday | YYYY-MM-DD
+    publish_mode: str = "now"            # now | later | silent
+
+
+@router.post("/board")
+async def add_board(body: BoardIn, user: User = Depends(staff_user)):
+    allowed = {c.chat_id: subj for c, subj in (await school.roles(user.user_id)).board_chats()}
+    if body.chat_id not in allowed:
+        raise HTTPException(403, "Нет доступа к этому классу")
+    if body.publish_mode not in ("now", "later", "silent") or body.kind not in ("hw", "news"):
+        raise HTTPException(400, "Неверные параметры")
+    subject = body.subject or allowed[body.chat_id]
+    if body.kind == "hw" and not subject:
+        raise HTTPException(400, "Укажите предмет")
+    for_date = board.parse_for_date(body.for_date or "", user.tz) if body.kind == "hw" else None
+    a = await board.create(body.chat_id, user.user_id, body.kind, body.text, subject, for_date, body.publish_mode)
+    return board_out(a, await _titles(), user.tz)
+
+
+@router.delete("/board/{aid}")
+async def del_board(aid: int, user: User = Depends(current_user)):
+    if not await board.delete(aid, user.user_id):
+        raise HTTPException(404, "Запись не найдена")
+    return {"ok": True}
+
+
+# ====================================================================== предметники
+async def _own_chat(chat_id: int, user: User):
+    c = await chats.get_chat(chat_id)
+    if not c or c.teacher_id != user.user_id:
+        raise HTTPException(404, "Чат не найден")
+    return c
+
+
+@router.post("/chats/{chat_id}/invite")
+async def invite_subject(chat_id: int, user: User = Depends(teacher_user)):
+    await _own_chat(chat_id, user)
+    code = await school.subject_invite_code(chat_id)
+    return {"link": ctx().start_link(f"subj_{code}"), "code": code}
+
+
+@router.get("/chats/{chat_id}/subjects")
+async def chat_subjects(chat_id: int, user: User = Depends(teacher_user)):
+    await _own_chat(chat_id, user)
+    return [{"user_id": st.user_id, "name": u.display_name if u else str(st.user_id), "subject": st.subject}
+            for st, u in await school.subject_teachers(chat_id)]
+
+
+@router.delete("/chats/{chat_id}/subjects/{uid}")
+async def remove_subject(chat_id: int, uid: int, user: User = Depends(teacher_user)):
+    await _own_chat(chat_id, user)
+    await school.remove_subject_teacher(chat_id, uid)
+    return {"ok": True}
+
+
+# ====================================================================== школа
+class SchoolIn(BaseModel):
+    name: str = Field(min_length=3, max_length=300)
+
+
+class JoinIn(BaseModel):
+    code: str = Field(min_length=4, max_length=32)
+
+
+@router.post("/school")
+async def create_school(body: SchoolIn, user: User = Depends(current_user)):
+    r = await school.roles(user.user_id)
+    if not (r.is_class_teacher or r.is_subject_teacher):
+        raise HTTPException(403, "Школу создаёт учитель, подключивший бота к классу")
+    sch = await school.create_school(user.user_id, body.name)
+    return {"id": sch.id, "name": sch.name}
+
+
+@router.post("/school/join")
+async def join_school(body: JoinIn, user: User = Depends(current_user)):
+    sch, role = await school.join_by_code(user.user_id, body.code)
+    if not sch:
+        raise HTTPException(404, "Код не найден")
+    return {"id": sch.id, "name": sch.name, "role": role}
+
+
+@router.get("/school")
+async def school_dashboard(ar=Depends(admin_user)):
+    user, r = ar
+    return {"school": {"id": r.school.id, "name": r.school.name}, **await school.dashboard(r.school.id)}
+
+
+@router.get("/school/faq")
+async def school_faq(user: User = Depends(current_user)):
+    sid = await school.school_of_teacher(user.user_id)
+    if not sid:
+        raise HTTPException(404, "Вы не состоите в школе")
+    return [faq_out(e, user.user_id) for e in await faq.list_school(sid)]
+
+
+class CampaignIn(BaseModel):
+    chat_ids: list[int] = Field(min_length=1)
+    template: str = "consent"
+    text: str = Field(min_length=3, max_length=3000)
+    options: list[str] = []
+    deadline: str | None = None
+
+
+def _deadline(value: str | None, tz: str):
+    if not value:
+        return None
+    d = value.strip()
+    if d in ("today", "tomorrow", "friday", "week"):
+        return preset_deadline(d, tz)
+    try:
+        dt = datetime.fromisoformat(d.replace("Z", ""))
+        deadline = to_utc(dt.replace(tzinfo=zone(tz))) if dt.tzinfo is None else to_utc(dt)
+    except ValueError:
+        deadline = parse_deadline(d, tz)
+    if deadline is None:
+        raise HTTPException(400, "Не понял срок")
+    if deadline <= to_utc(local_now(tz)):
+        raise HTTPException(400, "Срок уже прошёл")
+    return deadline
+
+
+@router.post("/school/campaigns")
+async def launch_campaign(body: CampaignIn, ar=Depends(admin_user)):
+    user, r = ar
+    if body.template not in polls.TEMPLATES:
+        raise HTTPException(400, "Неизвестный шаблон")
+    if body.template == "choice" and not 2 <= len([o for o in body.options if o.strip()]) <= 10:
+        raise HTTPException(400, "Нужно от 2 до 10 вариантов")
+    cmp, reports = await school.launch_campaign(user.user_id, r.school.id, body.chat_ids, body.template, body.text,
+                                                body.options, _deadline(body.deadline, user.tz))
+    if not reports:
+        raise HTTPException(400, "Ни один из выбранных классов не найден в школе")
+    return {"campaign": await school.campaign_summary(cmp), "reports": reports}
+
+
+async def _campaign(cid: int, r):
+    from ..models import Campaign
+
+    async with session() as s:
+        cmp = await s.get(Campaign, cid)
+    if not cmp or cmp.school_id != r.school.id:
+        raise HTTPException(404, "Сбор не найден")
+    return cmp
+
+
+@router.get("/school/campaigns/{cid}")
+async def get_campaign(cid: int, ar=Depends(admin_user)):
+    return await school.campaign_summary(await _campaign(cid, ar[1]))
+
+
+@router.post("/school/campaigns/{cid}/remind")
+async def remind_campaign(cid: int, ar=Depends(admin_user)):
+    data = await school.campaign_summary(await _campaign(cid, ar[1]))
+    sent = group = 0
+    for row in data["classes"]:
+        if not row["closed"] and row["answered"] < row["total"]:
+            res = await polls.remind(row["poll_id"])
+            sent += res["sent"]
+            group += res["group"]
+    return {"sent": sent, "group": group}
