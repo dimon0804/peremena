@@ -35,6 +35,34 @@ UPDATE_TYPES = [
 ]
 
 
+TEXT_LIMIT = 4000  # NewMessageBody.text maxLength
+
+
+def split_text(text: str, limit: int = TEXT_LIMIT - 100) -> list[str]:
+    """Режет длинный текст на части по границам строк (разметка у нас не переходит через строки)."""
+    if not text or len(text) <= limit:
+        return [text]
+    parts, cur = [], ""
+    for line in text.split("\n"):
+        while len(line) > limit:  # одна гигантская строка — режем по пробелу
+            cut = line.rfind(" ", 0, limit)
+            cut = cut if cut > limit // 2 else limit
+            if cur:
+                parts.append(cur)
+                cur = ""
+            parts.append(line[:cut])
+            line = line[cut:].lstrip()
+        candidate = f"{cur}\n{line}" if cur else line
+        if len(candidate) > limit:
+            parts.append(cur)
+            cur = line
+        else:
+            cur = candidate
+    if cur:
+        parts.append(cur)
+    return [p for p in parts if p.strip()] or [text[:limit]]
+
+
 class MaxApiError(Exception):
     def __init__(self, status: int, code: str = "", message: str = ""):
         super().__init__(f"MAX API {status}: {code} {message}".strip())
@@ -166,6 +194,12 @@ class MaxClient:
         notify: bool = True,
         disable_link_preview: bool = True,
     ) -> dict:
+        chunks = split_text(text) if text else [text]
+        for head in chunks[:-1]:  # длинное сообщение — несколько частей, кнопки у последней
+            await self.send_message(user_id=user_id, chat_id=chat_id, text=head, fmt=fmt, reply_to=reply_to,
+                                    notify=notify, disable_link_preview=disable_link_preview)
+            reply_to, notify = None, False
+        text = chunks[-1]
         body: dict[str, Any] = {"text": text, "notify": notify}
         if attachments:
             body["attachments"] = attachments
@@ -193,7 +227,7 @@ class MaxClient:
 
     async def edit_message(self, message_id: str, *, text: str | None, attachments: list[dict] | None = None,
                            fmt: str | None = "html") -> dict:
-        body: dict[str, Any] = {"text": text, "attachments": attachments}
+        body: dict[str, Any] = {"text": text[:TEXT_LIMIT] if text else text, "attachments": attachments}
         if fmt:
             body["format"] = fmt
         return await self.request("PUT", "/messages", params={"message_id": message_id}, json=body)
@@ -210,6 +244,8 @@ class MaxClient:
         if notification:
             body["notification"] = notification
         if message is not None:
+            if message.get("text") and len(message["text"]) > TEXT_LIMIT:
+                message = {**message, "text": message["text"][:TEXT_LIMIT - 1] + "…"}
             body["message"] = message
         return await self.request("POST", "/answers", params={"callback_id": callback_id}, json=body)
 
