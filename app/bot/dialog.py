@@ -8,7 +8,7 @@ import secrets
 from .. import keyboards as kb
 from ..core import ctx
 from ..models import User
-from ..services import chats, faq, polls, quiet, school, shelf, stats
+from ..services import chats, faq, polls, quiet, school, search, shelf, stats
 from ..timeutil import fmt_dt, fmt_minutes, parse_deadline, parse_hours, preset_deadline
 from . import staff
 from .common import (
@@ -426,7 +426,8 @@ async def faq_add_step(uid: int, step: str, data: dict, text: str) -> bool:
 
 
 async def faq_reply_step(uid: int, data: dict, text: str) -> bool:
-    """Учитель отвечает на переданный вопрос: ответ уходит родителю и сохраняется в справочник."""
+    """Учитель отвечает на переданный вопрос: ответ уходит родителю, в справочник — по желанию учителя.
+    Автосохранение засоряло справочник: живой тест дал карточку «срочно → ?»."""
     await clear_state(uid)
     q = await ctx().kv.get(f"qq:{data['qid']}")
     if not q:
@@ -436,11 +437,15 @@ async def faq_reply_step(uid: int, data: dict, text: str) -> bool:
         user_id=q["from_user_id"],
         text=f"✉️ <b>Ответ учителя</b> на ваш вопрос «{html.escape(q['text'][:200])}»:\n\n{html.escape(text)}",
     )
-    e = await faq.add_entry(uid, q["text"], text)
     await ctx().kv.delete(f"qq:{data['qid']}")
-    await send(uid, ("✅ Ответ отправлен" if sent else "⚠️ Не удалось доставить ответ родителю") +
-               " и сохранён в справочник — в следующий раз отвечу сам.",
-               [[kb.cb("Отменить сохранение", f"fq:del:{e.id}")]])
+    head = "✅ Ответ отправлен." if sent else "⚠️ Не удалось доставить ответ родителю."
+    if len(search.content_stems(q["text"])) < 2 or len(text.strip()) < 3:
+        await send(uid, head)  # «срочно» → «?» в справочник не предлагаем
+        return True
+    key = secrets.token_hex(5)
+    await ctx().kv.set(f"sv:{key}", {"teacher_id": uid, "q": q["text"][:1000], "a": text[:3500]}, 3 * 24 * 3600)
+    await send(uid, f"{head}\n\nСохранить в справочник? Тогда на такой вопрос я отвечу сам.",
+               [[kb.cb("💾 Сохранить", f"fq:save:{key}"), kb.cb("Не надо", f"fq:nosave:{key}")]])
     return True
 
 
@@ -538,10 +543,10 @@ async def forward_question(uid: int, chat_id: int | None = None) -> None:
     await c.kv.set(f"qq:{qid}", {"from_user_id": uid, "text": q["text"], "chat_id": chat_id}, 3600 * 24 * 7)
     text = (f"❓ <b>Вопрос</b> от <a href=\"max://user/{uid}\">{html.escape(name)}</a> "
             f"({html.escape(ch.title or 'класс')}):\n\n{html.escape(q['text'])}\n\n"
-            f"<i>Ответьте кнопкой — ответ уйдёт родителю и сохранится в справочник.</i>")
+            f"<i>Ответьте кнопкой — ответ уйдёт родителю, а сохранить его в справочник я предложу.</i>")
     status = await quiet.notify_teacher(
         ch.teacher_id, text, kind="question", chat_id=chat_id, from_user_id=uid, from_name=name,
-        raw_text=q["text"], buttons=[[kb.cb("✍️ Ответить и сохранить", f"fr:{qid}")]],
+        raw_text=q["text"], buttons=[[kb.cb("✍️ Ответить", f"fr:{qid}")]],
     )
     if status == "sent":
         await send(uid, "✅ Передал учителю. Ответ придёт сюда или в чат класса.")
