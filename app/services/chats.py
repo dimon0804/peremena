@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 
 from ..core import ctx
 from ..db import session, utcnow
@@ -16,6 +17,14 @@ log = logging.getLogger(__name__)
 async def upsert_user(u: dict | None, dialog_open: bool | None = None) -> User | None:
     if not u or not u.get("user_id"):
         return None
+    try:
+        return await _upsert_user(u, dialog_open)
+    except IntegrityError:
+        # параллельный запрос успел создать того же пользователя — просто обновляем
+        return await _upsert_user(u, dialog_open)
+
+
+async def _upsert_user(u: dict, dialog_open: bool | None) -> User:
     async with session() as s:
         user = await s.get(User, u["user_id"])
         if user is None:

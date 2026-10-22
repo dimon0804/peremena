@@ -132,6 +132,8 @@ async def on_board_cb(cid: str, uid: int, tail: str) -> None:
     elif action == "subj":
         data["subject"] = POPULAR_SUBJECTS[int(arg)]
         await _after_chat(uid, data)
+    elif (action in ("fd", "pub") and not data.get("text")) or (action == "pub" and st["step"] != "publish"):
+        await send(uid, "Эта кнопка от старого черновика. Начните заново: /hw или /news")
     elif action == "fd":
         user = await chats.get_user(uid)
         data["for_date"] = board.parse_for_date(arg, user.tz if user else None)

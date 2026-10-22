@@ -183,9 +183,14 @@ async def publish(ann_id: int) -> bool:
     msg = await ctx().safe_send(chat_id=a.chat_id, text=render(a, author.display_name if author else ""))
     async with session() as s:
         row = await s.get(Announcement, ann_id)
-        row.published = True
         if msg:
+            row.published = True
             row.message_id = (msg.get("body") or {}).get("mid")
+        elif utcnow() - row.created_at < timedelta(days=2):
+            # не получилось (сеть, бот временно не в чате) — повторим через 10 минут
+            row.publish_at = utcnow() + timedelta(minutes=10)
+        else:
+            row.publish_at = None  # двое суток без успеха — больше не пытаемся
     return bool(msg)
 
 
@@ -231,9 +236,10 @@ async def list_for_chats(chat_ids: list[int], days: int = 21, limit: int = 100) 
         )).all())
 
 
-def _visible(a: Announcement) -> bool:
-    # запланированное ещё не вышло — родителям его не показываем
-    return a.published or a.publish_mode == "silent"
+def is_visible(a: Announcement) -> bool:
+    # скрываем только запланированное на утро, пока оно не вышло; запись «сейчас» видна,
+    # даже если публикация в чат не удалась — бот всё равно отвечает по ней
+    return a.published or a.publish_mode != "later"
 
 
 # ---------------------------------------------------------------- ответы на вопросы
@@ -241,7 +247,7 @@ async def find_homework(query: str, chat_ids: list[int], tz: str | None) -> list
     subj = subject_in(query)
     day = date_in(query, tz)
     today = local_now(tz).date()
-    items = [a for a in await list_for_chats(chat_ids) if a.kind == "hw" and _visible(a)]
+    items = [a for a in await list_for_chats(chat_ids) if a.kind == "hw" and is_visible(a)]
     if subj:
         items = [a for a in items if a.subject == subj or subject_in(a.subject or "") == subj]
     if day:
@@ -262,7 +268,7 @@ async def find_homework(query: str, chat_ids: list[int], tz: str | None) -> list
 
 
 async def recent_news(chat_ids: list[int], days: int = 7) -> list[Announcement]:
-    return [a for a in await list_for_chats(chat_ids, days=days) if a.kind == "news" and _visible(a)][:5]
+    return [a for a in await list_for_chats(chat_ids, days=days) if a.kind == "news" and is_visible(a)][:5]
 
 
 async def render_answer(items: list[Announcement], query: str, tz: str | None) -> str:

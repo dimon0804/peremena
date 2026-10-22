@@ -184,7 +184,7 @@ async def create_poll(body: PollIn, user: User = Depends(teacher_user)):
             deadline = preset_deadline(d, user.tz)
         else:
             try:
-                dt = datetime.fromisoformat(d.replace("Z", ""))
+                dt = datetime.fromisoformat(d)  # «...Z» разбирается как UTC, без пояса — время учителя
                 deadline = to_utc(dt.replace(tzinfo=zone(user.tz))) if dt.tzinfo is None else to_utc(dt)
             except ValueError:
                 deadline = parse_deadline(d, user.tz)
@@ -591,7 +591,7 @@ async def list_board(user: User = Depends(current_user)):
     items = await board.list_for_chats(list(dict.fromkeys(staff + member)), days=30)
     out = []
     for a in items:
-        if a.chat_id not in staff and not (a.published or a.publish_mode == "silent"):
+        if a.chat_id not in staff and not board.is_visible(a):
             continue  # запланированное родителям не показываем
         d = board_out(a, titles, user.tz)
         d["can_delete"] = a.author_id == user.user_id or any(c.chat_id == a.chat_id for c in r.class_chats)
@@ -714,7 +714,7 @@ def _deadline(value: str | None, tz: str):
     if d in ("today", "tomorrow", "friday", "week"):
         return preset_deadline(d, tz)
     try:
-        dt = datetime.fromisoformat(d.replace("Z", ""))
+        dt = datetime.fromisoformat(d)  # «...Z» разбирается как UTC, без пояса — время учителя
         deadline = to_utc(dt.replace(tzinfo=zone(tz))) if dt.tzinfo is None else to_utc(dt)
     except ValueError:
         deadline = parse_deadline(d, tz)
