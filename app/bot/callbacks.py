@@ -97,15 +97,17 @@ async def on_poll_answer(cid: str, uid: int, user: dict, tail: str, in_group: bo
     except ValueError:
         await ack(cid, "Кнопка устарела")
         return
+    existing = await polls.get_poll(pid)
+    if existing is not None and existing.teacher_id == uid:
+        # учитель нажал кнопку своего сбора — его ответ не считаем, иначе «25/27» превратится в «26/28»
+        await ack(cid, "Это ваш сбор — статус в личке: /status")
+        return
     poll, status = await polls.record_answer(pid, user, opt)
     if status == "bad" or poll is None:
         await ack(cid, "Сбор не найден")
         return
     if status == "closed":
         await ack(cid, "Сбор уже закрыт — напишите учителю, если ответ ещё нужен")
-        return
-    if poll.teacher_id == uid and in_group:
-        await ack(cid, "Это ваш сбор — статус в личке: /status")
         return
     option = poll.options[opt]
     note = f"Записал ваш ответ: «{option}»" if status != "changed" else f"Ответ изменён: «{option}»"
