@@ -7,7 +7,7 @@ import logging
 from .. import keyboards as kb
 from ..core import ctx
 from ..models import ClassChat
-from ..services import board, chats, school
+from ..services import board, chats, school, websession
 from ..timeutil import parse_deadline, to_local
 from .common import ack, clear_state, get_state, send, set_state
 
@@ -258,7 +258,17 @@ async def on_invite_cb(cid: str, uid: int, tail: str) -> None:
 
 
 async def handle_start_payload(uid: int, payload: str) -> bool:
-    """Глубокие ссылки: subj_<код> — приглашение предметника, school_<код> — вступление в школу."""
+    """Глубокие ссылки: subj_<код> — приглашение предметника, school_<код> — вступление в школу,
+    login_<код> — вход на сайт."""
+    if payload.startswith("login_"):
+        code = payload[6:]
+        if not await websession.get_login(code):
+            await send(uid, "Ссылка для входа устарела. Обновите страницу на сайте и попробуйте ещё раз.")
+            return True
+        await send(uid, "🔐 <b>Вход на сайт «Перемены»</b>\n\nПодтвердите, только если вы сами сейчас входите "
+                        "на сайт. Если ссылку прислал кто-то другой — нажмите «Это не я».",
+                   [[kb.cb("✅ Войти", f"lg:ok:{code}"), kb.cb("Это не я", f"lg:no:{code}")]])
+        return True
     if payload.startswith("subj_"):
         code = payload[5:]
         data = await ctx().kv.get(f"subj:{code}")
@@ -358,3 +368,16 @@ async def on_school_cb(cid: str, uid: int, tail: str) -> None:
     else:
         await ack(cid)
 
+
+
+async def on_login_cb(cid: str, uid: int, tail: str) -> None:
+    action, _, code = tail.partition(":")
+    if action == "ok":
+        ok = await websession.confirm_login(code, uid)
+        await ack(cid, "Вход подтверждён" if ok else "Ссылка устарела")
+        await send(uid, "✅ Готово — вернитесь на сайт, кабинет откроется сам." if ok
+                   else "Ссылка для входа устарела. Обновите страницу на сайте.")
+    else:
+        await websession.reject_login(code)
+        await ack(cid, "Вход отклонён")
+        await send(uid, "Вход отклонён. Никто не получил доступ к вашему кабинету.")

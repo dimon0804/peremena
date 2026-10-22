@@ -80,6 +80,9 @@ async def on_callback(update: dict) -> None:
         if head == "sc":
             await staff.on_school_cb(cid, uid, tail)
             return
+        if head == "lg":
+            await staff.on_login_cb(cid, uid, tail)
+            return
         if head == "prp":
             await on_repeat_poll(cid, uid, tail)
             return

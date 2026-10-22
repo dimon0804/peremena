@@ -9,7 +9,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from .bot.router import handle_update
 from .core import Ctx
 from .max_api import MaxApiError
-from .services import board, polls, quiet
+from .services import board, polls, quiet, websession
 
 log = logging.getLogger(__name__)
 
@@ -78,6 +78,7 @@ def make_scheduler(c: Ctx) -> AsyncIOScheduler:
     sched.add_job(polls.tick, "interval", seconds=60, id="polls", **opts)
     sched.add_job(quiet.morning_tick, "interval", seconds=60, id="morning", **opts)
     sched.add_job(board.tick, "interval", seconds=60, id="board", **opts)
+    sched.add_job(websession.cleanup, "interval", hours=1, id="sessions", **opts)
     if c.settings.mode == "webhook":
         sched.add_job(ensure_webhook, "interval", minutes=30, args=[c], id="webhook", **opts)
     return sched

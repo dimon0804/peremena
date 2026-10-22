@@ -250,3 +250,17 @@ class Announcement(Base):
     published: Mapped[bool] = mapped_column(Boolean, default=False)
     message_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+# ---------------------------------------------------------------- Сайт
+class WebSession(Base):
+    """Сессия веб-кабинета. Вход подтверждается в боте — паролей нет.
+    В базе хранится только хеш токена: утечка таблицы не даёт доступа к кабинетам."""
+    __tablename__ = "web_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    user_agent: Mapped[str] = mapped_column(String(300), default="")

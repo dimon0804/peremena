@@ -7,7 +7,7 @@ import hmac
 import io
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -16,7 +16,7 @@ from ..core import ctx
 from ..db import session
 from ..max_api import MaxApiError
 from ..models import ClassChat, InboxItem, User
-from ..services import board, chats, faq, polls, quiet, school, shelf, stats
+from ..services import board, chats, faq, polls, quiet, school, shelf, stats, websession
 from ..timeutil import fmt_dt, local_now, parse_deadline, preset_deadline, to_local, to_utc, zone
 from .auth import InitDataError, validate_init_data
 
@@ -25,10 +25,21 @@ router = APIRouter(prefix="/api")
 
 # ====================================================================== авторизация
 async def current_user(
+    request: Request,
     x_max_init_data: str | None = Header(default=None),
+    x_peremena: str | None = Header(default=None),
     dev_user: int | None = Query(default=None),
 ) -> User:
+    """Вход: подпись MAX (мини-приложение), cookie сессии (сайт) или dev_user (разработка)."""
     c = ctx()
+    token = request.cookies.get(websession.COOKIE)
+    if token and not x_max_init_data:
+        user = await websession.user_by_token(token)
+        if user is not None:
+            # защита от CSRF: чужой сайт не может добавить свой заголовок к запросу без CORS
+            if request.method not in ("GET", "HEAD") and x_peremena != "1":
+                raise HTTPException(403, "Запрос без заголовка X-Peremena")
+            return user
     if x_max_init_data:
         try:
             data = validate_init_data(x_max_init_data, c.settings.max_bot_token,
@@ -46,7 +57,7 @@ async def current_user(
         if user is None:
             user = await chats.upsert_user({"user_id": dev_user, "first_name": f"Dev {dev_user}"})
         return user
-    raise HTTPException(401, "Откройте приложение из MAX")
+    raise HTTPException(401, "Войдите на сайт через бота или откройте приложение из MAX")
 
 
 async def teacher_user(user: User = Depends(current_user)) -> User:
