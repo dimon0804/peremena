@@ -31,8 +31,10 @@ async def auth_start(request: Request):
     if not c.bot_username:
         raise HTTPException(503, "Бот не подключён — вход через MAX временно недоступен")
     code = await websession.start_login(request.headers.get("user-agent", ""))
+    pin = await websession.make_pin(code)
     link = c.start_link(f"login_{code}")
-    return {"code": code, "link": link, "qr_svg": _qr_svg(link), "expires_in": websession.CODE_TTL}
+    return {"code": code, "pin": f"{pin[:3]} {pin[3:]}", "link": link, "qr_svg": _qr_svg(link),
+            "bot_username": c.bot_username, "expires_in": websession.CODE_TTL}
 
 
 @router.get("/auth/status")

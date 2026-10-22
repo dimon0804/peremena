@@ -19,16 +19,29 @@
 <main class="login">
   <div class="login-card">
     <h1>Вход в кабинет</h1>
-    <p class="muted">Без паролей — вход подтверждается в боте «Перемена» в MAX.</p>
-    <div class="qr" id="qr" aria-label="QR-код для входа"></div>
-    <a class="btn" id="login-link" href="#" target="_blank" rel="noopener" hidden>Открыть бота и подтвердить</a>
-    <ol class="login-steps">
-      <li>Отсканируйте QR-код телефоном или нажмите кнопку.</li>
-      <li>В боте нажмите «✅ Войти».</li>
-      <li>Кабинет откроется на этой странице сам.</li>
-    </ol>
+    <p class="muted">Без паролей — вход подтверждается в боте «Перемена» в MAX. Выберите удобный способ:</p>
+
+    <div class="way">
+      <div class="way-title">1. Отправьте боту код</div>
+      <div class="pin" id="pin" aria-live="polite">··· ···</div>
+      <p class="muted small-note">Откройте чат с <a id="bot-name" href="#" target="_blank" rel="noopener">ботом «Перемена»</a> в MAX на любом устройстве и отправьте эти цифры сообщением.</p>
+    </div>
+
+    <div class="way">
+      <div class="way-title">2. Или откройте ссылку</div>
+      <a class="btn" id="login-link" href="#" target="_blank" rel="noopener" hidden>Открыть бота и подтвердить</a>
+      <p class="muted small-note">Удобно, если вы на телефоне или MAX установлен на этом компьютере.</p>
+    </div>
+
+    <div class="way">
+      <div class="way-title">3. Или наведите камеру телефона</div>
+      <div class="qr" id="qr" aria-label="QR-код для входа"></div>
+      <p class="muted small-note">Обычной камерой телефона (не в боте) — она предложит открыть MAX.</p>
+    </div>
+
+    <p class="muted small-note">Затем в боте нажмите «✅ Войти» — кабинет откроется на этой странице сам.</p>
     <div class="status" id="status" role="status" aria-live="polite"></div>
-    <button class="btn outline" id="again" hidden>Получить новую ссылку</button>
+    <button class="btn outline" id="again" hidden>Получить новый код</button>
   </div>
 </main>
 <script src="/site.js"></script>

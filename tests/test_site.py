@@ -69,3 +69,19 @@ def test_login_confirmed_in_bot(env):
     code2 = loop.run_until_complete(websession.start_login("x"))
     loop.run_until_complete(handle_update(cb_update(TEACHER, f"lg:no:{code2}", "l2")))
     assert loop.run_until_complete(websession.finish_login(code2)) == ("rejected", None)
+
+
+def test_login_by_pin_without_camera(env):
+    from .conftest import msg_update
+
+    loop, api, c = env
+    code = loop.run_until_complete(websession.start_login("pc"))
+    pin = loop.run_until_complete(websession.make_pin(code))
+    # отправили боту цифры как есть, с пробелом посередине
+    loop.run_until_complete(handle_update(msg_update(TEACHER, f"{pin[:3]} {pin[3:]}", mid="p1")))
+    assert "Вход на сайт" in api.texts_to(user_id=TEACHER["user_id"])[-1]
+    loop.run_until_complete(handle_update(cb_update(TEACHER, f"lg:ok:{code}", "p2")))
+    assert loop.run_until_complete(websession.finish_login(code))[0] == "ok"
+    # неизвестный код — понятный ответ, а не поиск по справочнику
+    loop.run_until_complete(handle_update(msg_update(TEACHER, "/login 000000", mid="p3")))
+    assert "нет или он устарел" in api.texts_to(user_id=TEACHER["user_id"])[-1]

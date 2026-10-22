@@ -41,6 +41,10 @@ async def on_message(update: dict) -> None:
         text = ((link.get("message") or {}).get("text") or "").strip()
 
     cmd, rest = parse_command(text)
+    if cmd in ("login", "вход"):  # «/login 123 456» — код входа на сайт
+        await staff.try_login_pin(uid, rest) or await send(
+            uid, "Чтобы войти на сайт, отправьте мне 6 цифр со страницы входа, например: 123 456")
+        return
     if cmd:
         await clear_state(uid)
         await run_command(uid, cmd, rest)
@@ -48,6 +52,9 @@ async def on_message(update: dict) -> None:
 
     state = await get_state(uid)
     if state and await handle_state(uid, state, text, msg):
+        return
+    # 6 цифр со страницы входа — вход на сайт без камеры и QR (не мешает шагам сценариев выше)
+    if not state and await staff.try_login_pin(uid, text):
         return
 
     media = shelf.extract_media(msg)

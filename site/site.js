@@ -66,6 +66,8 @@
         const d = await r.json();
         if (!r.ok) throw new Error(d.detail || "Вход временно недоступен");
         code = d.code;
+        $("#pin").textContent = d.pin;
+        if (d.bot_username) $("#bot-name").href = `https://max.ru/${d.bot_username}`;
         qr.innerHTML = d.qr_svg;
         link.href = d.link;
         link.hidden = false;

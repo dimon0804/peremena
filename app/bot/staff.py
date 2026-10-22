@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import html
 import logging
+import re
 
 from .. import keyboards as kb
 from ..core import ctx
@@ -261,13 +262,7 @@ async def handle_start_payload(uid: int, payload: str) -> bool:
     """Глубокие ссылки: subj_<код> — приглашение предметника, school_<код> — вступление в школу,
     login_<код> — вход на сайт."""
     if payload.startswith("login_"):
-        code = payload[6:]
-        if not await websession.get_login(code):
-            await send(uid, "Ссылка для входа устарела. Обновите страницу на сайте и попробуйте ещё раз.")
-            return True
-        await send(uid, "🔐 <b>Вход на сайт «Перемены»</b>\n\nПодтвердите, только если вы сами сейчас входите "
-                        "на сайт. Если ссылку прислал кто-то другой — нажмите «Это не я».",
-                   [[kb.cb("✅ Войти", f"lg:ok:{code}"), kb.cb("Это не я", f"lg:no:{code}")]])
+        await ask_login_confirm(uid, payload[6:])
         return True
     if payload.startswith("subj_"):
         code = payload[5:]
@@ -381,3 +376,28 @@ async def on_login_cb(cid: str, uid: int, tail: str) -> None:
         await websession.reject_login(code)
         await ack(cid, "Вход отклонён")
         await send(uid, "Вход отклонён. Никто не получил доступ к вашему кабинету.")
+
+
+async def ask_login_confirm(uid: int, code: str) -> None:
+    if not await websession.get_login(code):
+        await send(uid, "Код для входа устарел. Обновите страницу на сайте и попробуйте ещё раз.")
+        return
+    await send(uid, "🔐 <b>Вход на сайт «Перемены»</b>\n\nПодтвердите, только если вы сами сейчас входите "
+                    "на сайт. Если код или ссылку прислал кто-то другой — нажмите «Это не я».",
+               [[kb.cb("✅ Войти", f"lg:ok:{code}"), kb.cb("Это не я", f"lg:no:{code}")]])
+
+
+PIN_RE = re.compile(r"^\s*(?:/?(?:login|вход)\s*)?(\d{3})[\s-]?(\d{3})\s*$", re.IGNORECASE)
+
+
+async def try_login_pin(uid: int, text: str) -> bool:
+    """6 цифр с сайта, отправленные боту, — вход без камеры и QR. True, если это был код входа."""
+    m = PIN_RE.match(text or "")
+    if not m:
+        return False
+    code = await websession.code_by_pin(m[1] + m[2])
+    if not code:
+        await send(uid, "Такого кода входа нет или он устарел. Обновите страницу входа на сайте — появится новый.")
+        return True
+    await ask_login_confirm(uid, code)
+    return True

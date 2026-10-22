@@ -32,6 +32,25 @@ async def start_login(user_agent: str = "") -> str:
     return code
 
 
+async def make_pin(code: str) -> str:
+    """Короткий код из 6 цифр для входа без камеры: его отправляют боту обычным сообщением."""
+    kv = ctx().kv
+    for _ in range(20):
+        pin = f"{secrets.randbelow(1_000_000):06d}"
+        if await kv.add_once(f"loginpin:{pin}", ttl=CODE_TTL):
+            await kv.set(f"loginpin:{pin}", code, CODE_TTL)
+            return pin
+    raise RuntimeError("не удалось выдать код входа")
+
+
+async def code_by_pin(pin: str) -> str | None:
+    pin = "".join(ch for ch in pin if ch.isdigit())
+    if len(pin) != 6:
+        return None
+    code = await ctx().kv.get(f"loginpin:{pin}")
+    return code if isinstance(code, str) else None
+
+
 async def get_login(code: str) -> dict | None:
     if not code or len(code) > 64:
         return None
