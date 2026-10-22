@@ -35,6 +35,10 @@ async def on_message(update: dict) -> None:
         return
     await chats.upsert_user(sender, dialog_open=True)
     text = ((msg.get("body") or {}).get("text") or "").strip()
+    link = msg.get("link") or {}
+    if not text and link.get("type") == "forward":
+        # переслали без комментария: подпись файла или вопрос берём из исходного сообщения
+        text = ((link.get("message") or {}).get("text") or "").strip()
 
     cmd, rest = parse_command(text)
     if cmd:
@@ -97,6 +101,10 @@ async def show_start(uid: int) -> None:
     r = await school.roles(uid)
     if r.is_class_teacher:
         await send(uid, TEACHER_HELP, teacher_menu())
+        # то, что не удалось доставить раньше (учитель ещё не открывал бота), приходит сразу
+        user = await chats.get_user(uid)
+        if user and await quiet.has_pending(uid):
+            await quiet.send_digest(user)
     elif r.is_subject_teacher:
         await send(uid, SUBJECT_HELP, subject_menu())
     elif r.is_admin:
@@ -113,8 +121,8 @@ async def cancel(uid: int) -> None:
 
 async def show_app(uid: int) -> None:
     c = ctx()
-    if not c.bot_username:
-        await send(uid, "Приложение ещё не подключено к боту.")
+    if not c.bot_username or not c.settings.miniapp:
+        await send(uid, "Мини-приложение ещё не подключено. Всё то же самое доступно здесь, в чате: /start")
         return
     await send(uid, "📱 В приложении — все сборы, справочник, полка и настройки на одном экране.",
                [[kb.app("Открыть «Перемену»", c.bot_username, "home")]])
@@ -531,12 +539,15 @@ async def forward_question(uid: int, chat_id: int | None = None) -> None:
     text = (f"❓ <b>Вопрос</b> от <a href=\"max://user/{uid}\">{html.escape(name)}</a> "
             f"({html.escape(ch.title or 'класс')}):\n\n{html.escape(q['text'])}\n\n"
             f"<i>Ответьте кнопкой — ответ уйдёт родителю и сохранится в справочник.</i>")
-    now = await quiet.notify_teacher(
+    status = await quiet.notify_teacher(
         ch.teacher_id, text, kind="question", chat_id=chat_id, from_user_id=uid, from_name=name,
         raw_text=q["text"], buttons=[[kb.cb("✍️ Ответить и сохранить", f"fr:{qid}")]],
     )
-    if now:
+    if status == "sent":
         await send(uid, "✅ Передал учителю. Ответ придёт сюда или в чат класса.")
+    elif status == "queued":
+        await send(uid, "📝 Вопрос записан. Учитель увидит его в сводке, как только откроет бота. "
+                        "Если дело срочное, напишите учителю напрямую.")
     else:
         teacher = await chats.get_user(ch.teacher_id)
         start = fmt_minutes(teacher.work_start) if teacher else "8:00"

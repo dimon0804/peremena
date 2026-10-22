@@ -29,7 +29,12 @@ TYPE_ICON = {"file": "📄", "image": "🖼", "video": "🎬", "audio": "🎧"}
 def extract_media(message: dict) -> list[dict]:
     """Медиавложения сообщения в виде {type, payload, filename, url, size, key}."""
     out = []
-    for a in ((message.get("body") or {}).get("attachments") or []):
+    attachments = list((message.get("body") or {}).get("attachments") or [])
+    link = message.get("link") or {}
+    if link.get("type") == "forward":
+        # пересланное сообщение: файл лежит в link.message, а body может быть пустым
+        attachments += (link.get("message") or {}).get("attachments") or []
+    for a in attachments:
         t = a.get("type")
         if t not in MEDIA_TYPES:
             continue

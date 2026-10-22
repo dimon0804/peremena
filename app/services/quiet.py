@@ -16,7 +16,7 @@ from sqlalchemy import select
 from .. import keyboards as kb
 from ..core import ctx
 from ..db import session
-from ..models import InboxItem, Poll, User
+from ..models import ClassChat, InboxItem, Poll, User
 from ..timeutil import fmt_dt, local_now, to_local, utcnow
 from . import stats
 
@@ -58,21 +58,34 @@ async def notify_teacher(
     raw_text: str = "",
     buttons: list[list[dict]] | None = None,
     urgent: bool = False,
-) -> bool:
-    """Возвращает True, если сообщение ушло сразу, False — если отложено до утра."""
+) -> str:
+    """Доставка учителю. Возвращает:
+    * "sent"   — сообщение ушло сразу;
+    * "night"  — вне рабочего времени, лежит во «входящих» до утренней сводки;
+    * "queued" — доставить не удалось (учитель не запускал бота или заблокировал его),
+                 сообщение сохранено во «входящих» и придёт в сводке, когда учитель откроет бота.
+    Ничего не теряется: всё, что не ушло сразу, сохраняется."""
     async with session() as s:
         teacher = await s.get(User, teacher_id)
-    if teacher is None:
-        return False
-    if urgent or in_work_window(teacher) or is_urgent(teacher, raw_text):
-        await ctx().safe_send(user_id=teacher_id, text=text, attachments=kb.kb_list(buttons or []))
-        return True
+    status = "queued"
+    if teacher is not None:
+        if urgent or in_work_window(teacher) or is_urgent(teacher, raw_text):
+            if await ctx().safe_send(user_id=teacher_id, text=text, attachments=kb.kb_list(buttons or [])):
+                return "sent"
+        else:
+            status = "night"
     async with session() as s:
         s.add(InboxItem(
             teacher_id=teacher_id, chat_id=chat_id, from_user_id=from_user_id, from_name=from_name,
             kind=kind, text=raw_text or text,
         ))
-    return False
+    return status
+
+
+async def has_pending(teacher_id: int) -> bool:
+    async with session() as s:
+        return bool(await s.scalar(select(InboxItem.id).where(
+            InboxItem.teacher_id == teacher_id, InboxItem.delivered.is_(False)).limit(1)))
 
 
 async def build_digest(teacher: User, include_empty: bool = False) -> tuple[str, list[list[dict]]] | None:
@@ -172,8 +185,10 @@ async def send_digest(teacher: User, include_empty: bool = False) -> bool:
 async def morning_tick() -> None:
     """Раз в минуту: кому из учителей пора получить утреннюю сводку."""
     async with session() as s:
+        # только классные руководители: родителей в базе в десятки раз больше, перебирать их каждую минуту незачем
+        teacher_ids = select(ClassChat.teacher_id).where(ClassChat.active.is_(True), ClassChat.teacher_id.is_not(None))
         teachers = (await s.scalars(
-            select(User).where(User.quiet_enabled.is_(True))
+            select(User).where(User.quiet_enabled.is_(True), User.user_id.in_(teacher_ids))
         )).all()
     for t in teachers:
         now = local_now(t.tz)
