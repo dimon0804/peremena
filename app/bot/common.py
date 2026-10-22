@@ -84,10 +84,14 @@ async def send(user_id: int, text: str, buttons: list[list[dict]] | None = None)
 
 
 async def ack(callback_id: str, notification: str | None = None, message: dict[str, Any] | None = None) -> None:
+    # MAX отклоняет пустой ответ на нажатие (400 «message or notification required»),
+    # и у пользователя кнопка остаётся «нажатой» — поэтому короткое уведомление есть всегда
+    if not notification and message is None:
+        notification = "✓"
     try:
         await ctx().api.answer_callback(callback_id, notification=notification, message=message)
     except MaxApiError as e:
-        log.debug("answers: %s", e)
+        log.warning("Ответ на нажатие кнопки не принят: %s", e)
 
 
 def teacher_menu() -> list[list[dict]]:
