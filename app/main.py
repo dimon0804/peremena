@@ -51,7 +51,7 @@ async def startup() -> tuple[Ctx, list]:
     sched.start()
     background.append(sched)
     if settings.mode == "webhook":
-        await ensure_webhook(c)
+        await ensure_webhook(c, force=True)
     else:
         background.append(asyncio.create_task(polling_loop(c)))
     c.started = True

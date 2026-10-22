@@ -54,15 +54,18 @@ async def polling_loop(c: Ctx) -> None:
             await c.kv.set("updates_marker", marker, ttl=7 * 24 * 3600)
 
 
-async def ensure_webhook(c: Ctx) -> None:
-    """Подписка слетает, если сервер долго не отвечает 200, — проверяем и переподписываемся."""
+async def ensure_webhook(c: Ctx, force: bool = False) -> None:
+    """Подписка слетает, если сервер долго не отвечает 200, — проверяем и переподписываемся.
+    При старте (force) подписываемся всегда: MAX не возвращает секрет в GET /subscriptions,
+    и после смены WEBHOOK_SECRET старая подписка слала бы запросы со старым секретом (403)."""
     url = c.settings.webhook_url
     if not url:
         return
     try:
-        subs = await c.api.get_subscriptions()
-        if any(s.get("url") == url for s in subs):
-            return
+        if not force:
+            subs = await c.api.get_subscriptions()
+            if any(s.get("url") == url for s in subs):
+                return
         await c.api.subscribe(url, c.settings.effective_webhook_secret)
         log.info("Вебхук подписан: %s", url)
     except MaxApiError as e:

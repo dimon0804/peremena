@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import hashlib
+import logging
+import re
 from functools import lru_cache
 from pathlib import Path
 
@@ -35,6 +37,9 @@ class Settings(BaseSettings):
     # --- Мини-приложение ---
     # Публичный https-адрес сервиса (тот же домен, что у вебхука). Нужен для ссылок на выгрузку.
     public_url: str = ""
+    # Показывать кнопки «Открыть приложение». Пустое значение — включено, если задан PUBLIC_URL или WEBHOOK_URL
+    # (без HTTPS-домена мини-приложение на платформе MAX не подключить, а кнопка на него ломает сообщение).
+    miniapp_enabled: bool | None = None
     # Разрешить вход в мини-приложение из обычного браузера по ?dev_user=<id> (только для разработки!)
     dev_auth: bool = False
     init_data_ttl_hours: int = 24
@@ -53,14 +58,23 @@ class Settings(BaseSettings):
         return "webhook" if self.webhook_url else "polling"
 
     @property
+    def miniapp(self) -> bool:
+        if self.miniapp_enabled is not None:
+            return self.miniapp_enabled
+        return bool(self.public_url or self.webhook_url)
+
+    @property
     def signing_key(self) -> bytes:
         raw = self.secret_key or ("peremena:" + self.max_bot_token)
         return hashlib.sha256(raw.encode()).digest()
 
     @property
     def effective_webhook_secret(self) -> str:
-        if self.webhook_secret:
+        if self.webhook_secret and re.fullmatch(r"[\w-]{5,256}", self.webhook_secret, re.ASCII):
             return self.webhook_secret
+        if self.webhook_secret:
+            logging.getLogger(__name__).error(
+                "WEBHOOK_SECRET должен быть 5–256 символов A-Z a-z 0-9 _ - — использую секрет, выведенный из токена")
         # Детерминированный секрет из токена: 5–256 символов [A-Za-z0-9_-]
         return hashlib.sha256(("wh:" + self.max_bot_token).encode()).hexdigest()[:40]
 
