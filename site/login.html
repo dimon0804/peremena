@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Вход — Перемена</title>
+  <meta name="robots" content="noindex">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/site.css">
+</head>
+<body data-page="login">
+<header class="top">
+  <div class="wrap">
+    <a class="logo" href="/">ПЕРЕМЕНА</a>
+    <div class="top-actions"><a class="btn sm outline" href="/">На главную</a></div>
+  </div>
+</header>
+<main class="login">
+  <div class="login-card">
+    <h1>Вход в кабинет</h1>
+    <p class="muted">Без паролей — вход подтверждается в боте «Перемена» в MAX.</p>
+    <div class="qr" id="qr" aria-label="QR-код для входа"></div>
+    <a class="btn" id="login-link" href="#" target="_blank" rel="noopener" hidden>Открыть бота и подтвердить</a>
+    <ol class="login-steps">
+      <li>Отсканируйте QR-код телефоном или нажмите кнопку.</li>
+      <li>В боте нажмите «✅ Войти».</li>
+      <li>Кабинет откроется на этой странице сам.</li>
+    </ol>
+    <div class="status" id="status" role="status" aria-live="polite"></div>
+    <button class="btn outline" id="again" hidden>Получить новую ссылку</button>
+  </div>
+</main>
+<script src="/site.js"></script>
+</body>
+</html>

@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Перемена — бот-помощник классного руководителя в MAX</title>
+  <meta name="description" content="Сборы согласий без ручного подсчёта, ответы родителям из справочника, домашка, материалы класса и тихий режим. Бот в MAX и веб-кабинет.">
+  <meta property="og:title" content="Перемена — пусть у учителя тоже будет перемена">
+  <meta property="og:description" content="Бот-помощник классного руководителя в MAX: сборы, ответы родителям и материалы — без ручной рутины.">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/site.css">
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <a class="logo" href="/">ПЕРЕМЕНА</a>
+    <nav class="nav">
+      <a href="#features">Возможности</a>
+      <a href="#numbers">Польза</a>
+      <a href="#start">Как подключить</a>
+      <a href="#school">Для школы</a>
+      <a href="#team">Команда</a>
+    </nav>
+    <div class="top-actions">
+      <a class="btn sm outline" href="/login" data-cabinet>Войти</a>
+      <a class="btn sm" href="https://max.ru/ideya_fiks_35_bot" data-bot-link>Открыть бота</a>
+    </div>
+  </div>
+</header>
+
+<main>
+  <!-- первый экран -->
+  <section class="hero">
+    <div class="pixels" aria-hidden="true"></div>
+    <div class="wrap">
+      <div>
+        <div class="eyebrow">Бот в MAX · веб-кабинет</div>
+        <h1>Пусть у учителя тоже будет <em>перемена</em></h1>
+        <p class="lead">Помощник классного руководителя: собирает согласия без ручного подсчёта, отвечает родителям тем, что сохранил учитель, и держит материалы под рукой.</p>
+        <div class="cta">
+          <a class="btn" href="https://max.ru/ideya_fiks_35_bot" data-bot-link>Открыть бота в MAX</a>
+          <a class="btn outline" href="/login" data-cabinet>Войти в кабинет</a>
+        </div>
+        <p class="note">Бесплатно для школ · без паролей · работает в учебных чатах Сферума</p>
+      </div>
+
+      <div class="phones" aria-label="Как это выглядит">
+        <div>
+          <p class="phone-label">Личка родителя</p>
+          <div class="phone">
+            <div class="phone-bar"><span>ПЕРЕМЕНА</span><span>10:04</span></div>
+            <div class="bubble"><b>Экскурсия в музей, 28 сентября, 300 ₽.</b><br>Нужно согласие до пятницы.</div>
+            <div class="opt on">✓ Согласен</div>
+            <div class="opt">Не согласен</div>
+            <div class="opt">Нужно уточнить</div>
+          </div>
+        </div>
+        <div class="phone">
+          <div class="phone-bar"><span>ПЕРЕМЕНА</span><span>10:04</span></div>
+          <div style="margin-top:14px"><b>Согласие на экскурсию</b><div class="muted small">срок: пятница, 18:00</div></div>
+          <div class="big">25/27</div>
+          <div class="bar"><i></i></div>
+          <div class="ok small" style="margin-top:8px">✓ 25 родителей ответили</div>
+          <div class="small" style="margin-top:12px"><b>Не ответили:</b><br>Иванов А.<br>Сидорова М.</div>
+          <div class="mini-btns"><span>Напомнить</span><span>Список</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- живой счётчик -->
+  <div class="counter" id="live" hidden>
+    <div class="wrap">
+      <div><b data-stat="saved">0</b><span data-saved-label>часов рутины бот уже снял с учителей</span></div>
+      <div><b data-stat="classes">0</b><span>классов подключено</span></div>
+      <div><b data-stat="polls">0</b><span>сборов проведено без ручного подсчёта</span></div>
+      <div><b data-stat="answers">0</b><span>ответов родителей собрано</span></div>
+    </div>
+  </div>
+
+  <!-- проблема -->
+  <section class="dark" id="problem">
+    <div class="wrap grid2">
+      <div>
+        <div class="eyebrow">Проблема</div>
+        <h2>Бумажную отчётность у учителя сократили. Чаты — нет.</h2>
+        <p class="muted">Классный руководитель ведёт 2–3 рабочих чата, в которых ему пишут до 50 человек в любое время суток. Нагрузка не исчезла — она переехала в мессенджер.</p>
+        <div class="chat" style="margin-top:24px">
+          <div class="chat-head">Чат родителей 9Б <span>· 21:47</span></div>
+          <div class="msg"><b>Мама Иванова</b>А что задали по алгебре?</div>
+          <div class="msg"><b>Мама Петровой</b>Во сколько собрание?</div>
+          <div class="msg"><b>Папа Сидорова</b>Скиньте ещё раз ссылку</div>
+          <div class="msg"><b>Мама Козловой</b>А форма какая завтра?</div>
+          <div class="chat-foot">↑ всё это учитель уже отвечал</div>
+        </div>
+      </div>
+      <div class="pains">
+        <div class="pain"><div class="ico">📋</div><div><b>Ручной подсчёт</b><span class="muted">Блокнот и сверка со списком класса.</span></div></div>
+        <div class="pain"><div class="ico">🔁</div><div><b>Повторы</b><span class="muted">Один ответ — двадцать раз.</span></div></div>
+        <div class="pain"><div class="ico">📄</div><div><b>Потерянные файлы</b><span class="muted">«Документ (3).docx» не найти.</span></div></div>
+        <div class="pain"><div class="ico">🌙</div><div><b>Нет границы</b><span class="muted">Сообщения в 22:40 и в воскресенье.</span></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- возможности -->
+  <section id="features">
+    <div class="wrap">
+      <div class="eyebrow">Решение</div>
+      <h2>Мы не добавляем учителю ещё один интерфейс — мы убираем у него работу</h2>
+      <p class="muted">Всё работает внутри MAX, где учитель и родители уже общаются. Ядро без генеративного ИИ: кнопки, список участников и детерминированный поиск — бот ничего не сочиняет.</p>
+      <div class="features">
+        <div class="feature main">
+          <span class="tag">Ядро продукта</span>
+          <div class="ico">📋</div>
+          <h3>Перекличка — сборы без ручного счёта</h3>
+          <p class="muted">Согласия, справки, «ознакомлен», выбор варианта. Бот рассылает каждому в личку кнопки, сам напоминает молчащим за сутки и за 2 часа до срока и в любой момент показывает «Ответили 25 из 27. Не ответили: Иванов А., Сидорова М.» — готовым списком для отчёта.</p>
+        </div>
+        <div class="feature c-faq">
+          <div class="ico">📖</div>
+          <h3>Справочник класса</h3>
+          <p class="muted">Родитель спрашивает — бот отвечает тем, что сохранил учитель, с подписью и кнопкой «Это не то». Ответили в чате на вопрос — бот предложит сохранить ответ.</p>
+        </div>
+        <div class="feature">
+          <div class="ico">📚</div>
+          <h3>Доска класса</h3>
+          <p class="muted">«Что задали по алгебре на завтра?» — бот отвечает сам. Предметники публикуют домашку по ссылке-приглашению, без прав в чате.</p>
+        </div>
+        <div class="feature c-shelf">
+          <div class="ico">🗂</div>
+          <h3>Полка материалов</h3>
+          <p class="muted">Перешлите боту файл с подписью и #тегами. Поиск по подписи, а не по «Документ (3).docx»; переслать в любой класс — одной кнопкой.</p>
+        </div>
+        <div class="feature c-quiet">
+          <div class="ico">🌙</div>
+          <h3>Тихий режим и утро</h3>
+          <p class="muted">Вне рабочего времени бот отвечает тем, что знает, а новое приносит утром одной карточкой. Вечерние объявления публикует утром — родителям тоже не приходят уведомления ночью.</p>
+        </div>
+        <div class="feature">
+          <div class="ico">⏱</div>
+          <h3>Счётчик пользы</h3>
+          <p class="muted">Бот считает, сколько обращений закрыл сам, сколько сборов провёл и сколько минут это сэкономило, — и каждый понедельник присылает итоги недели.</p>
+        </div>
+        <div class="feature">
+          <div class="ico">💻</div>
+          <h3>Мини-приложение и веб-кабинет</h3>
+          <p class="muted">Всё то же на одном экране — в MAX или с компьютера. Вход на сайт подтверждается в боте, паролей нет.</p>
+        </div>
+        <div class="feature">
+          <div class="ico">📄</div>
+          <h3>Отчёт в один клик</h3>
+          <p class="muted">Итоги сбора выгружаются в таблицу для отчёта, закрытый сбор повторяется одной кнопкой — нужен только новый срок.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- цифры -->
+  <section id="numbers" style="background:var(--bg-2)">
+    <div class="wrap">
+      <div class="eyebrow">Опрос 25 педагогов</div>
+      <h2>Проблема подтверждена цифрами</h2>
+      <div class="stats4">
+        <div class="stat"><b>72%</b>несколько раз в неделю получают вопросы, на которые уже отвечали в этом же чате</div>
+        <div class="stat"><b>64%</b>получают рабочие сообщения после 21:00 или в выходные</div>
+        <div class="stat"><b>68%</b>хотя бы раз не смогли быстро найти собственный материал</div>
+        <div class="stat"><b>88%</b>пользовались бы ботом, который отвечает на типовые вопросы и собирает согласия</div>
+      </div>
+      <div class="benefit">
+        <div class="table-wrap">
+          <table>
+            <tr><td>Повторяющиеся вопросы</td><td class="muted">30/нед × 2 мин</td><td>60 мин</td></tr>
+            <tr><td>Сборы с ручной сверкой</td><td class="muted">2/нед × 25 мин</td><td>50 мин</td></tr>
+            <tr><td>Поиск материалов</td><td class="muted">10/нед × 4 мин</td><td>40 мин</td></tr>
+            <tr><td>Вечерние сообщения</td><td class="muted">15/нед × 3 мин</td><td>45 мин</td></tr>
+            <tr><td><b>Итого в неделю</b></td><td></td><td>3 ч 15 мин</td></tr>
+          </table>
+        </div>
+        <div class="days"><b>15</b><span>рабочих дней в год</span><p class="muted">возвращаем одному классному руководителю — и это можно посчитать: бот ведёт счётчик сам.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- как подключить -->
+  <section id="start">
+    <div class="wrap">
+      <div class="eyebrow">Три минуты на подключение</div>
+      <h2>Как начать</h2>
+      <div class="steps">
+        <div class="step"><h3>Откройте бота</h3><p class="muted">Найдите в MAX бота «Перемена» и нажмите «Начать».</p></div>
+        <div class="step"><h3>Добавьте в чат класса</h3><p class="muted">Добавьте бота в чат с родителями и назначьте администратором — так он увидит список класса.</p></div>
+        <div class="step"><h3>Запустите первый сбор</h3><p class="muted">Напишите боту /poll — шаблон, текст, срок. Дальше бот ведёт сбор сам.</p></div>
+      </div>
+      <p class="muted" style="margin-top:22px">Удобнее с компьютера? Всё то же самое — в <a href="/login" data-cabinet>веб-кабинете</a>: вход подтверждается в боте, паролей нет.</p>
+    </div>
+  </section>
+
+  <!-- для школы -->
+  <section id="school" style="background:var(--bg-2)">
+    <div class="wrap">
+      <div class="eyebrow">Один учитель подключает — пятьдесят пользуются</div>
+      <h2>Для всей школы</h2>
+      <div class="roles">
+        <div class="role"><b>👩‍🏫 Классный руководитель</b><span class="muted">Сборы, справочник, доска, полка, тихий режим.</span></div>
+        <div class="role"><b>📚 Учитель-предметник</b><span class="muted">Публикует домашку в класс по приглашению — без прав администратора в чате.</span></div>
+        <div class="role"><b>🏛 Завуч</b><span class="muted">Сводка по классам без обзвона и сбор на всю параллель одной кнопкой.</span></div>
+        <div class="role"><b>👪 Родитель и ученик</b><span class="muted">Ответ мгновенно и в любое время — не дожидаясь утра и не чувствуя себя навязчивым.</span></div>
+      </div>
+      <div class="features" style="margin-top:22px">
+        <div class="feature"><h3>Общая база ответов</h3><p class="muted">Звонки, форма, порядок подачи справок — новый классный руководитель подключается и сразу получает готовую базу.</p></div>
+        <div class="feature"><h3>Сбор на параллель</h3><p class="muted">Администрация запускает сбор сразу в нескольких классах: каждый ведёт свой классный руководитель, а завуч видит общий итог и где затык.</p></div>
+        <div class="feature"><h3>Данные и безопасность</h3><p class="muted">Хранится только то, что учитель сохранил, и факт ответа на сбор. Бот работает только там, куда его позвали, и никогда не выдаёт себя за учителя.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="cta-block">
+        <div>
+          <h2>Освободите учителя для того, что действительно важно</h2>
+          <p>Подключите «Перемену» к своему классу — это займёт три минуты.</p>
+          <div class="cta" style="display:flex;gap:12px;flex-wrap:wrap">
+            <a class="btn light" href="https://max.ru/ideya_fiks_35_bot" data-bot-link>Открыть бота в MAX</a>
+            <a class="btn outline" style="color:#fff;border-color:#fff" href="/login" data-cabinet>Войти в кабинет</a>
+          </div>
+        </div>
+        <div style="font-size:120px;line-height:1;text-align:center" aria-hidden="true">🔔</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- команда -->
+  <section id="team">
+    <div class="wrap">
+      <div class="eyebrow">Хакатон «Идея фикс» · «Арсенал мастера»</div>
+      <h2>Команда СИЭЛВИ-ДИДЖИТАЛ</h2>
+      <p class="muted">ГБПОУ РО «РКСИ», Ростов-на-Дону</p>
+      <div class="team">
+        <div class="member"><div class="ava">ДК</div><b>Дарья Карачевцева</b><span class="muted">Руководитель проекта</span><br><span class="chip">Капитан</span></div>
+        <div class="member"><div class="ava">ДД</div><b>Дмитрий Довиряк</b><span class="muted">Архитектура, бэкенд, интеграция с MAX Bot API</span></div>
+        <div class="member"><div class="ava">НЖ</div><b>Никита Жадан</b><span class="muted">База данных, поиск по материалам, «Перекличка»</span></div>
+        <div class="member"><div class="ava">АГ</div><b>Алёна Головина</b><span class="muted">Исследование аудитории, метрики пользы</span></div>
+        <div class="member"><div class="ava">АШ</div><b>Арина Шуклина</b><span class="muted">Интерфейс диалогов, макеты, презентация</span></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>«Перемена» · бот-помощник классного руководителя в MAX</span>
+    <span><a href="/login" data-cabinet>Веб-кабинет</a> · <a href="https://max.ru/ideya_fiks_35_bot" data-bot-link>Бот в MAX</a></span>
+  </div>
+</footer>
+<script src="/site.js"></script>
+</body>
+</html>

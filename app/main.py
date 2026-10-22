@@ -7,7 +7,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__, db
@@ -19,6 +19,7 @@ from .max_api import MaxApiError, MaxClient
 from .state import make_kv
 from .updates import ensure_webhook, make_scheduler, polling_loop, spawn
 from .webapp.api import router as api_router
+from .webapp.site_api import router as site_api_router
 
 log = logging.getLogger("peremena")
 
@@ -81,6 +82,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Перемена", version=__version__, lifespan=lifespan, docs_url="/api/docs", redoc_url=None)
 app.include_router(api_router)
+app.include_router(site_api_router)
 
 
 @app.post("/webhook")
@@ -112,9 +114,20 @@ async def health():
     }
 
 
-@app.get("/")
-async def root():
+SITE_DIR = BASE_DIR / "site"
+
+
+@app.get("/login", include_in_schema=False)
+async def login_page():
+    return FileResponse(SITE_DIR / "login.html")
+
+
+@app.get("/cabinet", include_in_schema=False)
+async def cabinet():
     return RedirectResponse("/app/")
 
 
+# Мини-приложение MAX и веб-кабинет сайта — один и тот же интерфейс
 app.mount("/app", StaticFiles(directory=BASE_DIR / "webapp", html=True), name="webapp")
+# Сайт: главная страница, стили, картинки
+app.mount("/", StaticFiles(directory=SITE_DIR, html=True), name="site")

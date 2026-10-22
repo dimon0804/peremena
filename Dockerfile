@@ -17,6 +17,7 @@ RUN pip install -r requirements.txt
 COPY certs ./certs
 COPY app ./app
 COPY webapp ./webapp
+COPY site ./site
 
 RUN useradd --system --uid 10001 --home /srv peremena \
     && mkdir -p /srv/data \
