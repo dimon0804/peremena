@@ -208,12 +208,38 @@ async def after_answer(poll: Poll, uid: int, opt: int, status: str) -> None:
                 f"напишите ему(ей) напрямую.")
         await notify_teacher(poll.teacher_id, text, kind="clarify", chat_id=poll.chat_id,
                              from_user_id=uid, from_name=name, raw_text=f"«{poll.title}»: {option}")
+    if status != "ok" or poll.closed:
+        return
+    chat = await chats.get_chat(poll.chat_id)
+    if not chat or not chat.bot_is_admin:
+        return  # без списка класса «все» — это только те, кто ответил; такое уведомление обманывает
+    await backfill_targets(poll.chat_id)
+    poll = await get_poll(poll.id)
     answered, total, _ = counts(poll)
-    if total and answered == total and not poll.closed and status in ("ok",):
+    if total and answered == total:
         text, buttons = await status_card(poll)
         await notify_teacher(poll.teacher_id, "🎉 Ответили все!\n\n" + text, kind="report",
                              chat_id=poll.chat_id, raw_text=f"«{poll.title}»: ответили все {total}",
                              buttons=buttons)
+
+
+async def backfill_targets(chat_id: int) -> int:
+    """Добавляет в открытые сборы чата тех, кто есть в списке класса, но не попал в рассылку
+    (пришёл в чат позже или список был недоступен, пока бот не стал администратором)."""
+    async with session() as s:
+        open_polls = (await s.scalars(select(Poll).where(Poll.chat_id == chat_id, Poll.closed.is_(False)))).all()
+    if not open_polls:
+        return 0
+    added = 0
+    for p in open_polls:
+        members = await chats.class_list(chat_id, exclude={p.teacher_id})
+        known = {t.user_id for t in p.targets}
+        async with session() as s:
+            for m in members:
+                if m.user_id not in known:
+                    s.add(PollTarget(poll_id=p.id, user_id=m.user_id, name=m.name))
+                    added += 1
+    return added
 
 
 def counts(poll: Poll) -> tuple[int, int, list[int]]:
@@ -238,6 +264,8 @@ async def status_card(poll: Poll) -> tuple[str, list[list[dict]]]:
     teacher = await _teacher(poll)
     tz = teacher.tz if teacher else c.settings.default_tz
     chat = await chats.get_chat(poll.chat_id)
+    if chat and chat.bot_is_admin and not poll.closed and await backfill_targets(poll.chat_id):
+        poll = await get_poll(poll.id)
     answered, total, per = counts(poll)
     missing = [t.name for t in poll.targets if t.answer is None]
     state = "закрыт" if poll.closed else f"срок: {fmt_dt(poll.deadline, tz)}"

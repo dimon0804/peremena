@@ -7,7 +7,7 @@ import secrets
 
 from .. import keyboards as kb
 from ..core import ctx
-from ..services import board, chats, faq, quiet, search, shelf, stats
+from ..services import board, chats, faq, polls, quiet, search, shelf, stats
 
 log = logging.getLogger(__name__)
 
@@ -68,6 +68,7 @@ async def on_admin_changed(update: dict) -> None:
     is_admin = await chats.refresh_admin_status(chat_id)
     if is_admin:
         await chats.sync_members(chat_id)
+        await polls.backfill_targets(chat_id)
         chat = await chats.get_chat(chat_id)
         if chat and chat.teacher_id:
             await ctx().safe_send(
@@ -79,6 +80,8 @@ async def on_admin_changed(update: dict) -> None:
 async def on_user_added(update: dict) -> None:
     if update.get("chat_id") and update.get("user"):
         await chats.touch_member(update["chat_id"], update["user"], present=True)
+        # новичок попадает в открытые сборы — иначе «25/27» не видит его, а «Ответили все» срабатывает раньше времени
+        await polls.backfill_targets(update["chat_id"])
 
 
 async def on_user_removed(update: dict) -> None:
