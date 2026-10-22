@@ -194,3 +194,25 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
 .back { background: none; border: 0; color: var(--accent); font-weight: 700; padding: 6px 0; cursor: pointer; margin-bottom: 6px; }
 .names { line-height: 1.7; }
 .err { color: var(--danger); }
+
+/* ---------------------------------------------------------------- веб-кабинет (браузер) */
+.web-links { display: flex; gap: 14px; align-items: center; font-size: 14px; }
+.web-links a, .web-links button { color: var(--accent); font-weight: 700; text-decoration: none; background: none;
+  border: 0; cursor: pointer; padding: 0; font-size: 14px; }
+body.web .topbar { align-items: center; }
+
+/* на широком экране вкладки становятся боковым меню, контент — шире */
+@media (min-width: 960px) {
+  body.web { padding-bottom: 0; padding-left: 232px; }
+  body.web .tabbar {
+    top: 0; bottom: 0; right: auto; width: 232px; grid-auto-flow: row; grid-auto-rows: min-content;
+    align-content: start; gap: 4px; padding: 84px 14px 20px; border-top: 0; border-right: 1px solid var(--line);
+  }
+  body.web .tabbar button { flex-direction: row; justify-content: flex-start; gap: 12px; padding: 12px 14px; font-size: 15px; }
+  body.web .tabbar button .ico { font-size: 20px; width: 26px; text-align: center; }
+  body.web .topbar { position: fixed; left: 0; right: 0; z-index: 7; padding-left: 24px; padding-right: 24px; }
+  body.web .view { max-width: 1040px; padding: 92px 32px 40px; }
+  body.web .fab { bottom: 28px; right: 32px; }
+  body.web .toast { bottom: 28px; }
+  body.web #view > .card, body.web .grid2 { max-width: 860px; }
+}

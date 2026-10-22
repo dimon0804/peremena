@@ -40,7 +40,8 @@
   }
 
   async function api(path, { method = "GET", body, form } = {}) {
-    const headers = {};
+    // X-Peremena — защита веб-кабинета от CSRF: чужой сайт не может добавить заголовок к запросу
+    const headers = { "X-Peremena": "1" };
     if (WA?.initData) headers["X-Max-Init-Data"] = WA.initData;
     let url = path;
     if (!WA?.initData && DEV_USER) url += (url.includes("?") ? "&" : "?") + "dev_user=" + encodeURIComponent(DEV_USER);
@@ -58,7 +59,9 @@
     try { data = await res.json(); } catch (_) { /* пустой ответ */ }
     if (!res.ok) {
       const msg = (data && (data.detail?.[0]?.msg || data.detail)) || `Ошибка ${res.status}`;
-      throw new Error(typeof msg === "string" ? msg : "Ошибка запроса");
+      const err = new Error(typeof msg === "string" ? msg : "Ошибка запроса");
+      err.status = res.status;
+      throw err;
     }
     return data;
   }
@@ -849,13 +852,25 @@
         Запустите сервис (<code>python -m app run</code> или <code>docker compose up</code>) и откройте<br><code>http://localhost:8080/app/</code></div>`);
       return;
     }
-    if (!WA?.initData && !DEV_USER) {
-      render('<div class="empty"><b>Откройте «Перемену» в MAX</b>Мини-приложение работает внутри мессенджера: кнопка «Открыть» в чате с ботом.</div>');
-      return;
-    }
+    // Внутри MAX вход по подписи мини-приложения; в браузере — веб-кабинет с сессией сайта
+    S.web = !WA?.initData;
     try {
       S.me = await api("/api/me");
-    } catch (e) { fail(e); return; }
+    } catch (e) {
+      if (S.web && e.status === 401) { location.href = "/login"; return; }
+      fail(e);
+      return;
+    }
+    if (S.web) {
+      document.body.classList.add("web");
+      const who = document.getElementById("who");
+      who.insertAdjacentHTML("afterend",
+        '<div class="web-links"><a href="/">Сайт</a><button type="button" id="logout">Выйти</button></div>');
+      document.getElementById("logout").addEventListener("click", async () => {
+        try { await fetch("/api/auth/logout", { method: "POST", headers: { "X-Peremena": "1" } }); } catch (_) { /* всё равно уходим */ }
+        location.href = "/";
+      });
+    }
     const role = S.me.is_teacher ? "классный руководитель" : S.me.is_subject_teacher ? "предметник"
       : S.me.is_admin ? "администрация" : "";
     document.getElementById("who").textContent = S.me.user.name + (role ? " · " + role : "");
