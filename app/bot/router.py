@@ -54,6 +54,7 @@ async def handle_update(update: dict) -> None:
 
 async def _dispatch(update: dict) -> None:
     t = update.get("update_type")
+    log.debug("Событие MAX: %s", update)
     try:
         if t == "message_created":
             chat_type = ((update.get("message") or {}).get("recipient") or {}).get("chat_type")

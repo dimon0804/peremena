@@ -36,6 +36,7 @@ class FakeApi:
         self.edits: list[dict] = []
         self._mid = itertools.count(1)
         self.blocked: set[int] = set()
+        self.answer_errors = 0
 
     async def get_me(self):
         return {"user_id": BOT["user_id"], "username": "peremena_test_bot", "name": "Перемена"}
@@ -56,6 +57,11 @@ class FakeApi:
         return {"success": True}
 
     async def answer_callback(self, callback_id, notification=None, message=None):
+        from app.max_api import MaxApiError
+
+        if not notification and message is None:  # так отвечает настоящий MAX (проверено вживую)
+            self.answer_errors += 1
+            raise MaxApiError(400, "proto.payload", "Invalid request. `message` or `notification` required")
         self.answers.append({"callback_id": callback_id, "notification": notification, "message": message})
         return {"success": True}
 

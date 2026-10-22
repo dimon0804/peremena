@@ -120,3 +120,33 @@ def test_open_app_buttons_dropped_without_miniapp(env):
     assert kb.kb_list([[kb.app("Открыть", "bot")], [kb.cb("Ок", "x")]]) == \
         [{"type": "inline_keyboard", "payload": {"buttons": [[kb.cb("Ок", "x")]]}}]
     assert kb.kb_list([[kb.app("Открыть", "bot")]]) == []
+
+
+# ---------------------------------------------------------------- найдено на живом тесте 22.10
+def test_every_button_press_gets_valid_answer(env):
+    loop, api, c = env
+    added(loop)
+    for i, payload in enumerate(["m:board", "m:shelf", "m:stats", "m:quiet", "st:list", "m:ask"]):
+        run(loop, handle_update(cb_update(TEACHER, payload, f"btn{i}")))
+    assert api.answer_errors == 0
+
+
+def test_late_joiner_is_added_and_all_answered_not_premature(env):
+    loop, api, c = env
+    added(loop)
+
+    async def working_hours():
+        async with session() as s:
+            (await s.get(User, TEACHER["user_id"])).quiet_enabled = False
+    run(loop, working_hours())
+    pid = make_poll(loop)  # в чате трое родителей
+    newbie = {"user_id": 250, "first_name": "Пётр", "last_name": "Новый", "is_bot": False}
+    run(loop, handle_update({"update_type": "user_added", "timestamp": 9, "chat_id": CHAT_ID, "user": newbie,
+                             "is_channel": False}))
+    poll = run(loop, polls.get_poll(pid))
+    assert any(t.user_id == 250 for t in poll.targets) and len(poll.targets) == 4
+    for i, p in enumerate(PARENTS):
+        run(loop, handle_update(cb_update(p, f"pa:{pid}:0", f"a{i}")))
+    assert not any("Ответили все" in t for t in api.texts_to(user_id=TEACHER["user_id"]))
+    run(loop, handle_update(cb_update(newbie, f"pa:{pid}:0", "a9")))
+    assert any("Ответили все" in t for t in api.texts_to(user_id=TEACHER["user_id"]))
