@@ -206,6 +206,7 @@ python -m app run
 | `DATABASE_URL` | SQLite в `/srv/data` | `postgresql+asyncpg://…` для PostgreSQL |
 | `REDIS_URL` | пусто | `redis://…`; пусто — состояние в памяти процесса |
 | `DEFAULT_TZ` | `Europe/Moscow` | часовой пояс новых учителей |
+| `MINIAPP_ENABLED` | авто | кнопки «Открыть приложение»; авто — включены при `WEBHOOK_URL`/`PUBLIC_URL` |
 | `DEV_AUTH` | `false` | вход в мини-приложение из браузера по `?dev_user=` |
 | `LOG_LEVEL` | `INFO` | уровень логов |
 | `PORT` | `8080` | порт HTTP |
