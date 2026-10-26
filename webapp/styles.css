@@ -231,6 +231,10 @@ body.web .topbar { align-items: center; }
 .demo-bar button { font: inherit; padding: 6px 12px; border-radius: 8px; border: 1px solid #c9a227; background: #fff;
   color: inherit; cursor: pointer; }
 .demo-bar a { color: inherit; }
+@media (min-width: 960px) {  /* шапка на широком экране закреплена — баннер встаёт сразу под ней */
+  body.web .demo-bar { position: fixed; top: 47px; left: 232px; right: 0; z-index: 6; padding: 10px 32px; }
+  body.web.demo .view { padding-top: 150px; }
+}
 @media (prefers-color-scheme: dark) {
   .demo-bar { background: #3a3110; color: #f5e3a6; border-color: #5c4d17; }
   .demo-bar button { background: transparent; border-color: #8a7425; }

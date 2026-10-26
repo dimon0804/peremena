@@ -938,7 +938,8 @@
   // ------------------------------------------------------------------ демо-режим
   function demoBanner() {
     const parent = !S.me.is_teacher;
-    document.body.insertAdjacentHTML("afterbegin", `<div class="demo-bar" role="note">
+    document.body.classList.add("demo");
+    document.querySelector(".topbar").insertAdjacentHTML("afterend", `<div class="demo-bar" role="note">
       <span><b>Демо-класс.</b> Данные вымышленные, сообщения никому не уходят. Песочница удалится через сутки.</span>
       <span class="demo-actions">
         <button type="button" data-role="${parent ? "teacher" : "parent"}">${parent ? "👩‍🏫 Глазами учителя" : "👪 Глазами родителя"}</button>

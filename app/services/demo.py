@@ -19,7 +19,7 @@ from ..models import (
     Absence, Announcement, Campaign, ClassChat, DemoSandbox, FaqEntry, InboxItem, Material, Member, Metric,
     OpenQuestion, Poll, PollTarget, School, SchoolMember, SubjectTeacher, User, WebSession,
 )
-from ..timeutil import local_now
+from ..timeutil import local_now, to_utc
 from . import search
 from .stats import MINUTES
 
@@ -44,6 +44,12 @@ OPEN_QUESTIONS = [
     "Подскажите, когда в пятницу заканчиваются уроки", "Во сколько забирать детей в пятницу после уроков?",
     "Нужна ли сменная обувь на экскурсию?", "сменку на экскурсию брать?", "Сменная обувь на экскурсию нужна?",
 ]
+
+
+def _evening(days: int, hour: int = 18):
+    """Срок «через N дней в 18:00» по Москве — как поставил бы учитель, а не «в 00:19»."""
+    day = local_now(TZ).replace(hour=hour, minute=0, second=0, microsecond=0) + timedelta(days=days)
+    return to_utc(day)
 
 
 def _name(first: str, last: str) -> str:
@@ -90,11 +96,11 @@ async def create_sandbox() -> DemoSandbox:
                          title="Экскурсия в Музей космонавтики, 7 ноября",
                          text="Экскурсия в Музей космонавтики, 7 ноября\nВыезд в 9:00 от школы, возвращение к 15:00.",
                          options=["Согласен", "Не согласен", "Нужно уточнить"], clarify_option=2,
-                         deadline=now + timedelta(days=3), created_at=now - timedelta(days=1))
+                         deadline=_evening(3), created_at=now - timedelta(days=1))
         gift = Poll(teacher_id=teacher, chat_id=chat, template="money", title="Подарок ко Дню учителя",
                     text="Подарок ко Дню учителя\nСобираем на общий подарок от класса.", amount=200,
                     options=["Перевёл(а)", "Сдам наличными", "Не участвуем", "Нужно уточнить"], clarify_option=3,
-                    deadline=now + timedelta(days=2), created_at=now - timedelta(days=2))
+                    deadline=_evening(2), created_at=now - timedelta(days=2))
         rules = Poll(teacher_id=teacher, chat_id=chat, template="ack", title="Правила поведения на каникулах",
                      text="Правила поведения на каникулах", options=["Ознакомлен(а)", "Есть вопрос"],
                      clarify_option=1, closed=True, closed_at=now - timedelta(days=4),
@@ -105,7 +111,7 @@ async def create_sandbox() -> DemoSandbox:
         food = [Poll(teacher_id=t, chat_id=c, template="consent", title="Анкета по школьному питанию",
                      text="Анкета по школьному питанию\nСогласны ли вы на горячее питание со следующей четверти?",
                      options=["Согласен", "Не согласен", "Нужно уточнить"], clarify_option=2,
-                     deadline=now + timedelta(days=5), created_at=now - timedelta(hours=20), campaign_id=campaign.id)
+                     deadline=_evening(5), created_at=now - timedelta(hours=20), campaign_id=campaign.id)
                 for t, c in ((teacher, chat), (teacher2, chat2))]
         s.add_all(food)
         await s.flush()
@@ -154,7 +160,7 @@ async def create_sandbox() -> DemoSandbox:
                          text="Unit 5, ex. 3, 4 (письменно)", publish_mode="silent", published=True,
                          for_date=(today + timedelta(days=1)).isoformat()),
             Announcement(chat_id=chat, author_id=teacher, kind="news", text="В субботу субботник, форма свободная.",
-                         publish_mode="later", publish_at=now + timedelta(hours=10)),
+                         publish_mode="later", publish_at=_evening(1, 8)),
         ])
         s.add(Material(teacher_id=teacher, chat_id=chat, title="Памятка по пожарной безопасности",
                        filename="Памятка_ПБ.pdf", tags="безопасность", attach_type="file",
@@ -168,7 +174,7 @@ async def create_sandbox() -> DemoSandbox:
                              created_at=now - timedelta(days=rnd.randint(0, 6))) for _ in range(n))
 
         row = await s.get(DemoSandbox, sid)
-        row.teacher_id, row.parent_id = teacher, parents[19]  # у этого «родителя» неотвеченные сборы
+        row.teacher_id, row.parent_id = teacher, parents[21]  # у этого «родителя» неотвеченные сборы
     async with session() as s:
         return await s.get(DemoSandbox, sid)
 
