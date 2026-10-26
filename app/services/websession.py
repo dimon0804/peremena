@@ -81,11 +81,16 @@ async def finish_login(code: str) -> tuple[str, str | None]:
     if data.get("status") != "confirmed":
         return data.get("status", "pending"), None
     await ctx().kv.delete(f"login:{code}")
+    return "ok", await issue(data["user_id"], data.get("ua", ""))
+
+
+async def issue(user_id: int, user_agent: str = "", days: int = SESSION_DAYS) -> str:
+    """Новая сессия сайта для пользователя. Возвращает токен для cookie (в базе — только хеш)."""
     token = secrets.token_urlsafe(32)
     async with session() as s:
-        s.add(WebSession(token_hash=_hash(token), user_id=data["user_id"], user_agent=data.get("ua", ""),
-                         expires_at=utcnow() + timedelta(days=SESSION_DAYS)))
-    return "ok", token
+        s.add(WebSession(token_hash=_hash(token), user_id=user_id, user_agent=user_agent[:300],
+                         expires_at=utcnow() + timedelta(days=days)))
+    return token
 
 
 async def user_by_token(token: str | None) -> User | None:

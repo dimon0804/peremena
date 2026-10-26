@@ -129,10 +129,30 @@
     // уже вошли — сразу в кабинет
     try {
       const me = await (await fetch("/api/auth/session", { credentials: "same-origin" })).json();
-      if (me.logged_in) { location.href = "/app/"; return; }
+      if (me.logged_in && !me.demo) { location.href = "/app/"; return; }
     } catch (_) { /* продолжаем вход */ }
     start();
   }
+
+  // ------------------------------------------------------------ демо без регистрации
+  async function startDemo(btn) {
+    const label = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "Готовлю демо-класс…";
+    try {
+      const r = await fetch("/api/demo/start", { method: "POST", headers: { "X-Peremena": "1" }, credentials: "same-origin" });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.detail || "Демо временно недоступно");
+      location.href = "/app/";
+    } catch (e) {
+      btn.textContent = e.message;
+      setTimeout(() => { btn.textContent = label; btn.disabled = false; }, 4000);
+    }
+  }
+  $$("[data-demo]").forEach((b) => b.addEventListener("click", () => startDemo(b)));
+  fetch("/api/auth/session", { credentials: "same-origin" }).then((r) => r.json())
+    .then((s) => { if (s.demo_enabled === false) $$("[data-demo]").forEach((b) => { b.hidden = true; b.closest(".demo-note")?.remove(); }); })
+    .catch(() => {});
 
   if (document.body.dataset.page === "login") login(); else home();
 })();

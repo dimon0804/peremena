@@ -9,7 +9,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from .bot.router import handle_update
 from .core import Ctx
 from .max_api import MaxApiError
-from .services import board, polls, quiet, websession
+from .services import board, demo, polls, quiet, websession
 
 log = logging.getLogger(__name__)
 
@@ -79,6 +79,7 @@ def make_scheduler(c: Ctx) -> AsyncIOScheduler:
     sched.add_job(quiet.morning_tick, "interval", seconds=60, id="morning", **opts)
     sched.add_job(board.tick, "interval", seconds=60, id="board", **opts)
     sched.add_job(websession.cleanup, "interval", hours=1, id="sessions", **opts)
+    sched.add_job(demo.cleanup, "interval", hours=1, id="demo", **opts)
     if hasattr(c.kv, "cleanup"):  # состояние в базе — устаревшие записи удаляем сами (Redis делает это сам)
         sched.add_job(c.kv.cleanup, "interval", hours=1, id="kv", **opts)
     if c.settings.mode == "webhook":

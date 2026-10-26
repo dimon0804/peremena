@@ -935,6 +935,26 @@
     } catch (e) { toast(e.message, true); el.disabled = false; }
   };
 
+  // ------------------------------------------------------------------ демо-режим
+  function demoBanner() {
+    const parent = !S.me.is_teacher;
+    document.body.insertAdjacentHTML("afterbegin", `<div class="demo-bar" role="note">
+      <span><b>Демо-класс.</b> Данные вымышленные, сообщения никому не уходят. Песочница удалится через сутки.</span>
+      <span class="demo-actions">
+        <button type="button" data-role="${parent ? "teacher" : "parent"}">${parent ? "👩‍🏫 Глазами учителя" : "👪 Глазами родителя"}</button>
+        <a href="/login">Войти по-настоящему</a>
+      </span></div>`);
+    document.querySelector(".demo-bar [data-role]").addEventListener("click", async (ev) => {
+      ev.currentTarget.disabled = true;
+      try {
+        const r = await fetch(`/api/demo/role?role=${ev.currentTarget.dataset.role}`,
+          { method: "POST", headers: { "X-Peremena": "1" }, credentials: "same-origin" });
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || "Не удалось переключиться");
+        location.href = "/app/";
+      } catch (e) { toast(e.message, true); ev.currentTarget.disabled = false; }
+    });
+  }
+
   // ------------------------------------------------------------------ старт
   async function boot() {
     if (location.protocol === "file:") {
@@ -968,6 +988,7 @@
         location.href = "/";
       });
     }
+    if (S.me.demo) demoBanner();
     const role = S.me.is_teacher ? "классный руководитель" : S.me.is_subject_teacher ? "предметник"
       : S.me.is_admin ? "администрация" : "";
     document.getElementById("who").textContent = S.me.user.name + (role ? " · " + role : "");

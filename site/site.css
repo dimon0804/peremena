@@ -57,6 +57,9 @@ section { padding-block: clamp(56px, 8vw, 96px); }
 .btn:active { transform: translateY(1px); }
 .btn.outline { background: transparent; color: var(--accent); }
 .btn.outline:hover { background: var(--accent-soft); }
+.btn.ghost { background: transparent; color: var(--accent); border-color: transparent; text-decoration: underline; text-underline-offset: 3px; }
+.btn.ghost:hover { background: var(--accent-soft); }
+.linkish { font: inherit; color: var(--accent); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; }
 .btn.light { background: #fff; color: var(--accent-strong); border-color: #fff; }
 .btn.sm { min-height: 40px; padding: 8px 16px; font-size: 15px; border-radius: 12px; }
 

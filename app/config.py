@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     # Разрешить вход в мини-приложение из обычного браузера по ?dev_user=<id> (только для разработки!)
     dev_auth: bool = False
     init_data_ttl_hours: int = 24
+    # Демо-режим «попробовать без регистрации»: песочница с вымышленным классом, ничего не уходит в MAX
+    demo_enabled: bool = True
+    demo_per_ip_hour: int = 10
 
     # --- Прочее ---
     default_tz: str = "Europe/Moscow"

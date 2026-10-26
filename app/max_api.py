@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
 import logging
 import os
 import ssl
@@ -18,6 +19,8 @@ from typing import Any
 
 import certifi
 import httpx
+
+from .demo_ids import is_demo, is_demo_mid
 
 log = logging.getLogger(__name__)
 
@@ -120,6 +123,7 @@ class MaxClient:
             verify=self._ssl,
         )
         self._limiter = _RateLimiter()
+        self._demo_seq = itertools.count(1)
 
     async def close(self) -> None:
         await self._http.aclose()
@@ -194,6 +198,9 @@ class MaxClient:
         notify: bool = True,
         disable_link_preview: bool = True,
     ) -> dict:
+        if is_demo(user_id) or is_demo(chat_id):
+            # демо-режим: вымышленным «родителям» и чатам ничего не отправляем, но делаем вид, что доставили
+            return {"body": {"mid": f"demo.{next(self._demo_seq)}"}}
         chunks = split_text(text) if text else [text]
         for head in chunks[:-1]:  # длинное сообщение — несколько частей, кнопки у последней
             await self.send_message(user_id=user_id, chat_id=chat_id, text=head, fmt=fmt, reply_to=reply_to,
@@ -227,15 +234,21 @@ class MaxClient:
 
     async def edit_message(self, message_id: str, *, text: str | None, attachments: list[dict] | None = None,
                            fmt: str | None = "html") -> dict:
+        if is_demo_mid(message_id):
+            return {"success": True}
         body: dict[str, Any] = {"text": text[:TEXT_LIMIT] if text else text, "attachments": attachments}
         if fmt:
             body["format"] = fmt
         return await self.request("PUT", "/messages", params={"message_id": message_id}, json=body)
 
     async def delete_message(self, message_id: str) -> dict:
+        if is_demo_mid(message_id):
+            return {"success": True}
         return await self.request("DELETE", "/messages", params={"message_id": message_id})
 
     async def get_messages(self, chat_id: int, *, count: int = 100, before: int | None = None) -> dict:
+        if is_demo(chat_id):
+            return {"messages": []}
         return await self.request("GET", "/messages", params={"chat_id": chat_id, "count": count, "before": before})
 
     async def answer_callback(self, callback_id: str, *, notification: str | None = None,
@@ -251,9 +264,13 @@ class MaxClient:
 
     # ------------------------------------------------------------------ chats
     async def get_chat(self, chat_id: int) -> dict:
+        if is_demo(chat_id):
+            return {"chat_id": chat_id, "type": "chat"}
         return await self.request("GET", f"/chats/{chat_id}")
 
     async def get_members(self, chat_id: int, limit: int = 2000) -> list[dict]:
+        if is_demo(chat_id):
+            raise MaxApiError(404, "demo", "демо-чат: список ведётся в базе")
         members: list[dict] = []
         marker = None
         while len(members) < limit:
@@ -265,6 +282,8 @@ class MaxClient:
         return members
 
     async def get_my_membership(self, chat_id: int) -> dict:
+        if is_demo(chat_id):
+            return {"is_admin": True, "is_owner": False}
         return await self.request("GET", f"/chats/{chat_id}/members/me")
 
     # ------------------------------------------------------------------ updates

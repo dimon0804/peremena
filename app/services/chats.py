@@ -7,6 +7,7 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
 from ..core import ctx
+from ..demo_ids import is_demo
 from ..db import session, utcnow
 from ..max_api import MaxApiError
 from ..models import ClassChat, Member, User, display_name
@@ -92,6 +93,8 @@ async def set_title(chat_id: int, title: str) -> None:
 
 async def sync_members(chat_id: int) -> int:
     """Тянет GET /chats/{chatId}/members и обновляет локальный список класса."""
+    if is_demo(chat_id):  # демо-класс живёт только в базе
+        return len(await class_list(chat_id))
     try:
         raw = await ctx().api.get_members(chat_id)
     except MaxApiError as e:

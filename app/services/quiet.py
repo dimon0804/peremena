@@ -16,6 +16,7 @@ from sqlalchemy import select
 from .. import keyboards as kb
 from ..core import ctx
 from ..db import session
+from ..demo_ids import DEMO_BASE, DEMO_SPAN
 from ..models import ClassChat, InboxItem, Poll, User
 from ..timeutil import fmt_dt, local_now, to_local, utcnow
 from . import stats
@@ -214,7 +215,8 @@ async def morning_tick() -> None:
         # только классные руководители: родителей в базе в десятки раз больше, перебирать их каждую минуту незачем
         teacher_ids = select(ClassChat.teacher_id).where(ClassChat.active.is_(True), ClassChat.teacher_id.is_not(None))
         teachers = (await s.scalars(
-            select(User).where(User.quiet_enabled.is_(True), User.user_id.in_(teacher_ids))
+            select(User).where(User.quiet_enabled.is_(True), User.user_id.in_(teacher_ids),
+                               ~User.user_id.between(DEMO_BASE, DEMO_BASE + DEMO_SPAN))  # демо-учителям сводка не нужна
         )).all()
     for t in teachers:
         now = local_now(t.tz)

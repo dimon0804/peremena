@@ -18,6 +18,7 @@ from ..max_api import MaxApiError
 from ..models import ClassChat, InboxItem, User
 from ..services import attendance, board, chats, faq, faq_learning, polls, quiet, school, shelf, stats, websession
 from ..timeutil import fmt_dt, local_now, parse_deadline, preset_deadline, to_local, to_utc, zone
+from ..demo_ids import is_demo
 from .auth import InitDataError, validate_init_data
 
 router = APIRouter(prefix="/api")
@@ -155,6 +156,7 @@ async def me(user: User = Depends(current_user)):
         "bot_username": c.bot_username,
         "bot_link": c.start_link() if c.bot_username else "",
         "settings": settings_out(user),
+        "demo": is_demo(user.user_id),
     }
 
 
@@ -482,6 +484,8 @@ async def upload_material(
     tags: str = Form(""),
     user: User = Depends(staff_user),
 ):
+    if is_demo(user.user_id):
+        raise HTTPException(403, "В демо-режиме файлы не загружаются — посмотрите полку на готовых примерах")
     content = await file.read()
     if not content:
         raise HTTPException(400, "Пустой файл")
