@@ -264,3 +264,14 @@ class WebSession(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime)
     user_agent: Mapped[str] = mapped_column(String(300), default="")
+
+
+# ---------------------------------------------------------------- Служебное
+class KVEntry(Base):
+    """Короткоживущее состояние (шаги диалогов, приглашения, коды входа), если Redis не подключён.
+    В памяти процесса оно терялось при каждом перезапуске — вместе с «ссылкой на 7 дней»."""
+    __tablename__ = "kv"
+
+    key: Mapped[str] = mapped_column(String(300), primary_key=True)
+    value: Mapped[str] = mapped_column(Text)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)

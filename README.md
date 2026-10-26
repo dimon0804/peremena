@@ -68,7 +68,7 @@ MAX (учебные чаты Сферума, личка учителя и род
 └──────────┬───────────────────┬──────────┘
            ▼                   ▼
  PostgreSQL «Память класса»   Redis: шаги диалогов, дедупликация событий
- (SQLite для запуска одним контейнером)   (память процесса, если Redis нет)
+ (SQLite для запуска одним контейнером)   (без Redis — таблица в базе)
 ```
 
 Методы MAX Bot API, на которые опирается проект (`https://platform-api2.max.ru`):
@@ -217,7 +217,7 @@ python -m app run
 | `WEBHOOK_SECRET` | из токена | секрет заголовка `X-Max-Bot-Api-Secret` |
 | `UPDATES_MODE` | `auto` | `auto` / `webhook` / `polling` |
 | `DATABASE_URL` | SQLite в `/srv/data` | `postgresql+asyncpg://…` для PostgreSQL |
-| `REDIS_URL` | пусто | `redis://…`; пусто — состояние в памяти процесса |
+| `REDIS_URL` | пусто | `redis://…`; пусто — состояние в базе данных (переживает перезапуск) |
 | `DEFAULT_TZ` | `Europe/Moscow` | часовой пояс новых учителей |
 | `MINIAPP_ENABLED` | авто | кнопки «Открыть приложение»; авто — включены при `WEBHOOK_URL`/`PUBLIC_URL` |
 | `DEV_AUTH` | `false` | вход в мини-приложение из браузера по `?dev_user=` |

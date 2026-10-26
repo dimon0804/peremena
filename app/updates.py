@@ -79,6 +79,8 @@ def make_scheduler(c: Ctx) -> AsyncIOScheduler:
     sched.add_job(quiet.morning_tick, "interval", seconds=60, id="morning", **opts)
     sched.add_job(board.tick, "interval", seconds=60, id="board", **opts)
     sched.add_job(websession.cleanup, "interval", hours=1, id="sessions", **opts)
+    if hasattr(c.kv, "cleanup"):  # состояние в базе — устаревшие записи удаляем сами (Redis делает это сам)
+        sched.add_job(c.kv.cleanup, "interval", hours=1, id="kv", **opts)
     if c.settings.mode == "webhook":
         sched.add_job(ensure_webhook, "interval", minutes=30, args=[c], id="webhook", **opts)
     return sched

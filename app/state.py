@@ -1,6 +1,7 @@
 """Короткоживущее состояние: шаги диалогов, дедупликация событий, черновики.
 
-Redis, если задан REDIS_URL; иначе — словарь в памяти процесса (для одного контейнера этого хватает).
+Redis, если задан REDIS_URL; иначе — таблица в базе данных, чтобы состояние переживало перезапуск.
+MemoryKV остаётся для тестов.
 """
 from __future__ import annotations
 
@@ -84,11 +85,81 @@ class RedisKV(KV):
         await self._r.aclose()
 
 
+class DbKV(KV):
+    """Состояние в той же базе, что и «Память класса», — переживает перезапуск без Redis."""
+
+    async def get(self, key: str) -> Any:
+        from .db import session, utcnow
+        from .models import KVEntry
+
+        async with session() as s:
+            row = await s.get(KVEntry, key)
+            if row is None or row.expires_at <= utcnow():
+                return None
+            return json.loads(row.value)
+
+    async def set(self, key: str, value: Any, ttl: int = 3600) -> None:
+        from datetime import timedelta
+
+        from .db import session, utcnow
+        from .models import KVEntry
+
+        raw = json.dumps(value, ensure_ascii=False)
+        expires = utcnow() + timedelta(seconds=ttl)
+        async with session() as s:
+            row = await s.get(KVEntry, key)
+            if row is None:
+                s.add(KVEntry(key=key, value=raw, expires_at=expires))
+            else:
+                row.value, row.expires_at = raw, expires
+
+    async def delete(self, key: str) -> None:
+        from sqlalchemy import delete as sa_delete
+
+        from .db import session
+        from .models import KVEntry
+
+        async with session() as s:
+            await s.execute(sa_delete(KVEntry).where(KVEntry.key == key))
+
+    async def add_once(self, key: str, ttl: int = 3600) -> bool:
+        from datetime import timedelta
+
+        from sqlalchemy.exc import IntegrityError
+
+        from .db import session, utcnow
+        from .models import KVEntry
+
+        try:
+            async with session() as s:
+                row = await s.get(KVEntry, key)
+                if row is not None and row.expires_at > utcnow():
+                    return False
+                if row is not None:
+                    await s.delete(row)
+                    await s.flush()
+                s.add(KVEntry(key=key, value="1", expires_at=utcnow() + timedelta(seconds=ttl)))
+            return True
+        except IntegrityError:  # параллельная вставка того же ключа
+            return False
+
+    async def cleanup(self) -> None:
+        from sqlalchemy import delete as sa_delete
+
+        from .db import session, utcnow
+        from .models import KVEntry
+
+        async with session() as s:
+            await s.execute(sa_delete(KVEntry).where(KVEntry.expires_at <= utcnow()))
+
+
 async def make_kv(url: str) -> KV:
+    """Redis, если задан и доступен; иначе база данных (init_db должен быть вызван раньше)."""
     if url:
         kv = RedisKV(url)
         if await kv.ping():
             log.info("Состояние хранится в Redis")
             return kv
-        log.warning("Redis %s недоступен — состояние будет в памяти процесса", url)
-    return MemoryKV()
+        log.warning("Redis %s недоступен — состояние будет в базе данных", url)
+    log.info("Состояние хранится в базе данных")
+    return DbKV()
