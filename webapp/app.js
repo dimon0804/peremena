@@ -26,7 +26,11 @@
   const toMins = (s) => { const [h, m] = (s || "0:0").split(":").map(Number); return h * 60 + (m || 0); };
   const fmtMinutes = (t) => { t = Math.round(t); const h = Math.floor(t / 60), m = t % 60; return h ? (m ? `${h} ч ${m} мин` : `${h} ч`) : `${m} мин`; };
 
+  // Внутри MAX есть «мост» (BackButton, вибрация); в браузере его вызовы сыплют ошибками в консоль
+  const IN_MAX = !!WA?.initData;
+
   function haptic(kind) {
+    if (!IN_MAX) return;
     try { WA?.HapticFeedback?.notificationOccurred(kind); } catch (_) { /* не на всех платформах */ }
   }
 
@@ -66,7 +70,12 @@
     return data;
   }
 
-  function render(html) { $view.innerHTML = html; window.scrollTo(0, 0); }
+  function render(html) {
+    // в браузере нет системной кнопки «Назад» мессенджера — рисуем свою
+    const back = !IN_MAX && S.stack.length ? '<button class="back" data-act="goBack">← Назад</button>' : "";
+    $view.innerHTML = back + html;
+    window.scrollTo(0, 0);
+  }
   function loading() { $view.innerHTML = '<div class="loading">Загружаю…</div>'; }
   function fail(e) { render(`<div class="empty"><b>Не получилось</b>${esc(e.message || e)}</div>`); }
 
@@ -117,11 +126,14 @@
     VIEWS[prev.name](prev.args);
   }
   function syncBack() {
+    if (!IN_MAX) return;
     try {
       if (S.stack.length) WA?.BackButton?.show(); else WA?.BackButton?.hide();
-    } catch (_) { /* в браузере нет */ }
+    } catch (_) { /* старые версии MAX */ }
   }
-  try { WA?.BackButton?.onClick(back); } catch (_) { /* в браузере нет */ }
+  if (IN_MAX) {
+    try { WA?.BackButton?.onClick(back); } catch (_) { /* старые версии MAX */ }
+  }
 
   // делегирование кликов по data-act
   const ACTIONS = {};
@@ -192,7 +204,10 @@
             <div class="ok small">✓ ${p.answered} ${plural(p.answered, "человек ответил", "человека ответили", "человек ответили")}</div>
             ${p.missing.length ? `<h2>Не ответили</h2><div class="names">${p.missing.map(esc).join("<br>")}</div>`
               : p.total ? '<h2 class="ok">Ответили все 🎉</h2>' : '<p class="muted small">Список класса пуст — назначьте бота администратором чата.</p>'}
-            ${p.closed ? "" : `<div class="btns">
+            ${p.closed
+              // у закрытого сбора «Напомнить» не нужно, а список — нужен: кто что ответил, для отчёта
+              ? '<div class="btns"><button class="btn outline" data-act="toggleList">Список</button></div>'
+              : `<div class="btns">
               <button class="btn" data-act="remind" data-id="${p.id}" ${p.missing.length ? "" : "disabled"}>Напомнить</button>
               <button class="btn outline" data-act="toggleList">Список</button></div>`}
           </div>
@@ -645,6 +660,7 @@
 
   // ------------------------------------------------------------------ действия: сборы
   ACTIONS.openPoll = (el) => go("pollDetail", { id: el.dataset.id });
+  ACTIONS.goBack = () => back();
   ACTIONS.newPoll = () => go("newPoll");
   ACTIONS.toggleList = () => { const l = document.getElementById("fullList"); l.hidden = !l.hidden; if (!l.hidden) l.scrollIntoView({ behavior: "smooth" }); };
   ACTIONS.remind = async (el) => {
@@ -853,7 +869,14 @@
       return;
     }
     // Внутри MAX вход по подписи мини-приложения; в браузере — веб-кабинет с сессией сайта
-    S.web = !WA?.initData;
+    S.web = !IN_MAX;
+    if (S.web && !DEV_USER) {
+      // сначала тихая проверка сессии — без ошибки 401 в консоли у того, кто ещё не вошёл
+      try {
+        const s = await (await fetch("/api/auth/session", { credentials: "same-origin" })).json();
+        if (!s.logged_in) { location.href = "/login"; return; }
+      } catch (_) { /* проверим через /api/me ниже */ }
+    }
     try {
       S.me = await api("/api/me");
     } catch (e) {

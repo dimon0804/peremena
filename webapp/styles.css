@@ -211,8 +211,7 @@ body.web .topbar { align-items: center; }
   body.web .tabbar button { flex-direction: row; justify-content: flex-start; gap: 12px; padding: 12px 14px; font-size: 15px; }
   body.web .tabbar button .ico { font-size: 20px; width: 26px; text-align: center; }
   body.web .topbar { position: fixed; left: 0; right: 0; z-index: 7; padding-left: 24px; padding-right: 24px; }
-  body.web .view { max-width: 1040px; padding: 92px 32px 40px; }
+  body.web .view { max-width: 920px; padding: 92px 32px 40px; }  /* одна ширина у всех блоков: карточки, полка, кнопки */
   body.web .fab { bottom: 28px; right: 32px; }
   body.web .toast { bottom: 28px; }
-  body.web #view > .card, body.web .grid2 { max-width: 860px; }
 }
