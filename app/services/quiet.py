@@ -28,6 +28,8 @@ KIND_LABEL = {
     "not_that": "Ответ не подошёл",
     "chat_question": "Вопрос в чате",
     "report": "Итог сбора",
+    "faq_hint": "Частый вопрос без ответа",
+    "absence": "Отсутствие",
     "message": "Сообщение",
 }
 
@@ -148,8 +150,27 @@ async def build_digest(teacher: User, include_empty: bool = False) -> tuple[str,
             lines.append(f"…и ещё {len(items) - 15}")
         lines.append("")
 
+    # кто сегодня не придёт — список, который раньше учитель собирал из сообщений в чате
+    from . import attendance, faq_learning
+
+    absent_text, absent_n = await attendance.render_day(teacher, with_title=False)
+    if absent_n:
+        lines.append(f"🤒 <b>Сегодня не придут ({absent_n})</b>")
+        lines.append(absent_text)
+        lines.append("")
+
     weekly = False
     if now_local.weekday() == 0:
+        week_absences = await attendance.week_summary(teacher)
+        if week_absences:
+            weekly = True
+            lines += [week_absences, ""]
+        # частые вопросы без ответа — предложение пополнить справочник
+        hint = await faq_learning.digest_hint(teacher.user_id)
+        if hint:
+            weekly = True
+            lines += [hint, ""]
+            buttons.append([kb.cb("📖 Ответить на частые вопросы", "fq:open")])
         # понедельник — итоги прошлой недели из «Счётчика пользы»
         week = await stats.summary(teacher.user_id, days=7)
         if week["minutes"] >= 1:
@@ -161,7 +182,7 @@ async def build_digest(teacher: User, include_empty: bool = False) -> tuple[str,
                     lines.append(f"   {label}: {v['count']}")
             lines.append("")
 
-    if not items and not polls and not closed_recent and not weekly and not include_empty:
+    if not items and not polls and not closed_recent and not weekly and not absent_n and not include_empty:
         return None
     if not items and not polls and not closed_recent:
         lines.append("Ничего срочного. Хорошего дня!")

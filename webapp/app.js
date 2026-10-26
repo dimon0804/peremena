@@ -176,9 +176,14 @@
     async polls() {
       loading();
       try {
-        const items = await api("/api/polls");
+        const [items, att] = await Promise.all([api("/api/polls"), api("/api/attendance")]);
         const open = items.filter((p) => !p.closed), closed = items.filter((p) => p.closed);
+        const absent = att.items.length
+          ? `<div class="card absent"><div class="row spread"><div class="card-title">🤒 Сегодня не придут: ${att.items.length}</div><span class="muted small">${esc(att.day_text)}</span></div>
+              <ul class="list">${att.items.map((a) => `<li><span>${esc(a.who)}</span><span class="muted">${esc(a.reason_text)}${a.comment ? " · " + esc(a.comment) : ""}</span></li>`).join("")}</ul></div>`
+          : `<div class="card absent small muted">🤒 Сегодня все на месте — никто не отметил отсутствие.</div>`;
         render(`<h1>Сборы</h1>
+          ${absent}
           ${items.length ? "" : `<div class="empty"><b>Сборов пока нет</b>Согласия, справки, «ознакомлен» — бот разошлёт каждому в личку и сам посчитает ответы.</div>`}
           ${open.map(pollCard).join("")}
           ${closed.length ? `<h2 class="muted">Завершённые</h2>${closed.map(pollCard).join("")}` : ""}
@@ -285,8 +290,14 @@
     async faq() {
       loading();
       try {
-        const items = await api("/api/faq");
+        const [items, openQ] = await Promise.all([api("/api/faq"), api("/api/faq/open")]);
+        S.openQ = openQ;
+        const openCard = openQ.length ? `<div class="card faq open-q">
+            <div class="card-title">❓ Спрашивают, а ответа в справочнике нет</div>
+            <p class="muted small">Ответьте один раз — дальше бот будет отвечать на такие вопросы сам.</p>
+            <ul class="list">${openQ.map((q) => `<li><span>${esc(q.question)} <span class="chip">${q.count}×</span></span><button class="btn sm" data-act="openAnswer" data-key="${esc(q.key)}">Ответить</button></li>`).join("")}</ul></div>` : "";
         render(`<h1>Справочник</h1>
+          ${openCard}
           <div class="card faq">
             <div class="card-title tag-faq">Проверить, как ответит бот</div>
             <div class="row" style="margin-top:8px"><input type="search" id="faq-test" placeholder="Например: во сколько собрание?" style="flex:1"><button class="btn sm" data-act="testFaq">Проверить</button></div>
@@ -380,8 +391,13 @@
     async my() {
       loading();
       try {
-        const items = await api("/api/my/polls");
+        const [items, abs] = await Promise.all([api("/api/my/polls"), api("/api/my/absences")]);
+        S.myAbs = abs;
+        const marks = abs.items.length ? `<div class="card absent"><div class="card-title">🤒 Отмечено отсутствие</div>
+            <ul class="list">${abs.items.map((a) => `<li><span>${esc(a.who)} — ${esc(a.day_text)}, ${esc(a.reason_text)}</span><button class="btn sm ghost" data-act="absCancel" data-id="${a.id}">Отменить</button></li>`).join("")}</ul></div>` : "";
         render(`<h1>Сборы</h1>
+          ${abs.classes.length ? `<button class="btn outline block" data-act="absNew" style="margin-bottom:12px">🤒 Ребёнок не придёт</button>` : ""}
+          ${marks}
           ${items.length ? "" : `<div class="empty"><b>Всё отвечено ✓</b>${S.me.member_chats.length ? "Новые сборы от учителя появятся здесь и в личке с ботом." : "Как только учитель добавит бота в чат класса, сборы будут приходить сюда."}</div>`}
           ${items.map((p) => `<div class="card">
             <div class="row spread"><span class="muted small">${esc(p.chat_title)}${p.teacher ? " · " + esc(p.teacher) : ""}</span>${p.deadline ? `<span class="chip accent">до ${esc(p.deadline_text)}</span>` : ""}</div>
@@ -659,6 +675,42 @@
   };
 
   // ------------------------------------------------------------------ действия: сборы
+  // ------------------------------------------------------------------ «Ребёнок не придёт» / частые вопросы
+  ACTIONS.absNew = () => {
+    const cls = S.myAbs.classes;
+    modal(`<h2 style="margin-top:0">🤒 Ребёнок не придёт</h2>
+      ${cls.length > 1 ? `<label class="field"><span>Класс</span><select name="chat">${cls.map((c) => `<option value="${c.chat_id}">${esc(c.title)}</option>`).join("")}</select></label>` : ""}
+      <label class="field"><span>Фамилия и имя ребёнка</span><input type="text" name="child" required maxlength="100" value="${esc(cls[0].child_name)}" placeholder="Иванов Пётр"></label>
+      <div class="field"><span class="muted small" style="font-weight:600">Когда</span>
+        <div class="seg" style="margin-top:6px"><label><input type="radio" name="day" value="today" checked> Сегодня</label>&nbsp;&nbsp;<label><input type="radio" name="day" value="tomorrow"> Завтра</label></div></div>
+      <label class="field"><span>Причина</span><select name="reason"><option value="sick">Болеет</option><option value="family">Семейные обстоятельства</option><option value="other">Другая причина</option></select></label>
+      <label class="field"><span>Комментарий для учителя (необязательно)</span><input type="text" name="comment" maxlength="200"></label>
+      <p class="muted small">Учитель увидит это в списке «кто не придёт» — писать в общий чат не нужно.</p>
+      <div class="btns"><button class="btn ghost" value="cancel" formnovalidate>Отмена</button><button class="btn" value="ok">Отметить</button></div>`,
+    async (fd) => {
+      const chat = Number(fd.get("chat") || cls[0].chat_id);
+      await api("/api/my/absences", { method: "POST", body: { chat_id: chat, day: fd.get("day"), reason: fd.get("reason"), child_name: fd.get("child"), comment: fd.get("comment") || "" } });
+      haptic("success"); toast("Отмечено — учитель увидит"); VIEWS.my();
+    });
+  };
+  ACTIONS.absCancel = async (el) => {
+    try { await api(`/api/my/absences/${el.dataset.id}`, { method: "DELETE" }); toast("Отметка снята"); VIEWS.my(); }
+    catch (e) { toast(e.message, true); }
+  };
+  ACTIONS.openAnswer = (el) => {
+    const q = S.openQ.find((x) => x.key === el.dataset.key);
+    modal(`<h2 style="margin-top:0">Ответ на частый вопрос</h2>
+      <p class="muted small">Спросили ${q.count} раз(а). Ответьте один раз — дальше бот будет отвечать сам.</p>
+      <label class="field"><span>Вопрос</span><input type="text" name="question" required value="${esc(q.question)}"></label>
+      <label class="field"><span>Ваш ответ</span><textarea name="answer" required></textarea></label>
+      ${S.me.school ? `<label class="switch"><span>🏛 В общую базу школы</span><input type="checkbox" name="shared"></label>` : ""}
+      <div class="btns"><button class="btn ghost" value="cancel" formnovalidate>Отмена</button><button class="btn" value="ok">Сохранить</button></div>`,
+    async (fd) => {
+      const r = await api("/api/faq/open", { method: "POST", body: { key: q.key, question: fd.get("question"), answer: fd.get("answer"), shared: fd.get("shared") === "on" } });
+      haptic("success"); toast(`Сохранено, снято вопросов: ${r.resolved}`); VIEWS.faq();
+    });
+  };
+
   ACTIONS.openPoll = (el) => go("pollDetail", { id: el.dataset.id });
   ACTIONS.goBack = () => back();
   ACTIONS.newPoll = () => go("newPoll");

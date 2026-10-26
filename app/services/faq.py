@@ -29,7 +29,11 @@ async def add_entry(teacher_id: int, question: str, answer: str, keywords: str |
         )
         s.add(e)
         await s.flush()
-        return e
+    # новая карточка отвечает на накопившиеся вопросы — убираем их из списка «без ответа»
+    from . import faq_learning
+
+    await faq_learning.resolve_matching(teacher_id, e.question, e.keywords)
+    return e
 
 
 async def update_entry(entry_id: int, teacher_id: int, **fields) -> FaqEntry | None:

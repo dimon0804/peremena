@@ -8,9 +8,9 @@ import secrets
 from .. import keyboards as kb
 from ..core import ctx
 from ..models import User
-from ..services import chats, faq, polls, quiet, school, search, shelf, stats
+from ..services import attendance, chats, faq, faq_learning, polls, quiet, school, search, shelf, stats
 from ..timeutil import fmt_dt, fmt_minutes, local_now, parse_deadline, parse_hours, preset_deadline
-from . import staff
+from . import absence, staff
 from .common import (
     ADMIN_HELP, ONBOARD_HELP, PARENT_HELP, SUBJECT_HELP, TEACHER_HELP, admin_menu, clear_state, get_state,
     parent_menu, parse_command, send, set_state, subject_menu, teacher_menu,
@@ -76,7 +76,7 @@ async def run_command(uid: int, cmd: str, rest: str) -> None:
         "start": show_start, "help": show_start, "poll": start_poll, "status": show_status_list,
         "faq": show_faq, "add": start_faq_add, "quiet": show_quiet, "morning": send_morning,
         "stats": show_stats, "chats": show_chats, "app": show_app, "my": show_my_polls,
-        "cancel": cancel, "board": staff.show_board, "invite": staff.start_invite, "school": staff.show_school,
+        "cancel": cancel, "absent": absence.show_list, "board": staff.show_board, "invite": staff.start_invite, "school": staff.show_school,
     }
     if cmd == "start" and rest and await staff.handle_start_payload(uid, rest):
         return
@@ -152,6 +152,8 @@ async def handle_state(uid: int, state: dict, text: str, msg: dict) -> bool:
         return await faq_add_step(uid, step, data, text)
     if flow == "faq_reply":
         return await faq_reply_step(uid, data, text)
+    if flow == "absence":
+        return await absence.name_step(uid, data, text) if step == "name" and text else False
     if flow == "board":
         return await staff.board_step(uid, step, data, text)
     if flow == "subj_name":
@@ -415,6 +417,33 @@ async def show_faq(uid: int) -> None:
     if c.bot_username:
         rows.append([kb.app("Править в приложении", c.bot_username, "faq")])
     await send(uid, text, rows)
+    await show_open_questions(uid, quiet_if_empty=True)
+
+
+async def show_open_questions(uid: int, quiet_if_empty: bool = False) -> None:
+    """Частые вопросы родителей, на которые в справочнике нет ответа, — с кнопкой «ответить»."""
+    top = (await faq_learning.clusters(uid, min_count=2))[:5]
+    if not top:
+        if not quiet_if_empty:
+            await send(uid, "📖 Вопросов без ответа пока нет — справочник справляется.")
+        return
+    lines = ["❓ <b>Спрашивают, а ответа в справочнике нет</b>", ""]
+    rows = []
+    for c in top:
+        key = await faq_learning.remember_cluster(c)
+        lines.append(f"• {html.escape(c.question)} — {c.count}×")
+        rows.append([kb.cb(f"💾 {c.question[:45]} ({c.count}×)", f"fq:oq:{key}")])
+    await send(uid, "\n".join(lines), rows)
+
+
+async def start_open_answer(uid: int, key: str) -> None:
+    item = await ctx().kv.get(f"oqc:{key}")
+    if not item:
+        await send(uid, "Список устарел — откройте /faq ещё раз.")
+        return
+    await set_state(uid, "faq_add", "a", {"q": item["q"], "oq": item["ids"]})
+    await send(uid, f"📖 Вопрос: <b>{html.escape(item['q'])}</b>\n\nНапишите ответ — сохраню его в справочник, "
+                    "и дальше буду отвечать на такие вопросы сам.", [[kb.cb("Отмена", "f:cancel")]])
 
 
 async def start_faq_add(uid: int) -> None:
@@ -438,8 +467,13 @@ async def faq_add_step(uid: int, step: str, data: dict, text: str) -> bool:
     if step == "a":
         await clear_state(uid)
         e = await faq.add_entry(uid, data["q"], text)
+        closed = 0
+        if data.get("oq"):  # отвечали на частый вопрос без ответа — снимаем всю группу
+            await faq_learning.resolve(data["oq"])
+            closed = len(data["oq"])
+        note = f"\n\nСнял {closed} вопрос(ов) родителей из списка «без ответа»." if closed else ""
         await send(uid, f"✅ Сохранил.\n\n<b>{html.escape(e.question)}</b>\n→ {html.escape(e.answer)}\n\n"
-                        f"<i>Ключевые слова: {html.escape(e.keywords or '—')}</i>",
+                        f"<i>Ключевые слова: {html.escape(e.keywords or '—')}</i>{note}",
                    [[kb.cb("➕ Ещё", "fq:add"), kb.cb("📖 Весь справочник", "m:faq")]])
         return True
     return False
@@ -490,6 +524,11 @@ async def answer_text(uid: int, text: str, is_teacher: bool) -> None:
             return
         entries = await faq.candidates_for_chats(chat_ids)
 
+    # «Заболел, сегодня не придём» — предлагаем отметить отсутствие кнопкой
+    if not is_teacher and attendance.looks_like_absence(text):
+        await absence.offer(uid)
+        return
+
     # «Что задали?» и «какие объявления?» — по доске класса
     if await staff.answer_board_question(uid, text, board_chats, tz):
         return
@@ -525,6 +564,8 @@ async def answer_text(uid: int, text: str, is_teacher: bool) -> None:
                    teacher_menu())
         return
     await ctx().kv.set(f"q:{uid}", {"text": text, "chats": chat_ids}, 3600 * 6)
+    # запоминаем вопрос без ответа: когда тему спросят несколько раз, бот подскажет учителю сохранить ответ
+    await faq_learning.record(chat_ids, uid, text)
     await send(uid, "В справочнике класса пока нет готового ответа. Передать вопрос учителю?",
                [[kb.cb("✉️ Передать учителю", "fw:ask")], [kb.cb("Не надо", "fw:x")]])
 

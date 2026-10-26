@@ -8,8 +8,8 @@ from .. import keyboards as kb
 from ..core import ctx
 from ..db import session
 from ..models import ClassChat, User
-from ..services import chats, faq, polls, quiet, school, shelf, stats
-from . import dialog, staff
+from ..services import attendance, chats, faq, faq_learning, polls, quiet, school, shelf, stats
+from . import absence, dialog, staff
 from .common import ack, clear_state, get_state, send, set_state
 
 log = logging.getLogger(__name__)
@@ -79,6 +79,9 @@ async def on_callback(update: dict) -> None:
             return
         if head == "sc":
             await staff.on_school_cb(cid, uid, tail)
+            return
+        if head == "ab":
+            await absence.on_cb(cid, uid, user, tail)
             return
         if head == "lg":
             await staff.on_login_cb(cid, uid, tail)
@@ -251,6 +254,8 @@ async def on_faq(cid: str, uid: int, tail: str) -> None:
         e = await faq.mark_miss(int(arg))
         await ack(cid, "Спасибо, учту")
         q = await c.kv.get(f"q:{uid}")
+        if q and q.get("chats"):  # карточка не подошла — значит, вопрос остался без ответа
+            await faq_learning.record(q["chats"], uid, q["text"])
         if e:
             name = await chats.member_name(e.chat_id, uid)
             await quiet.notify_teacher(
@@ -281,6 +286,12 @@ async def on_faq(cid: str, uid: int, tail: str) -> None:
             return
         await faq.update_entry(e.id, uid, school_id=sid)
         await ack(cid, "Карточка добавлена в базу школы")
+    elif action == "oq":  # «Добавить ответ» на частый вопрос без ответа
+        await ack(cid)
+        await dialog.start_open_answer(uid, arg)
+    elif action == "open":
+        await ack(cid)
+        await dialog.show_open_questions(uid)
     elif action == "nosave":
         await c.kv.delete(f"sv:{arg}")
         await ack(cid, "Хорошо, не сохраняю")

@@ -7,7 +7,7 @@ import secrets
 
 from .. import keyboards as kb
 from ..core import ctx
-from ..services import board, chats, faq, polls, quiet, search, shelf, stats
+from ..services import attendance, board, chats, faq, faq_learning, polls, quiet, search, shelf, stats
 
 log = logging.getLogger(__name__)
 
@@ -124,6 +124,16 @@ async def on_message(update: dict) -> None:
         await on_teacher_message(chat_id, uid, msg, text)
         return
 
+    # «мы сегодня не придём, заболел» — предлагаем отметить отсутствие кнопкой (не чаще раза в день на человека)
+    if attendance.looks_like_absence(text) and await c.kv.add_once(f"abq:{chat_id}:{uid}", ttl=12 * 3600):
+        await c.safe_send(
+            chat_id=chat_id, reply_to=body.get("mid"),
+            text="🤒 Отметить, что ребёнок не придёт? Учитель увидит это в утреннем списке — отдельно писать не нужно.",
+            attachments=kb.kb_list([[kb.cb("Сегодня", f"ab:g:{chat_id}:{uid}:today"),
+                                     kb.cb("Завтра", f"ab:g:{chat_id}:{uid}:tomorrow")]]),
+        )
+        return
+
     if not search.looks_like_question(text):
         return
 
@@ -164,6 +174,10 @@ async def on_message(update: dict) -> None:
                 )
     # запоминаем вопрос: если учитель ответит на него реплаем, предложим сохранить ответ
     await c.kv.set(f"lq:{body.get('mid')}", {"text": text[:1000], "user_id": uid}, 3 * 24 * 3600)
+    # и копим вопросы без ответа в справочнике — частые бот предложит учителю сохранить
+    hits = faq.rank(text, await faq.candidates_for_chats([chat_id]), limit=1)
+    if not hits or hits[0].score < faq.ANSWER_SCORE:
+        await faq_learning.record([chat_id], uid, text)
 
 
 async def on_teacher_message(chat_id: int, uid: int, msg: dict, text: str) -> None:

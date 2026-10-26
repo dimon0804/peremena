@@ -215,3 +215,8 @@ body.web .topbar { align-items: center; }
   body.web .fab { bottom: 28px; right: 32px; }
   body.web .toast { bottom: 28px; }
 }
+
+/* «Кто не придёт» и частые вопросы без ответа */
+.card.absent { border-left: 4px solid #e11d48; }
+.card.open-q { border-left: 4px solid var(--warn); }
+.card.absent .list li, .card.open-q .list li { align-items: center; }

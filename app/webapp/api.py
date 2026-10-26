@@ -16,7 +16,7 @@ from ..core import ctx
 from ..db import session
 from ..max_api import MaxApiError
 from ..models import ClassChat, InboxItem, User
-from ..services import board, chats, faq, polls, quiet, school, shelf, stats, websession
+from ..services import attendance, board, chats, faq, faq_learning, polls, quiet, school, shelf, stats, websession
 from ..timeutil import fmt_dt, local_now, parse_deadline, preset_deadline, to_local, to_utc, zone
 from .auth import InitDataError, validate_init_data
 
@@ -775,3 +775,105 @@ async def remind_campaign(cid: int, ar=Depends(admin_user)):
             sent += res["sent"]
             group += res["group"]
     return {"sent": sent, "group": group}
+
+
+# ====================================================================== «Кто сегодня не придёт»
+async def _absence_out(a, titles: dict) -> dict:
+    return {"id": a.id, "chat_id": a.chat_id, "chat_title": titles.get(a.chat_id, ""), "day": a.day,
+            "day_text": attendance.day_label(a.day), "who": await attendance.who(a), "child_name": a.child_name,
+            "reason": a.reason, "reason_text": attendance.REASONS.get(a.reason, a.reason), "comment": a.comment}
+
+
+@router.get("/attendance")
+async def attendance_list(day: str | None = None, user: User = Depends(teacher_user)):
+    day = day or local_now(user.tz).date().isoformat()
+    my = await chats.teacher_chats(user.user_id)
+    titles = {c.chat_id: c.title for c in my}
+    items = await attendance.for_days(list(titles), [day])
+    return {"day": day, "day_text": attendance.day_label(day),
+            "items": [await _absence_out(a, titles) for a in items],
+            "week": await attendance.week_summary(user)}
+
+
+class AbsenceIn(BaseModel):
+    chat_id: int
+    day: str = "today"                    # today | tomorrow | YYYY-MM-DD
+    reason: str = "sick"
+    child_name: str = Field(default="", max_length=100)
+    comment: str = Field(default="", max_length=500)
+
+
+@router.get("/my/absences")
+async def my_absences(user: User = Depends(current_user)):
+    member = await chats.member_chats(user.user_id)
+    titles = {c.chat_id: c.title for c in member}
+    today = local_now(user.tz).date().isoformat()
+    return {
+        "classes": [{"chat_id": c.chat_id, "title": c.title,
+                     "child_name": await attendance.child_name(c.chat_id, user.user_id) or ""} for c in member],
+        "items": [await _absence_out(a, titles) for a in await attendance.mine(user.user_id, today)],
+    }
+
+
+@router.post("/my/absences")
+async def add_absence(body: AbsenceIn, user: User = Depends(current_user)):
+    from datetime import date as _date, timedelta as _td
+
+    if body.chat_id not in {c.chat_id for c in await chats.member_chats(user.user_id)}:
+        raise HTTPException(403, "Вы не состоите в этом классе")
+    today = local_now(user.tz).date()
+    if body.day in ("today", "tomorrow"):
+        day = (today + _td(days=1 if body.day == "tomorrow" else 0)).isoformat()
+    else:
+        try:
+            d = _date.fromisoformat(body.day)
+        except ValueError:
+            raise HTTPException(400, "Неверная дата")
+        if not today <= d <= today + _td(days=14):
+            raise HTTPException(400, "Отметить можно на сегодня и ближайшие две недели")
+        day = d.isoformat()
+    child = " ".join(body.child_name.split()) or (await attendance.child_name(body.chat_id, user.user_id) or "")
+    if child:
+        await attendance.set_child_name(body.chat_id, user.user_id, child)
+    a, created = await attendance.mark(body.chat_id, user.user_id, day, body.reason, child, body.comment)
+    if created:
+        from ..bot import absence as absence_bot
+
+        await absence_bot.tell_teacher_now(body.chat_id, await attendance.who(a), day, a.reason)
+    titles = {c.chat_id: c.title for c in await chats.member_chats(user.user_id)}
+    return await _absence_out(a, titles)
+
+
+@router.delete("/my/absences/{aid}")
+async def del_absence(aid: int, user: User = Depends(current_user)):
+    if not await attendance.cancel(aid, user.user_id):
+        raise HTTPException(404, "Отметка не найдена")
+    return {"ok": True}
+
+
+# ====================================================================== частые вопросы без ответа
+@router.get("/faq/open")
+async def faq_open(user: User = Depends(teacher_user)):
+    out = []
+    for c in (await faq_learning.clusters(user.user_id, min_count=2))[:10]:
+        out.append({"key": await faq_learning.remember_cluster(c), "question": c.question, "count": c.count,
+                    "people": len(c.users)})
+    return out
+
+
+class OpenAnswerIn(BaseModel):
+    key: str = Field(max_length=32)
+    answer: str = Field(min_length=1, max_length=3500)
+    question: str | None = Field(default=None, max_length=1000)  # можно поправить формулировку
+    shared: bool = False
+
+
+@router.post("/faq/open")
+async def faq_open_answer(body: OpenAnswerIn, user: User = Depends(teacher_user)):
+    item = await ctx().kv.get(f"oqc:{body.key}")
+    if not item:
+        raise HTTPException(404, "Список устарел — обновите страницу")
+    sid = await _school_for_share(user, body.shared)
+    e = await faq.add_entry(user.user_id, body.question or item["q"], body.answer, None, None, sid)
+    await faq_learning.resolve(item["ids"])
+    return faq_out(e, user.user_id) | {"resolved": len(item["ids"])}

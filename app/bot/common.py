@@ -16,6 +16,7 @@ COMMANDS = [
     ("start", "Главное меню"),
     ("poll", "Новый сбор (перекличка)"),
     ("status", "Статус сборов"),
+    ("absent", "Кто не придёт / отметить отсутствие"),
     ("hw", "Записать домашнее задание"),
     ("news", "Объявление в класс"),
     ("board", "Доска класса"),
@@ -48,6 +49,8 @@ ALIASES = {
     "app": "app", "приложение": "app",
     "cancel": "cancel", "отмена": "cancel",
     "my": "my", "мои": "my",
+    "absent": "absent", "пропуски": "absent", "отсутствуют": "absent", "непридет": "absent",
+    "заболел": "absent", "болеет": "absent",
     "hw": "hw", "дз": "hw", "домашка": "hw", "задание": "hw",
     "news": "news", "объявление": "news",
     "board": "board", "доска": "board",
@@ -99,7 +102,8 @@ def teacher_menu() -> list[list[dict]]:
     rows = [
         [kb.cb("📋 Новый сбор", "m:poll"), kb.cb("📊 Статус сборов", "st:list")],
         [kb.cb("📚 Домашка", "bd:kind:hw"), kb.cb("📌 Доска", "m:board")],
-        [kb.cb("📖 Справочник", "m:faq"), kb.cb("🗂 Полка", "m:shelf")],
+        [kb.cb("🤒 Кто не придёт", "ab:list"), kb.cb("📖 Справочник", "m:faq")],
+        [kb.cb("🗂 Полка", "m:shelf")],
         [kb.cb("🌙 Тихий режим", "m:quiet"), kb.cb("⏱ Польза", "m:stats")],
         [kb.cb("🏫 Мои классы", "m:chats"), kb.cb("🏛 Школа", "m:school")],
     ]
@@ -132,7 +136,7 @@ def parent_menu() -> list[list[dict]]:
     c = ctx()
     rows = [
         [kb.cb("📋 Мои сборы", "m:my"), kb.cb("❓ Задать вопрос", "m:ask")],
-        [kb.cb("📚 Что задали?", "m:hwq")],
+        [kb.cb("📚 Что задали?", "m:hwq"), kb.cb("🤒 Ребёнок не придёт", "ab:start")],
         [kb.cb("🗂 Материалы класса", "m:shelf")],
     ]
     if c.bot_username:
