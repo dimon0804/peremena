@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import (
-    JSON, BigInteger, Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, Index,
+    JSON, BigInteger, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, false,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -76,6 +76,8 @@ class Member(Base):
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     is_owner: Mapped[bool] = mapped_column(Boolean, default=False)
     present: Mapped[bool] = mapped_column(Boolean, default=True)
+    # имя ребёнка, за которого отвечает этот родитель (спрашиваем один раз — для списка «кто не придёт»)
+    child_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
 
 # ---------------------------------------------------------------- «Перекличка»
@@ -98,6 +100,7 @@ class Poll(Base):
     reminded_2h: Mapped[bool] = mapped_column(Boolean, default=False)
     group_message_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     campaign_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)  # сбор на параллель
+    amount: Mapped[int | None] = mapped_column(Integer, nullable=True)  # сбор денег: рублей с каждого
 
     targets: Mapped[list["PollTarget"]] = relationship(
         back_populates="poll", cascade="all, delete-orphan", lazy="selectin", order_by="PollTarget.name"
@@ -117,6 +120,9 @@ class PollTarget(Base):
     answer: Mapped[int | None] = mapped_column(Integer, nullable=True)
     answered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     reminders: Mapped[int] = mapped_column(Integer, default=0)
+    # сбор денег: учитель подтвердил, что деньги получены (родитель лишь отмечает «перевёл»)
+    paid: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     poll: Mapped[Poll] = relationship(back_populates="targets")
 
@@ -275,3 +281,46 @@ class KVEntry(Base):
     key: Mapped[str] = mapped_column(String(300), primary_key=True)
     value: Mapped[str] = mapped_column(Text)
     expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+
+
+# ---------------------------------------------------------------- «Кто сегодня не придёт»
+class Absence(Base):
+    """Родитель отметил, что ребёнок не придёт. Учитель получает список утром, без сообщений в общем чате."""
+    __tablename__ = "absences"
+    __table_args__ = (UniqueConstraint("chat_id", "user_id", "day", "child_name"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)      # кто отметил (родитель)
+    child_name: Mapped[str] = mapped_column(String(200), default="")
+    day: Mapped[str] = mapped_column(String(10), index=True)          # YYYY-MM-DD
+    reason: Mapped[str] = mapped_column(String(20), default="sick")   # sick | family | other
+    comment: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+# ---------------------------------------------------------------- Справочник, который подсказывает сам
+class OpenQuestion(Base):
+    """Вопрос, на который в справочнике не нашлось ответа. Похожие вопросы группируются,
+    и бот предлагает учителю сохранить ответ на самый частый."""
+    __tablename__ = "open_questions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    teacher_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    text: Mapped[str] = mapped_column(Text)
+    stems: Mapped[str] = mapped_column(Text, default="")  # основы слов через пробел — для группировки
+    resolved: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+# ---------------------------------------------------------------- Демо-режим для жюри
+class DemoSandbox(Base):
+    """Песочница демо-режима: вымышленные класс, родители и данные; сообщения никуда не уходят."""
+    __tablename__ = "demo_sandboxes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    teacher_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    parent_id: Mapped[int] = mapped_column(BigInteger)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)

@@ -53,8 +53,9 @@ MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 def _migrate(conn) -> None:
     """Схема базы — через миграции Alembic (app/migrations).
 
-    База, созданная до появления миграций (create_all), сначала достраивается до схемы первой миграции,
-    затем помечается ею — данные сохраняются, дальше применяются только новые миграции."""
+    База, созданная до появления миграций (create_all), достраивается до текущих моделей и помечается
+    последней версией (head) — данные сохраняются. Помечать её первой версией нельзя: create_all уже создал
+    таблицы из следующих миграций, и они упали бы на «table already exists»."""
     from alembic import command
     from alembic.config import Config
     from sqlalchemy import inspect
@@ -67,12 +68,12 @@ def _migrate(conn) -> None:
     if legacy:
         Base.metadata.create_all(conn)
         _add_missing_columns(conn)
-        command.stamp(cfg, "0001")
+        command.stamp(cfg, "head")  # модели = head: это проверяет tests/test_migrations.py
     command.upgrade(cfg, "head")
 
 
 def _add_missing_columns(conn) -> None:
-    """Для баз без миграций: недостающие столбцы добавляются в старые таблицы перед отметкой 0001."""
+    """Для баз без миграций: недостающие столбцы добавляются в старые таблицы перед отметкой последней версией."""
     from sqlalchemy import inspect
 
     insp = inspect(conn)
