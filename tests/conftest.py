@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+import os
 import sys
 from pathlib import Path
 
@@ -98,15 +99,30 @@ class FakeApi:
 @pytest.fixture
 def env(tmp_path):
     loop = asyncio.new_event_loop()
-    settings = Settings(max_bot_token="test-token", database_url=f"sqlite+aiosqlite:///{tmp_path / 't.db'}",
+    # TEST_DATABASE_URL=postgresql://… — те же тесты на настоящем PostgreSQL (каждый с чистой базы)
+    url = os.environ.get("TEST_DATABASE_URL") or f"sqlite+aiosqlite:///{tmp_path / 't.db'}"
+    settings = Settings(max_bot_token="test-token", database_url=url,
                         dev_auth=True, bot_username="peremena_test_bot")
     api = FakeApi()
     c = Ctx(settings=settings, api=api, kv=MemoryKV(), bot_user_id=BOT["user_id"], bot_username="peremena_test_bot")
     set_ctx(c)
+    if "postgres" in url:
+        loop.run_until_complete(_reset_postgres(url))
     loop.run_until_complete(db.init_db(settings.database_url))
     yield loop, api, c
     loop.run_until_complete(db.close_db())
     loop.close()
+
+
+async def _reset_postgres(url: str) -> None:
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    engine = create_async_engine(db._normalize_url(url))
+    async with engine.begin() as conn:
+        await conn.execute(text("DROP SCHEMA public CASCADE"))
+        await conn.execute(text("CREATE SCHEMA public"))
+    await engine.dispose()
 
 
 def msg_update(user: dict, text: str, chat_id: int | None = None, mid: str = "x", attachments=None, link=None) -> dict:
