@@ -6,6 +6,22 @@
   const $$ = (s, r = document) => [...r.querySelectorAll(s)];
   const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+  // «1 класс», «2 класса», «5 классов» — счётчик на главной показывает живые цифры, падеж должен совпадать
+  const plural = (n, one, few, many) => {
+    const a = Math.abs(Math.round(n)) % 100, b = a % 10;
+    if (a > 10 && a < 20) return many;
+    if (b > 1 && b < 5) return few;
+    if (b === 1) return one;
+    return many;
+  };
+  const LABELS = {
+    saved_h: ["час рутины бот уже снял с учителей", "часа рутины бот уже снял с учителей", "часов рутины бот уже снял с учителей"],
+    saved_m: ["минуту рутины бот уже снял с учителей", "минуты рутины бот уже снял с учителей", "минут рутины бот уже снял с учителей"],
+    classes: ["класс подключён", "класса подключено", "классов подключено"],
+    polls: ["сбор проведён без ручного подсчёта", "сбора проведено без ручного подсчёта", "сборов проведено без ручного подсчёта"],
+    answers: ["ответ родителей собран", "ответа родителей собрано", "ответов родителей собрано"],
+  };
+
   function countUp(el, value) {
     const fmt = (n) => Math.round(n).toLocaleString("ru-RU");
     if (reduceMotion || value < 10) { el.textContent = fmt(value); return; }
@@ -31,8 +47,11 @@
           live.hidden = false;
           // пока сэкономлено меньше двух часов, честнее показывать минуты, чем «0 часов»
           const inHours = s.minutes_saved >= 120;
-          $("[data-saved-label]", live).textContent = (inHours ? "часов" : "минут") + " рутины бот уже снял с учителей";
           const vals = { saved: inHours ? s.minutes_saved / 60 : s.minutes_saved, classes: s.classes, polls: s.polls, answers: s.answers };
+          $$("[data-stat]", live).forEach((el) => {
+            const key = el.dataset.stat === "saved" ? (inHours ? "saved_h" : "saved_m") : el.dataset.stat;
+            el.nextElementSibling.textContent = plural(vals[el.dataset.stat], ...LABELS[key]);
+          });
           const io = new IntersectionObserver((es) => {
             if (es.some((e) => e.isIntersecting)) {
               $$("[data-stat]", live).forEach((el) => countUp(el, vals[el.dataset.stat] || 0));
