@@ -272,6 +272,10 @@ async def poll_step(uid: int, step: str, data: dict, text: str) -> bool:
             await send(uid, "Слишком коротко — опишите, что собираем.")
             return True
         data["text"] = text[:3000]
+        if data.get("template") == "money":
+            await set_state(uid, "poll", "amount", data)
+            await send(uid, "💰 Сколько сдаёт каждый? Напишите сумму в рублях, например: <b>300</b>")
+            return True
         if data.get("template") == "choice":
             await set_state(uid, "poll", "options", data)
             await send(uid, "Пришлите варианты ответа — каждый с новой строки (от 2 до 10).\n"
@@ -279,6 +283,15 @@ async def poll_step(uid: int, step: str, data: dict, text: str) -> bool:
         else:
             await set_state(uid, "poll", "deadline", data)
             await ask_deadline(uid)
+        return True
+    if step == "amount":
+        digits = "".join(ch for ch in text if ch.isdigit())
+        if not digits or not 1 <= int(digits) <= 100_000:
+            await send(uid, "Напишите сумму числом, например: 300")
+            return True
+        data["amount"] = int(digits)
+        await set_state(uid, "poll", "deadline", data)
+        await ask_deadline(uid)
         return True
     if step == "options":
         opts = [o.strip(" -•\t") for o in text.splitlines() if o.strip(" -•\t")]
@@ -329,6 +342,7 @@ async def show_poll_preview(uid: int, data: dict) -> None:
         "👀 <b>Проверьте сбор</b>", "",
         f"📋 {html.escape(data['text'])}", "",
         "Кнопки: " + " · ".join(html.escape(o) for o in opts),
+        *([f"Сумма: <b>{polls.rub(data['amount'])}</b> с каждого"] if data.get("amount") else []),
         f"Срок: <b>{fmt_dt(dl, user.tz if user else None)}</b>",
         f"Класс: {html.escape(chat.title if chat else '')}",
     ]
@@ -350,7 +364,8 @@ async def confirm_poll(uid: int) -> None:
     await clear_state(uid)
     data = st["data"]
     dl = datetime.fromisoformat(data["deadline"]) if data.get("deadline") else None
-    poll = await polls.create_poll(uid, data["chat_id"], data["template"], data["text"], data.get("options") or [], dl)
+    poll = await polls.create_poll(uid, data["chat_id"], data["template"], data["text"], data.get("options") or [], dl,
+                                   amount=data.get("amount"))
     await send(uid, "⏳ Рассылаю…")
     report = await polls.send_poll(poll.id)
     lines = [f"✅ Сбор запущен: в личку доставлено <b>{report['delivered']}</b> из {report['total']}."]

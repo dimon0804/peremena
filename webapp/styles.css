@@ -220,3 +220,6 @@ body.web .topbar { align-items: center; }
 .card.absent { border-left: 4px solid #e11d48; }
 .card.open-q { border-left: 4px solid var(--warn); }
 .card.absent .list li, .card.open-q .list li { align-items: center; }
+.card.money { border-left: 4px solid var(--ok); }
+.paid-row { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+.paid-row input { width: 20px; height: 20px; accent-color: var(--ok); }

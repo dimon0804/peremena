@@ -43,6 +43,12 @@ TEMPLATES: dict[str, dict] = {
         "options": ["Ознакомлен(а)", "Есть вопрос"],
         "clarify": 1,
     },
+    "money": {
+        "label": "Сбор денег",
+        "hint": "Например: «Экскурсия в музей 28 октября, оплата до пятницы.» Сумму спрошу следующим шагом.",
+        "options": ["Перевёл(а)", "Сдам наличными", "Не участвуем", "Нужно уточнить"],
+        "clarify": 3,
+    },
     "choice": {
         "label": "Выбор варианта",
         "hint": "Например: «Выбираем дату родительского собрания.» Варианты пришлёте следующим сообщением.",
@@ -52,6 +58,9 @@ TEMPLATES: dict[str, dict] = {
 }
 
 CLARIFY_WORDS = ("уточн", "вопрос")
+
+# сбор денег: индексы вариантов ответа
+PAY_TRANSFER, PAY_CASH, PAY_SKIP = 0, 1, 2
 
 
 def _split_text(text: str) -> tuple[str, str]:
@@ -80,6 +89,8 @@ def parent_text(poll: Poll, tz: str, chat_title: str, teacher_name: str, selecte
     head = "⏰ <b>Напоминание</b>\n\n" if reminder else ""
     parts = [head + f"📋 {html.escape(poll.text)}"]
     meta = []
+    if poll.amount:
+        meta.append(f"Сумма: <b>{rub(poll.amount)}</b>")
     if poll.deadline:
         meta.append(f"Срок ответа: <b>{fmt_dt(poll.deadline, tz)}</b>")
     if chat_title:
@@ -94,8 +105,12 @@ def parent_text(poll: Poll, tz: str, chat_title: str, teacher_name: str, selecte
     return "\n\n".join(p for p in parts if p)
 
 
+def rub(n: int) -> str:
+    return f"{n:,}".replace(",", " ") + " ₽"
+
+
 async def create_poll(teacher_id: int, chat_id: int, template: str, text: str, options: list[str],
-                      deadline) -> Poll:
+                      deadline, amount: int | None = None) -> Poll:
     tpl = TEMPLATES.get(template, TEMPLATES["consent"])
     opts = [o.strip()[:60] for o in (options or tpl["options"]) if o.strip()][:10]
     clarify = tpl["clarify"]
@@ -106,6 +121,7 @@ async def create_poll(teacher_id: int, chat_id: int, template: str, text: str, o
         poll = Poll(
             teacher_id=teacher_id, chat_id=chat_id, template=template, title=title, text=body,
             options=opts, clarify_option=clarify, deadline=deadline,
+            amount=amount if template == "money" and amount else None,
         )
         s.add(poll)
         await s.flush()
@@ -156,6 +172,7 @@ async def send_poll(poll_id: int) -> dict:
     # Сообщение в общий чат: кто не получил личку (не запускал бота), ответит здесь — ответ всё равно личный.
     group_text = (
         f"📋 <b>Сбор от учителя</b>\n\n{html.escape(poll.text)}\n\n"
+        + (f"Сумма: <b>{rub(poll.amount)}</b>\n" if poll.amount else "")
         + (f"Срок: <b>{fmt_dt(poll.deadline, tz)}</b>\n" if poll.deadline else "")
         + "Ответьте кнопкой ниже — ответ засчитается лично вам, другим участникам он не виден."
     )
@@ -252,6 +269,52 @@ def counts(poll: Poll) -> tuple[int, int, list[int]]:
     return answered, len(poll.targets), per
 
 
+def money(poll: Poll) -> dict | None:
+    """Сбор денег: сколько ждём, сколько учитель подтвердил, кто отметил «перевёл», но ещё не подтверждён."""
+    if not poll.amount:
+        return None
+    participants = [t for t in poll.targets if t.answer != PAY_SKIP]
+    paid = [t for t in participants if t.paid]
+    waiting = [t for t in participants if not t.paid and t.answer in (PAY_TRANSFER, PAY_CASH)]
+    return {
+        "amount": poll.amount,
+        "expected": poll.amount * len(participants), "collected": poll.amount * len(paid),
+        "participants": len(participants), "paid": len(paid),
+        "waiting": [t.name + (" (перевёл)" if t.answer == PAY_TRANSFER else " (наличные)") for t in waiting],
+        "not_paid": [t.name for t in participants if not t.paid],
+    }
+
+
+def pay_buttons(poll: Poll) -> list[list[dict]]:
+    """Кнопки «отметить сдавших»: ✅/⬜ у каждого участника (кроме «не участвуем»)."""
+    rows = []
+    for t in poll.targets:
+        if t.answer == PAY_SKIP:
+            continue
+        hint = " · перевёл" if t.answer == PAY_TRANSFER else " · наличные" if t.answer == PAY_CASH else ""
+        rows.append([kb.cb(f"{'✅' if t.paid else '⬜'} {t.name}{hint}"[:64], f"pp:{poll.id}:{t.id}")])
+    rows.append([kb.cb("Готово", f"ps:{poll.id}")])
+    return rows
+
+
+async def set_paid(poll_id: int, target_id: int, paid: bool | None = None) -> PollTarget | None:
+    """Учитель подтверждает (или снимает) оплату. paid=None — переключить. Родителю — уведомление."""
+    async with session() as s:
+        t = await s.get(PollTarget, target_id)
+        if t is None or t.poll_id != poll_id:
+            return None
+        new = (not t.paid) if paid is None else paid
+        changed = new != t.paid
+        t.paid = new
+        t.paid_at = utcnow() if new else None
+    poll = await get_poll(poll_id)
+    if changed and new and poll and poll.amount:
+        await ctx().safe_send(user_id=t.user_id,
+                              text=f"✅ Учитель подтвердил получение {rub(poll.amount)} — «{html.escape(poll.title)}». "
+                                   "Спасибо!")
+    return t
+
+
 def progress_bar(done: int, total: int, width: int = 12) -> str:
     if total <= 0:
         return "░" * width
@@ -276,6 +339,13 @@ async def status_card(poll: Poll) -> tuple[str, list[list[dict]]]:
         f"<b>{answered}/{total}</b> ответили  {progress_bar(answered, total)}",
         " · ".join(f"{html.escape(o)} — {n}" for o, n in zip(poll.options, per)),
     ]
+    m = money(poll)
+    if m:
+        lines += ["", f"💰 <b>Собрано {rub(m['collected'])} из {rub(m['expected'])}</b> "
+                      f"(подтверждено {m['paid']} из {m['participants']})"]
+        if m["waiting"]:
+            lines.append("Ждут подтверждения: " + html.escape(", ".join(m["waiting"][:15]))
+                         + (" …" if len(m["waiting"]) > 15 else ""))
     if missing:
         shown = ", ".join(missing[:25])
         lines += ["", f"<b>Не ответили ({len(missing)}):</b> {html.escape(shown)}" + (" …" if len(missing) > 25 else "")]
@@ -291,6 +361,8 @@ async def status_card(poll: Poll) -> tuple[str, list[list[dict]]]:
         row.append(kb.cb("Список", f"pl:{poll.id}"))
         buttons.append(row)
         buttons.append([kb.cb("🔄 Обновить", f"ps:{poll.id}"), kb.cb("Закрыть сбор", f"pc:{poll.id}")])
+        if poll.amount:
+            buttons.insert(0, [kb.cb("💰 Отметить сдавших", f"pm:{poll.id}")])
     else:
         buttons.append([kb.cb("Список", f"pl:{poll.id}"), kb.cb("🔁 Повторить", f"prp:{poll.id}")])
     if c.bot_username:
@@ -300,8 +372,12 @@ async def status_card(poll: Poll) -> tuple[str, list[list[dict]]]:
 
 def full_list(poll: Poll) -> str:
     lines = [f"📄 <b>{html.escape(poll.title)}</b> — список", ""]
+    m = money(poll)
+    if m:
+        lines += [f"💰 Собрано {rub(m['collected'])} из {rub(m['expected'])}. Не сдали: "
+                  + (html.escape(", ".join(m["not_paid"])) if m["not_paid"] else "—"), ""]
     for i, opt in enumerate(poll.options):
-        names = [t.name for t in poll.targets if t.answer == i]
+        names = [t.name + (" ✅" if m and t.paid else "") for t in poll.targets if t.answer == i]
         lines.append(f"<b>{html.escape(opt)} ({len(names)}):</b>")
         lines.append(html.escape(", ".join(names)) if names else "—")
         lines.append("")

@@ -40,7 +40,7 @@ async def on_callback(update: dict) -> None:
         if head == "f":
             await on_poll_flow(cid, uid, tail)
             return
-        if head in ("ps", "pr", "pl", "pc", "st"):
+        if head in ("ps", "pr", "pl", "pc", "st", "pm", "pp"):
             await on_poll_teacher(cid, uid, head, tail)
             return
         if head == "fq":
@@ -202,8 +202,28 @@ async def on_poll_teacher(cid: str, uid: int, head: str, tail: str) -> None:
         await ack(cid)
         await dialog.show_status_list(uid)
         return
-    poll = await _own_poll(cid, uid, int(tail))
+    poll_id, _, target = tail.partition(":")
+    poll = await _own_poll(cid, uid, int(poll_id))
     if poll is None:
+        return
+    if head in ("pm", "pp"):  # сбор денег: отметить, кто сдал
+        if not poll.amount:
+            await ack(cid, "Это не сбор денег")
+            return
+        if head == "pp" and target.isdigit():
+            t = await polls.set_paid(poll.id, int(target))
+            poll = await polls.get_poll(poll.id)
+            m = polls.money(poll)
+            body = {"text": f"💰 <b>{html.escape(poll.title)}</b>\nСобрано {polls.rub(m['collected'])} из "
+                            f"{polls.rub(m['expected'])}. Нажмите на имя, чтобы отметить сдавшего.",
+                    "format": "html", "attachments": kb.kb_list(polls.pay_buttons(poll))}
+            await ack(cid, ("✅ Отмечено: " if t and t.paid else "Снято: ") + (t.name if t else ""), message=body)
+            return
+        await ack(cid)
+        m = polls.money(poll)
+        await send(uid, f"💰 <b>{html.escape(poll.title)}</b>\nСобрано {polls.rub(m['collected'])} из "
+                        f"{polls.rub(m['expected'])}. Нажмите на имя, чтобы отметить сдавшего.",
+                   polls.pay_buttons(poll))
         return
     if head == "ps":
         await ack(cid)
@@ -442,7 +462,7 @@ async def on_repeat_poll(cid: str, uid: int, tail: str) -> None:
         return
     await ack(cid)
     data = {"chat_id": poll.chat_id, "template": poll.template if poll.template in polls.TEMPLATES else "choice",
-            "text": poll.text, "options": poll.options}
+            "text": poll.text, "options": poll.options, "amount": poll.amount}
     await set_state(uid, "poll", "deadline", data)
     await send(uid, f"🔁 Повторяем «{html.escape(poll.title)}» — тот же текст и варианты.")
     await dialog.ask_deadline(uid)

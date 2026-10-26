@@ -22,6 +22,7 @@
     if (b === 1) return one;
     return many;
   };
+  const rub = (n) => `${Number(n || 0).toLocaleString("ru-RU")} ₽`;
   const mins = (m) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
   const toMins = (s) => { const [h, m] = (s || "0:0").split(":").map(Number); return h * 60 + (m || 0); };
   const fmtMinutes = (t) => { t = Math.round(t); const h = Math.floor(t / 60), m = t % 60; return h ? (m ? `${h} ч ${m} мин` : `${h} ч`) : `${m} мин`; };
@@ -135,6 +136,17 @@
     try { WA?.BackButton?.onClick(back); } catch (_) { /* старые версии MAX */ }
   }
 
+  // сбор денег: галочка «сдал» у участника — учитель подтверждает получение
+  $view.addEventListener("change", async (e) => {
+    const box = e.target.closest("[data-paid]");
+    if (!box || S.route?.name !== "pollDetail") return;
+    try {
+      await api(`/api/polls/${S.route.args.id}/paid`, { method: "POST", body: { target_id: Number(box.dataset.paid), paid: box.checked } });
+      haptic("success");
+      VIEWS.pollDetail(S.route.args);
+    } catch (err) { toast(err.message, true); box.checked = !box.checked; }
+  });
+
   // делегирование кликов по data-act
   const ACTIONS = {};
   $view.addEventListener("click", (e) => {
@@ -167,7 +179,7 @@
       <div class="row spread"><div class="card-title">${esc(p.title)}</div>${status}</div>
       <div class="muted small">${esc(p.chat_title)}</div>
       <div class="row spread" style="margin-top:10px"><div class="big" style="font-size:30px">${p.answered}<small>/${p.total}</small></div>
-      <div class="muted small">${p.missing.length ? "не ответили: " + p.missing.length : (p.total ? "ответили все ✓" : "")}</div></div>
+      <div class="muted small">${p.money ? `💰 ${rub(p.money.collected)} из ${rub(p.money.expected)} · ` : ""}${p.missing.length ? "не ответили: " + p.missing.length : (p.total ? "ответили все ✓" : "")}</div></div>
       <div class="bar"><i style="width:${pct}%"></i></div>
     </div>`;
   };
@@ -216,6 +228,12 @@
               <button class="btn" data-act="remind" data-id="${p.id}" ${p.missing.length ? "" : "disabled"}>Напомнить</button>
               <button class="btn outline" data-act="toggleList">Список</button></div>`}
           </div>
+          ${p.money ? `<div class="card money">
+            <div class="card-title">💰 Собрано ${rub(p.money.collected)} из ${rub(p.money.expected)}</div>
+            <div class="bar"><i style="width:${p.money.expected ? Math.round(100 * p.money.collected / p.money.expected) : 0}%"></i></div>
+            <p class="muted small">Подтверждено ${p.money.paid} из ${p.money.participants}. Отметьте, кто сдал: родитель получит подтверждение.</p>
+            <ul class="list">${p.targets.filter((t) => t.answer !== 2).map((t) => `<li><label class="paid-row"><input type="checkbox" data-paid="${t.id}" ${t.paid ? "checked" : ""}> ${esc(t.name)}</label><span class="muted small">${t.answer === 0 ? "перевёл" : t.answer === 1 ? "наличные" : t.answer == null ? "не ответил" : esc(p.options[t.answer])}</span></li>`).join("")}</ul>
+          </div>` : ""}
           <div class="card"><div class="card-title">Ответы</div><ul class="list">${byOpt}</ul></div>
           <div class="card" id="fullList" hidden>
             <div class="card-title">Полный список</div>
@@ -247,6 +265,7 @@
             ${draft.template === "choice"
               ? `<label class="field"><span>Варианты — каждый с новой строки (2–10)</span><textarea id="f-opts" style="min-height:90px">${esc(draft.opts || "")}</textarea></label>`
               : `<p class="muted small">Кнопки: ${tpl.options.map(esc).join(" · ")}</p>`}
+            ${draft.template === "money" ? `<label class="field"><span>Сумма с каждого, ₽</span><input type="number" id="f-amount" min="1" max="100000" inputmode="numeric" value="${esc(draft.amount || "")}" placeholder="300"></label>` : ""}
             <div class="field"><span class="muted small" style="font-weight:600">Срок ответа</span>
               <div class="seg" style="margin-top:6px">${[["today", "Сегодня 18:00"], ["tomorrow", "Завтра 18:00"], ["friday", "Пятница 18:00"], ["week", "Через неделю"], ["custom", "Своя дата"], ["", "Без срока"]]
                 .map(([k, l]) => `<button data-act="dl" data-key="${k}" class="${k === draft.deadline ? "on" : ""}">${l}</button>`).join("")}</div>
@@ -260,6 +279,7 @@
           draft.chat_id = document.getElementById("f-chat")?.value;
           draft.text = document.getElementById("f-text")?.value;
           draft.opts = document.getElementById("f-opts")?.value ?? draft.opts;
+          draft.amount = document.getElementById("f-amount")?.value ?? draft.amount;
           draft.dt = document.getElementById("f-dt")?.value ?? draft.dt;
         };
         ACTIONS.tpl = (el) => { save(); draft.template = el.dataset.key; draw(); };
@@ -272,7 +292,9 @@
           if (deadline === "custom") { if (!draft.dt) return toast("Выберите дату", true); deadline = draft.dt; }
           el.disabled = true; el.textContent = "Рассылаю…";
           try {
-            const res = await api("/api/polls", { method: "POST", body: { chat_id: Number(draft.chat_id), template: draft.template, text: draft.text, options, deadline } });
+            const amount = draft.template === "money" ? Number(draft.amount) : null;
+            if (draft.template === "money" && !(amount > 0)) { el.disabled = false; el.textContent = "Разослать"; return toast("Укажите сумму", true); }
+            const res = await api("/api/polls", { method: "POST", body: { chat_id: Number(draft.chat_id), template: draft.template, text: draft.text, options, deadline, amount } });
             haptic("success");
             const r = res.report;
             toast(`Доставлено в личку: ${r.delivered} из ${r.total}`);
@@ -573,7 +595,7 @@
           <p class="muted">Каждый класс получит сбор, который ведёт его классный руководитель: рассылка в личку, напоминания, итог. Вы видите общий результат.</p>
           <div class="card"><div class="card-title">Классы</div>
             ${classes.map((c) => `<label class="switch"><span>${esc(c.title || c.chat_id)} <span class="muted small">${esc(c.teacher)}</span></span><input type="checkbox" data-camp-chat="${c.chat_id}" ${draft.chats.has(c.chat_id) ? "checked" : ""}></label>`).join("")}</div>
-          <div class="seg" style="margin:6px 0 14px">${S.templates.map((t) => `<button data-act="cmpTpl" data-key="${t.key}" class="${t.key === draft.template ? "on" : ""}">${esc(t.label)}</button>`).join("")}</div>
+          <div class="seg" style="margin:6px 0 14px">${S.templates.filter((t) => t.key !== "money").map((t) => `<button data-act="cmpTpl" data-key="${t.key}" class="${t.key === draft.template ? "on" : ""}">${esc(t.label)}</button>`).join("")}</div>
           <label class="field"><span>Текст (первая строка — заголовок)</span><textarea id="cmp-text">${esc(draft.text || "")}</textarea></label>
           ${draft.template === "choice" ? `<label class="field"><span>Варианты — каждый с новой строки</span><textarea id="cmp-opts" style="min-height:90px">${esc(draft.opts || "")}</textarea></label>` : `<p class="muted small">Кнопки: ${tpl.options.map(esc).join(" · ")}</p>`}
           <div class="seg">${[["tomorrow", "Завтра 18:00"], ["friday", "Пятница 18:00"], ["week", "Через неделю"], ["", "Без срока"]].map(([k, l]) => `<button data-act="cmpDl" data-k="${k}" class="${draft.deadline === k ? "on" : ""}">${l}</button>`).join("")}</div>

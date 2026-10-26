@@ -100,10 +100,11 @@ def poll_out(p, tz: str, with_targets: bool = False, chat_titles: dict | None = 
         "deadline_text": fmt_dt(p.deadline, tz), "closed": p.closed,
         "created_at": p.created_at.isoformat() + "Z", "answered": answered, "total": total, "per_option": per,
         "missing": [t.name for t in p.targets if t.answer is None],
+        "amount": p.amount, "money": polls.money(p),
     }
     if with_targets:
         out["targets"] = [
-            {"user_id": t.user_id, "name": t.name, "answer": t.answer, "delivered": t.delivered,
+            {"id": t.id, "user_id": t.user_id, "name": t.name, "answer": t.answer, "delivered": t.delivered, "paid": t.paid,
              "answered_at": t.answered_at.isoformat() + "Z" if t.answered_at else None, "reminders": t.reminders}
             for t in p.targets
         ]
@@ -177,6 +178,7 @@ class PollIn(BaseModel):
     text: str = Field(min_length=3, max_length=3000)
     options: list[str] = []
     deadline: str | None = None  # today|tomorrow|friday|week|ISO-время в поясе учителя|«28.09 18:00»
+    amount: int | None = Field(default=None, ge=1, le=100_000)  # сбор денег: рублей с каждого
 
 
 @router.post("/polls")
@@ -203,7 +205,10 @@ async def create_poll(body: PollIn, user: User = Depends(teacher_user)):
                 raise HTTPException(400, "Не понял срок")
             if deadline <= to_utc(local_now(user.tz)):
                 raise HTTPException(400, "Срок уже прошёл")
-    p = await polls.create_poll(user.user_id, chat.chat_id, body.template, body.text, body.options, deadline)
+    if body.template == "money" and not body.amount:
+        raise HTTPException(400, "Укажите сумму сбора")
+    p = await polls.create_poll(user.user_id, chat.chat_id, body.template, body.text, body.options, deadline,
+                                amount=body.amount)
     report = await polls.send_poll(p.id)
     p = await polls.get_poll(p.id)
     return {"poll": poll_out(p, user.tz, with_targets=True, chat_titles=await _titles()), "report": report}
@@ -244,11 +249,11 @@ async def export_csv(pid: int, sig: str):
     buf = io.StringIO()
     buf.write("﻿")  # BOM, чтобы Excel открыл кириллицу
     w = csv.writer(buf, delimiter=";")
-    w.writerow(["Участник", "Ответ", "Когда ответил", "Напоминаний"])
+    w.writerow(["Участник", "Ответ", "Когда ответил", "Напоминаний"] + (["Сдано, ₽"] if p.amount else []))
     for t in p.targets:
         ans = p.options[t.answer] if t.answer is not None and t.answer < len(p.options) else "не ответил"
         when = f"{to_local(t.answered_at, tz):%d.%m.%Y %H:%M}" if t.answered_at else ""
-        w.writerow([t.name, ans, when, t.reminders])
+        w.writerow([t.name, ans, when, t.reminders] + ([p.amount if t.paid else 0] if p.amount else []))
     data = buf.getvalue().encode("utf-8")
     fname = f"sbor_{p.id}.csv"
     return StreamingResponse(io.BytesIO(data), media_type="text/csv; charset=utf-8",
@@ -877,3 +882,18 @@ async def faq_open_answer(body: OpenAnswerIn, user: User = Depends(teacher_user)
     e = await faq.add_entry(user.user_id, body.question or item["q"], body.answer, None, None, sid)
     await faq_learning.resolve(item["ids"])
     return faq_out(e, user.user_id) | {"resolved": len(item["ids"])}
+
+
+class PaidIn(BaseModel):
+    target_id: int
+    paid: bool
+
+
+@router.post("/polls/{pid}/paid")
+async def mark_paid(pid: int, body: PaidIn, user: User = Depends(teacher_user)):
+    p = await _own(pid, user)
+    if not p.amount:
+        raise HTTPException(400, "Это не сбор денег")
+    if not await polls.set_paid(pid, body.target_id, body.paid):
+        raise HTTPException(404, "Участник не найден")
+    return poll_out(await polls.get_poll(pid), user.tz, with_targets=True, chat_titles=await _titles())
