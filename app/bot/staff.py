@@ -183,18 +183,31 @@ async def show_board(uid: int) -> None:
 async def answer_board_question(uid: int, text: str, chat_ids: list[int], tz: str | None) -> bool:
     """Ответ родителю/ученику по доске. True — ответ дан."""
     if board.is_homework_question(text):
-        items = await board.find_homework(text, chat_ids, tz)
-        if items:
-            await send(uid, await board.render_answer(items, text, tz))
-            from ..services import stats
+        from ..services import stats
 
+        items = await board.find_homework(text, chat_ids, tz)
+        subj = board.subject_in(text)
+        day = board.date_in(text, tz)
+        prefix = ""
+        if not items and day:
+            # на запрошенный день ничего нет — покажем ближайшее, иначе родитель решит, что не задано вовсе
+            items = await board.find_homework(f"задали {subj or ''}", chat_ids, tz)
+            if items:
+                prefix = (f"На {board.WEEKDAYS[day.weekday()]} {day:%d.%m} на доске ничего не записано. "
+                          f"Ближайшее:\n\n")
+                text = f"задали {subj or ''}"
+        if items:
+            await send(uid, prefix + await board.render_answer(items, text, tz))
             teacher_ids = {c.teacher_id for c in [await chats.get_chat(a.chat_id) for a in items] if c}
             for t in teacher_ids:
                 await stats.add(t, "faq_answer")
             return True
-        subj = board.subject_in(text)
-        await send(uid, "📚 На доске класса пока нет задания" + (f" по предмету «{html.escape(subj)}»" if subj else "")
-                        + ". Если задание давали устно — могу передать вопрос учителю.",
+        what = "📚 На доске класса пока нет задания" + (f" по предмету «{html.escape(subj)}»" if subj else "")
+        if (await school.roles(uid)).is_staff:
+            # учителю «спросить учителя» не нужно — подскажем, как записать
+            await send(uid, what + ". Записать — /hw")
+            return True
+        await send(uid, what + ". Если задание давали устно — могу передать вопрос учителю.",
                    [[kb.cb("✉️ Спросить учителя", "fw:ask")]])
         await ctx().kv.set(f"q:{uid}", {"text": text, "chats": chat_ids}, 3600 * 6)
         return True
