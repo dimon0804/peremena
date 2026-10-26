@@ -112,11 +112,27 @@ docker run -d --name peremena -p 8080:8080 \
 Без `WEBHOOK_URL` бот получает события через long polling — HTTPS и белый IP не нужны, можно сразу писать боту.
 Проверка: `curl http://localhost:8080/health`.
 
-### 3. Полный стек: PostgreSQL + Redis
+### 3. Полный стек: PostgreSQL + Redis (рекомендуется для работы)
 
 ```bash
 docker compose up -d --build
 docker compose logs -f bot
+```
+
+Это основной способ запуска для учебного года: SQLite при одновременных нажатиях десятков родителей
+блокирует базу на запись, а PostgreSQL — нет; Redis держит шаги диалогов и защиту от повторных событий.
+Схема базы создаётся и обновляется миграциями (Alembic) при старте сервиса — отдельно ничего запускать не нужно.
+Данные хранятся в томах `pgdata` и `redisdata` и переживают перезапуск и пересборку.
+
+Запускайте **один** экземпляр бота на токен: планировщик напоминаний живёт внутри процесса,
+а два экземпляра с одним токеном будут перехватывать друг у друга события MAX.
+
+**Переезд с SQLite на PostgreSQL** (данные из `./data/peremena.db` переносятся в базу compose):
+
+```bash
+docker compose stop bot
+docker compose run --rm --no-deps -v ./data:/import:ro bot copy-data sqlite+aiosqlite:////import/peremena.db
+docker compose up -d bot
 ```
 
 ### 4. Прод: вебхук и мини-приложение по HTTPS
@@ -156,6 +172,7 @@ python -m app unsubscribe --all      # снять все подписки (ну�
 python -m app commands               # обновить меню команд бота
 python -m app init-db                # создать таблицы
 python -m app digest 123456          # отправить учителю утреннюю сводку прямо сейчас
+python -m app copy-data <адрес базы> # перенести данные из другой базы (SQLite → PostgreSQL)
 ```
 
 Те же команды из контейнера:
@@ -232,6 +249,25 @@ python -m app run
 pip install -r requirements.txt -r requirements-dev.txt
 python -m pytest -q
 ```
+
+Те же тесты на PostgreSQL (каждый тест начинается с чистой схемы):
+
+```bash
+docker run -d --name peremena-testpg -e POSTGRES_USER=test -e POSTGRES_PASSWORD=test -e POSTGRES_DB=test -p 55432:5432 postgres:16-alpine
+TEST_DATABASE_URL=postgresql://test:test@127.0.0.1:55432/test python -m pytest -q
+```
+
+## Миграции базы
+
+Схема описана в `app/models.py`, миграции — в `app/migrations` (Alembic). Сервис применяет их при старте.
+База, созданная до появления миграций, автоматически достраивается и помечается версией `0001` без потери данных.
+После изменения моделей:
+
+```bash
+alembic revision --autogenerate -m "что изменилось"   # адрес базы берётся из DATABASE_URL
+```
+
+Тест `tests/test_migrations.py` падает, если модели изменили, а миграцию не написали.
 
 ## Структура
 

@@ -8,6 +8,7 @@
     python -m app commands         — обновить меню команд бота
     python -m app init-db          — создать таблицы в базе
     python -m app digest <user_id> — отправить учителю утреннюю сводку прямо сейчас
+    python -m app copy-data <url>  — перенести данные из другой базы (SQLite → PostgreSQL)
 """
 from __future__ import annotations
 
@@ -93,6 +94,43 @@ async def _init_db() -> int:
     return 0
 
 
+async def _copy_data(src_url: str) -> int:
+    """Переносит все данные из другой базы (например, SQLite) в DATABASE_URL — для переезда на PostgreSQL."""
+    from sqlalchemy import func, select, text
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from . import db, models  # noqa: F401
+
+    dst_url = get_settings().database_url
+    await db.init_db(dst_url)  # схема назначения — миграциями
+    src = create_async_engine(db._normalize_url(src_url))
+    copied = {}
+    try:
+        async with src.connect() as s_conn, db._engine.begin() as d_conn:
+            for table in db.Base.metadata.sorted_tables:  # родительские таблицы раньше дочерних
+                if await d_conn.scalar(select(func.count()).select_from(table)):
+                    sys.exit(f"В таблице {table.name} базы назначения уже есть данные — перенос остановлен")
+                rows = [dict(r._mapping) for r in await s_conn.execute(select(table))]
+                if rows:
+                    await d_conn.execute(table.insert(), rows)
+                copied[table.name] = len(rows)
+            if d_conn.dialect.name == "postgresql":
+                # счётчики автоинкремента — после максимального перенесённого id
+                for table in db.Base.metadata.sorted_tables:
+                    if "id" in table.c and table.c.id.primary_key:  # таблицы с числовым id-счётчиком
+                        await d_conn.execute(text(
+                            f"SELECT setval(pg_get_serial_sequence('{table.name}', 'id'), "
+                            f"COALESCE((SELECT MAX(id) FROM {table.name}), 0) + 1, false)"))
+    finally:
+        await src.dispose()
+        await db.close_db()
+    for name, n in copied.items():
+        if n:
+            print(f"{name}: {n}")
+    print("Перенос завершён")
+    return 0
+
+
 async def _digest(user_id: int) -> int:
     from . import db
     from .core import Ctx, set_ctx
@@ -131,6 +169,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("subscriptions", help="список вебхук-подписок")
     sub.add_parser("commands", help="обновить меню команд бота")
     sub.add_parser("init-db", help="создать таблицы")
+    cp = sub.add_parser("copy-data", help="перенести данные из другой базы в DATABASE_URL")
+    cp.add_argument("source", help="адрес исходной базы, например sqlite:////srv/data/peremena.db")
     d = sub.add_parser("digest", help="утренняя сводка учителю сейчас")
     d.add_argument("user_id", type=int)
     args = p.parse_args(argv)
@@ -154,6 +194,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_commands())
     if args.cmd == "init-db":
         return asyncio.run(_init_db())
+    if args.cmd == "copy-data":
+        return asyncio.run(_copy_data(args.source))
     if args.cmd == "digest":
         return asyncio.run(_digest(args.user_id))
     p.print_help()

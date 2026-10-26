@@ -20,7 +20,7 @@ COPY app ./app
 COPY webapp ./webapp
 COPY site ./site
 
-RUN useradd --system --uid 10001 --home /srv peremena \
+RUN useradd --uid 10001 --home-dir /srv --no-create-home peremena \
     && mkdir -p /srv/data \
     && chown -R peremena /srv/data
 USER peremena
