@@ -9,7 +9,7 @@ from .. import keyboards as kb
 from ..core import ctx
 from ..models import User
 from ..services import chats, faq, polls, quiet, school, search, shelf, stats
-from ..timeutil import fmt_dt, fmt_minutes, parse_deadline, parse_hours, preset_deadline
+from ..timeutil import fmt_dt, fmt_minutes, local_now, parse_deadline, parse_hours, preset_deadline
 from . import staff
 from .common import (
     ADMIN_HELP, ONBOARD_HELP, PARENT_HELP, SUBJECT_HELP, TEACHER_HELP, admin_menu, clear_state, get_state,
@@ -166,7 +166,11 @@ async def handle_state(uid: int, state: dict, text: str, msg: dict) -> bool:
         return False
     if flow == "shelf_caption":
         await clear_state(uid)
-        m = await shelf.update(data["mid"], uid, title=text) if text else None
+        m = None
+        if text:
+            # «Памятка по ПБ #безопасность» → подпись + тег, как при подписи к самому файлу
+            title, tags = shelf.split_caption(text)
+            m = await shelf.update(data["mid"], uid, title=title, tags=tags or None)
         if m:
             await send(uid, "Подписал:\n\n" + await shelf.describe(m))
         return True
@@ -242,12 +246,21 @@ async def on_template(uid: int, key: str) -> None:
 
 
 async def ask_deadline(uid: int) -> None:
+    from datetime import timedelta
+
+    user = await chats.get_user(uid)
+    now = local_now(user.tz if user else None)
+    first = [kb.cb("Завтра 18:00", "f:dl:tomorrow")]
+    if now.hour < 17:
+        # вечером «сегодня 18:00» уже прошло — кнопка вела бы на срок посреди ночи
+        first.insert(0, kb.cb("Сегодня 18:00", "f:dl:today"))
     rows = [
-        [kb.cb("Сегодня 18:00", "f:dl:today"), kb.cb("Завтра 18:00", "f:dl:tomorrow")],
+        first,
         [kb.cb("Пятница 18:00", "f:dl:friday"), kb.cb("Через неделю", "f:dl:week")],
         [kb.cb("Без срока", "f:dl:none"), kb.cb("Отмена", "f:cancel")],
     ]
-    await send(uid, "⏱ До какого времени ждём ответы? Выберите или напишите: <b>28.09 18:00</b>, "
+    example = f"{now + timedelta(days=3):%d.%m} 18:00"
+    await send(uid, f"⏱ До какого времени ждём ответы? Выберите или напишите: <b>{example}</b>, "
                     "<b>завтра 9:00</b>, <b>пятница</b>.", rows)
 
 
@@ -686,7 +699,8 @@ async def show_chats(uid: int) -> None:
         lines.append(f"<b>{html.escape(c.title or str(c.chat_id))}</b> — в списке {len(members)}, {admin}")
         rows.append([kb.cb(f"🔄 {c.title[:20]}: обновить список", f"c:sync:{c.chat_id}"),
                      kb.cb("📥 Файлы из истории", f"c:hist:{c.chat_id}")])
-    lines.append("")
-    lines.append("<i>Чтобы я видел вопросы и файлы в чате и сверял ответы со списком класса, "
-                 "назначьте меня администратором с правом читать все сообщения.</i>")
+    if any(not c.bot_is_admin for c in my_chats):
+        lines.append("")
+        lines.append("<i>Чтобы я видел вопросы и файлы в чате и сверял ответы со списком класса, "
+                     "назначьте меня администратором с правом читать все сообщения.</i>")
     await send(uid, "\n".join(lines), rows)

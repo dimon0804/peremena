@@ -106,7 +106,12 @@ async def build_digest(teacher: User, include_empty: bool = False) -> tuple[str,
         )).all()
 
     now_local = local_now(teacher.tz)
-    lines = [f"☀️ <b>Доброе утро!</b> Сводка на {now_local:%d.%m}", ""]
+    # сводка приходит и не утром — когда учитель сам открывает бота; «Доброе утро» в полночь звучит странно
+    if 5 <= now_local.hour < 12:
+        head = f"☀️ <b>Доброе утро!</b> Сводка на {now_local:%d.%m}"
+    else:
+        head = f"📋 <b>Сводка</b> на {now_local:%d.%m}, {now_local:%H:%M}"
+    lines = [head, ""]
     buttons: list[list[dict]] = []
 
     hot = [p for p in polls if p.deadline and to_local(p.deadline, teacher.tz).date() <= now_local.date()]
