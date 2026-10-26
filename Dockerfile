@@ -15,6 +15,7 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 
 COPY certs ./certs
+COPY alembic.ini .
 COPY app ./app
 COPY webapp ./webapp
 COPY site ./site

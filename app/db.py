@@ -44,12 +44,35 @@ async def init_db(url: str) -> None:
     from . import models  # noqa: F401  регистрирует таблицы
 
     async with _engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-        await conn.run_sync(_add_missing_columns)
+        await conn.run_sync(_migrate)
+
+
+MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
+
+
+def _migrate(conn) -> None:
+    """Схема базы — через миграции Alembic (app/migrations).
+
+    База, созданная до появления миграций (create_all), сначала достраивается до схемы первой миграции,
+    затем помечается ею — данные сохраняются, дальше применяются только новые миграции."""
+    from alembic import command
+    from alembic.config import Config
+    from sqlalchemy import inspect
+
+    cfg = Config()
+    cfg.set_main_option("script_location", str(MIGRATIONS_DIR))
+    cfg.attributes["connection"] = conn
+    insp = inspect(conn)
+    legacy = insp.has_table("users") and not insp.has_table("alembic_version")
+    if legacy:
+        Base.metadata.create_all(conn)
+        _add_missing_columns(conn)
+        command.stamp(cfg, "0001")
+    command.upgrade(cfg, "head")
 
 
 def _add_missing_columns(conn) -> None:
-    """Лёгкая миграция: новые nullable-столбцы и столбцы со значением по умолчанию добавляются в старые таблицы."""
+    """Для баз без миграций: недостающие столбцы добавляются в старые таблицы перед отметкой 0001."""
     from sqlalchemy import inspect
 
     insp = inspect(conn)
