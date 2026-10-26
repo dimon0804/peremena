@@ -26,6 +26,10 @@ def test_site_pages_and_login_flow(tmp_path, monkeypatch):
         assert client.get("/login").status_code == 200
         assert client.get("/site.css").status_code == 200
         assert client.get("/app/").status_code == 200  # кабинет и мини-приложение по-прежнему на месте
+        # после обновления браузер должен брать новый код, а не старую копию из кэша
+        for path in ("/", "/site.js", "/login", "/app/", "/app/app.js"):
+            assert client.get(path).headers.get("cache-control") == "no-cache", path
+        assert "cache-control" not in client.get("/api/public/stats").headers
         stats = client.get("/api/public/stats").json()
         assert stats["bot_link"] == "https://max.ru/peremena_test_bot" and stats["classes"] == 0
 

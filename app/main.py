@@ -85,6 +85,18 @@ app.include_router(api_router)
 app.include_router(site_api_router)
 
 
+@app.middleware("http")
+async def revalidate_static(request: Request, call_next):
+    """Страницы, скрипты и стили сайта и мини-приложения браузер должен сверять с сервером (по ETag),
+    иначе после обновления у пользователей остаётся старый код — особенно во встроенном браузере MAX."""
+    response = await call_next(request)
+    path = request.url.path
+    if not path.startswith("/api/") and (path.endswith((".html", ".js", ".css")) or path.endswith("/")
+                                         or path in ("/login", "/app")):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 @app.post("/webhook")
 async def webhook(request: Request, x_max_bot_api_secret: str | None = Header(default=None)):
     settings = get_settings()
