@@ -159,6 +159,8 @@ class EventQueue:
                 return
             if reclaimed:
                 n = await self._deliveries(msg_id)
+                if n == 0:  # уже подтверждено: другой обработчик успел довести событие или отправить в dead-letter
+                    return
                 if n > self.max_attempts:  # процесс умирал или зависал на этом событии раз за разом
                     await self.to_dead(msg_id, fields, f"превышено число доставок ({n} > {self.max_attempts}): "
                                                        "обработчик падал или зависал", n)

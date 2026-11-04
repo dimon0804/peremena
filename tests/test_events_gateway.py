@@ -251,11 +251,12 @@ def test_event_that_kills_consumers_goes_dead_without_handling(redis_factory):
     живой обработчик по счётчику доставок отправляет его в dead-letter, не запуская обработку снова."""
     async def go():
         r = redis_factory()
-        q = _queue(r, max_attempts=2, reclaim_idle_ms=0)
+        q = _queue(r, max_attempts=2, reclaim_idle_ms=200)
         await q.ensure_group()
         await q.publish({"update_type": "x", "n": 1})
         await r.xreadgroup(q.group, "dead-1", {q.stream: ">"}, count=10)               # доставка 1
         await r.xautoclaim(q.stream, q.group, "dead-2", min_idle_time=0, start_id="0-0")  # доставка 2
+        await asyncio.sleep(0.25)  # «dead-2» тоже умер: событие простаивает дольше EVENT_RECLAIM_S
         calls = []
 
         async def handler(update):
@@ -272,6 +273,30 @@ def test_event_that_kills_consumers_goes_dead_without_handling(redis_factory):
     assert calls == []
     assert dead[0]["attempts"] == "3" and "превышено число доставок" in dead[0]["reason"]
     assert st["pending"] == 0
+
+
+def test_reclaimed_event_already_acked_is_skipped(redis_factory):
+    """Событие подобрали, а другой обработчик тем временем его подтвердил — повторно не обрабатываем."""
+    async def go():
+        r = redis_factory()
+        q = _queue(r, max_attempts=5)
+        await q.ensure_group()
+        await q.publish({"update_type": "x", "n": 1})
+        res = await r.xreadgroup(q.group, "other", {q.stream: ">"}, count=1)
+        msg_id, fields = res[0][1][0]
+        await r.xack(q.stream, q.group, msg_id)  # «other» успел закончить
+        calls = []
+
+        async def handler(update):
+            calls.append(update)
+        slots = asyncio.Semaphore(1)
+        await slots.acquire()
+        await q._handle(msg_id, fields, handler, slots, reclaimed=True)
+        st = await q.stats()
+        await _cleanup(r, q)
+        return calls, st
+    calls, st = run(go())
+    assert calls == [] and st["dead"] == 0
 
 
 def test_unparsable_event_goes_dead_at_once(redis_factory):
@@ -536,6 +561,27 @@ def test_resubscribe_scheduled_and_on_election():
             bg.shutdown()
     run(go())
     assert len(api.subscribed) == 1
+
+
+# ---------------------------------------------------------------- ответ на нажатие после обрыва
+def test_callback_answer_retried_after_read_error():
+    """Обрыв чтения ответа MAX на POST /answers — повторяем: иначе кнопка у родителя остаётся «нажатой».
+    Отправку сообщения по-прежнему не повторяем (tests/test_max_api.py) — там повтор дал бы дубль."""
+    import httpx
+
+    from app.max_api import MaxClient
+
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        if len(calls) == 1:
+            raise httpx.ReadError("connection reset")
+        return httpx.Response(200, json={"success": True})
+    c = MaxClient("token", "https://max.test")
+    c._http = httpx.AsyncClient(base_url="https://max.test", transport=httpx.MockTransport(handler))
+    assert run(c.answer_callback("cb-1", notification="Принято")) == {"success": True}
+    assert calls == ["/answers", "/answers"]
 
 
 # ---------------------------------------------------------------- командная строка

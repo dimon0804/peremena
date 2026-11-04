@@ -392,7 +392,10 @@ class MaxClient:
             if message.get("text") and len(message["text"]) > TEXT_LIMIT:
                 message = {**message, "text": message["text"][:TEXT_LIMIT - 1] + "…"}
             body["message"] = message
-        return await self.request("POST", "/answers", params={"callback_id": callback_id}, json=body)
+        # Повтор после обрыва безопасен: это ответ на одно и то же нажатие (то же уведомление, та же правка),
+        # нового сообщения родителю он не создаёт. Без повтора кнопка остаётся «нажатой» — так было
+        # на стенде нагрузки: 1 из 3750 ответов потерян на ReadError переиспользованного соединения.
+        return await self.request("POST", "/answers", params={"callback_id": callback_id}, json=body, idempotent=True)
 
     # ------------------------------------------------------------------ chats
     async def get_chat(self, chat_id: int) -> dict:
