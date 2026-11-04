@@ -62,8 +62,9 @@ def _set_session(request: Request, response: Response, token: str, max_age: int)
 
 
 def _client_ip(request: Request) -> str:
-    fwd = request.headers.get("x-forwarded-for", "")
-    return fwd.split(",")[0].strip() or (request.client.host if request.client else "?")
+    # X-Forwarded-For сам не читаем: его подделает кто угодно. Uvicorn уже подставил адрес клиента
+    # из заголовка, если запрос пришёл от доверенного прокси (FORWARDED_ALLOW_IPS).
+    return request.client.host if request.client else "?"
 
 
 @router.post("/demo/start")

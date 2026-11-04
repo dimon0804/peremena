@@ -222,6 +222,24 @@ def test_demo_and_real_schools_do_not_mix_and_join_is_limited(env):
     assert err.value.status_code == 429
 
 
+# ---------------------------------------------------------------- адрес клиента и прокси
+def test_demo_limit_ignores_spoofed_forwarded_for(web):
+    with web(DEMO_PER_IP_HOUR="1") as client:
+        assert client.post("/api/demo/start", headers=H).status_code == 200
+        r = client.post("/api/demo/start", headers={**H, "X-Forwarded-For": "203.0.113.9"})
+        assert r.status_code == 429
+
+
+def test_forwarded_headers_trusted_only_from_local_proxy():
+    from uvicorn.middleware.proxy_headers import _TrustedHosts
+
+    from app.config import Settings
+
+    trusted = _TrustedHosts(Settings().forwarded_allow_ips)
+    assert "127.0.0.1" in trusted and "172.18.0.5" in trusted  # Caddy в сети Docker
+    assert "203.0.113.9" not in trusted and "*" not in Settings().forwarded_allow_ips
+
+
 # ---------------------------------------------------------------- загрузка файлов
 def test_upload_checks_auth_and_size_before_reading_body(web):
     import asyncio

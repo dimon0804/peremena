@@ -51,6 +51,9 @@ class Settings(BaseSettings):
     default_tz: str = "Europe/Moscow"
     host: str = "0.0.0.0"
     port: int = 8080
+    # Чьим заголовкам X-Forwarded-For/-Proto верить (адреса и сети через запятую): локальный прокси
+    # и внутренние сети Docker, где живёт Caddy. «*» — верить всем, тогда любой подделает свой IP.
+    forwarded_allow_ips: str = "127.0.0.1,::1,172.16.0.0/12"
     log_level: str = "INFO"
     secret_key: str = ""
 
