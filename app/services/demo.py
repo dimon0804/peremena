@@ -11,10 +11,11 @@ import random
 import secrets
 from datetime import timedelta
 
-from sqlalchemy import delete, or_, select
+from sqlalchemy import delete, func, or_, select
+from sqlalchemy.exc import IntegrityError
 
 from ..db import session, utcnow
-from ..demo_ids import DEMO_BASE, DEMO_SPAN, SANDBOX_SIZE, is_demo, sandbox_base, sandbox_id_of
+from ..demo_ids import DEMO_BASE, DEMO_SPAN, SANDBOX_SIZE, SLOTS, is_demo, sandbox_base, sandbox_id_of
 from ..models import (
     Absence, Announcement, Campaign, ClassChat, DemoSandbox, FaqEntry, InboxItem, Material, Member, Metric,
     OpenQuestion, Poll, PollTarget, School, SchoolMember, SubjectTeacher, User, WebSession,
@@ -56,12 +57,34 @@ def _name(first: str, last: str) -> str:
     return f"{last} {first[0]}."
 
 
-async def create_sandbox() -> DemoSandbox:
+async def live_count() -> int:
     async with session() as s:
-        sb = DemoSandbox(teacher_id=0, parent_id=0)
-        s.add(sb)
-        await s.flush()
-        sid = sb.id
+        return await s.scalar(select(func.count()).select_from(DemoSandbox)) or 0
+
+
+async def _take_slot() -> int:
+    """Свободный номер песочницы в пределах демо-диапазона: следующий по порядку, а когда они
+    кончились — наименьший освободившийся. Параллельный захват того же номера — повтор."""
+    for _ in range(5):
+        async with session() as s:
+            ids = set((await s.scalars(select(DemoSandbox.id))).all())
+        nxt = max(ids, default=0) + 1
+        sid = nxt if nxt < SLOTS else next((i for i in range(1, SLOTS) if i not in ids), 0)
+        if not sid:
+            raise RuntimeError("свободных демо-песочниц нет")
+        try:
+            async with session() as s:
+                s.add(DemoSandbox(id=sid, teacher_id=0, parent_id=0))
+        except IntegrityError:
+            continue
+        # номер наш — убираем возможные хвосты прежней песочницы с этим номером
+        await delete_sandbox(sid, keep_row=True)
+        return sid
+    raise RuntimeError("не удалось занять номер демо-песочницы")
+
+
+async def create_sandbox() -> DemoSandbox:
+    sid = await _take_slot()
     base = sandbox_base(sid)
     teacher, teacher2 = base + 1, base + 2
     chat, chat2 = -(base + 1), -(base + 2)
@@ -191,7 +214,7 @@ def _ranges(sid: int):
     return (base, base + SANDBOX_SIZE - 1), (-(base + SANDBOX_SIZE - 1), -base)
 
 
-async def delete_sandbox(sid: int) -> None:
+async def delete_sandbox(sid: int, keep_row: bool = False) -> None:
     (u_lo, u_hi), (c_lo, c_hi) = _ranges(sid)
     async with session() as s:
         users = lambda col: col.between(u_lo, u_hi)  # noqa: E731
@@ -209,6 +232,8 @@ async def delete_sandbox(sid: int) -> None:
             (School, users(School.created_by)), (WebSession, users(WebSession.user_id)), (User, users(User.user_id)),
             (DemoSandbox, DemoSandbox.id == sid),
         ):
+            if model is DemoSandbox and keep_row:
+                continue
             await s.execute(delete(model).where(cond))
 
 

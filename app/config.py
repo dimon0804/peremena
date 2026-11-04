@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     # Демо-режим «попробовать без регистрации»: песочница с вымышленным классом, ничего не уходит в MAX
     demo_enabled: bool = True
     demo_per_ip_hour: int = 10
+    demo_max_sandboxes: int = 1000  # живых песочниц одновременно (каждая — около 150 строк в базе)
 
     # --- Прочее ---
     default_tz: str = "Europe/Moscow"

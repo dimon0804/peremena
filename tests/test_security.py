@@ -318,6 +318,36 @@ def test_login_pin_bruteforce_is_limited_and_device_shown(env):
     assert "Вход на сайт" in text and "Safari, iPhone" in text and "запрошен в" in text
 
 
+# ---------------------------------------------------------------- демо-песочницы
+def test_demo_ids_never_leave_demo_range(env):
+    from app.db import session
+    from app.demo_ids import SLOTS, is_demo, sandbox_base
+    from app.models import DemoSandbox
+    from app.services import demo
+
+    loop, fake, c = env
+    with pytest.raises(ValueError):
+        sandbox_base(SLOTS)
+
+    async def occupy_last():
+        async with session() as s:
+            s.add(DemoSandbox(id=SLOTS - 1, teacher_id=0, parent_id=0))
+    run(loop, occupy_last())
+    sb = run(loop, demo.create_sandbox())  # номера после последнего нет — берётся освободившийся
+    assert sb.id == 1 and is_demo(sb.teacher_id) and is_demo(sb.parent_id)
+    assert run(loop, demo.create_sandbox()).id == 2
+
+
+def test_demo_global_limit_and_cleanup_without_token(web):
+    from app.main import maintenance_scheduler
+
+    with web(DEMO_MAX_SANDBOXES="1") as client:
+        assert client.post("/api/demo/start", headers=H).status_code == 200
+        assert client.post("/api/demo/start", headers=H).status_code == 503
+        jobs = {j.id for j in maintenance_scheduler(client.app.state.ctx).get_jobs()}
+        assert {"demo", "sessions"} <= jobs
+
+
 # ---------------------------------------------------------------- адрес клиента и прокси
 def test_demo_limit_ignores_spoofed_forwarded_for(web):
     with web(DEMO_PER_IP_HOUR="1") as client:

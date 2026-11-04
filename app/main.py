@@ -24,6 +24,21 @@ from .webapp.site_api import router as site_api_router
 log = logging.getLogger("peremena")
 
 
+def maintenance_scheduler(c: Ctx):
+    """Уборка без бота: просроченные демо-песочницы, сессии сайта и записи состояния в базе."""
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+    from .services import demo, websession
+
+    sched = AsyncIOScheduler(timezone="UTC")
+    opts = {"max_instances": 1, "coalesce": True, "misfire_grace_time": 120}
+    sched.add_job(demo.cleanup, "interval", hours=1, id="demo", **opts)
+    sched.add_job(websession.cleanup, "interval", hours=1, id="sessions", **opts)
+    if hasattr(c.kv, "cleanup"):
+        sched.add_job(c.kv.cleanup, "interval", hours=1, id="kv", **opts)
+    return sched
+
+
 async def startup() -> tuple[Ctx, list]:
     settings = get_settings()
     await db.init_db(settings.database_url)
@@ -37,6 +52,9 @@ async def startup() -> tuple[Ctx, list]:
                   "Режим разработки ИГНОРИРУЕТСЯ; уберите DEV_AUTH из настроек прода.")
     if not settings.max_bot_token:
         log.warning("MAX_BOT_TOKEN не задан — работает только веб-часть (API и мини-приложение)")
+        sched = maintenance_scheduler(c)  # демо и сессии убираем и без бота
+        sched.start()
+        background.append(sched)
         return c, background
     try:
         me = await api.get_me()

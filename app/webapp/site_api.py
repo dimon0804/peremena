@@ -96,6 +96,10 @@ async def demo_start(request: Request, response: Response):
     used = int(await c.kv.get(key) or 0)
     if used >= c.settings.demo_per_ip_hour:
         raise HTTPException(429, "Слишком много демо-песочниц с одного адреса — попробуйте через час")
+    if await demo.live_count() >= c.settings.demo_max_sandboxes:
+        await demo.cleanup()  # сначала убираем просроченные
+        if await demo.live_count() >= c.settings.demo_max_sandboxes:
+            raise HTTPException(503, "Демо сейчас переполнено — попробуйте чуть позже")
     await c.kv.set(key, used + 1, 3600)
     await websession.logout(request.cookies.get(websession.COOKIE))
     sb = await demo.create_sandbox()
