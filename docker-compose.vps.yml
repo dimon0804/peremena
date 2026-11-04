@@ -3,12 +3,13 @@
 #   docker compose -f docker-compose.yml -f docker-compose.vps.yml up -d --build
 #
 # Лимиты делят машину так, как её делит нагрузка (замер — docs/НАГРУЗКА.md, «Один VPS 2 vCPU / 4 ГБ»):
-#   bot   1.2 CPU / 1280 МБ — Python съедает больше всего процессора: ~5 мс на событие, сайт и мини-приложение;
-#   db    0.5 CPU / 2048 МБ — память под кэш страниц (shared_buffers + кэш ОС), процессора нужно втрое меньше бота;
-#   redis 0.15 CPU / 512 МБ — очередь событий, замки, лимит MAX: операции по микросекунде, память — под очередь;
-#   lb    0.15 CPU / 256 МБ — Caddy перед ботом.
-# Итого 2.0 CPU и 4096 МБ. Системе и хостовому nginx/Caddy остаётся то, что ядро не отдаёт контейнерам сверх
-# лимитов, — на настоящем VPS с 4 ГБ имеет смысл снизить db до 1792M.
+#   bot   1.4 CPU / 1280 МБ — упирается первым: под пиком съедает весь свой лимит, остальным нужно в разы меньше;
+#   db    0.4 CPU / 2048 МБ — на потолке бота PostgreSQL занимает до ~0.4 CPU; память — под кэш страниц;
+#   redis 0.1 CPU / 512 МБ  — очередь, замки, лимит MAX: до 0.1 CPU; ~0,8 КБ памяти на событие в очереди;
+#   lb    0.1 CPU / 256 МБ  — Caddy перед ботом: до 0.13 CPU на 3000 классов.
+# Итого 2.0 CPU и 4096 МБ. Деление 1.2/0.5/0.15/0.15 мерили тоже — ответ на нажатие на пике 1000 классов
+# был втрое медленнее. Под пиком вся установка заняла ~0,5 ГБ памяти из 4: упор — процессор, не память.
+# Лимиты можно поменять без правки файла: BOT_CPUS, DB_CPUS, REDIS_CPUS, LB_CPUS, *_MEMORY.
 #
 # Соединений с базой: WEB_CONCURRENCY × (DB_POOL_SIZE + DB_MAX_OVERFLOW) = 2 × (8 + 8) = 32 < max_connections=60.
 services:
@@ -16,22 +17,22 @@ services:
     environment:
       ROLE: all
       EVENT_QUEUE: redis
-      # два процесса uvicorn: каждый и принимает вебхуки, и обрабатывает очередь — 1.2 CPU используются целиком
+      # два процесса uvicorn: каждый и принимает вебхуки, и обрабатывает очередь — 1.4 CPU используются целиком
       WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
       HANDLER_CONCURRENCY: ${HANDLER_CONCURRENCY:-32}
       DB_POOL_SIZE: ${DB_POOL_SIZE:-8}
       DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-8}
       # журнал каждого запроса пишет хостовый nginx/Caddy; в процессе бота это лишний процессор на пике
       ACCESS_LOG: ${ACCESS_LOG:-false}
-      # ~0,7 КБ на событие в Redis: 200 000 — около 150 МБ при лимите Redis 384 МБ
+      # ~0,8 КБ на событие в Redis (замер): 200 000 — около 160 МБ при лимите Redis 384 МБ
       EVENT_STREAM_MAXLEN: ${EVENT_STREAM_MAXLEN:-200000}
       EVENT_BACKLOG_WARN: ${EVENT_BACKLOG_WARN:-5000}
       EVENT_READY_BACKLOG: ${EVENT_READY_BACKLOG:-20000}
     deploy:
       resources:
         limits:
-          cpus: "1.2"
-          memory: 1280M
+          cpus: "${BOT_CPUS:-1.4}"
+          memory: ${BOT_MEMORY:-1280M}
 
   db:
     command:
@@ -54,15 +55,15 @@ services:
       - checkpoint_completion_target=0.9
       - -c
       - random_page_cost=1.1
-      # фоновые параллельные запросы на 0.5 CPU только мешают коротким запросам бота
+      # параллельные планы на 0.4 CPU только мешают коротким запросам бота
       - -c
       - max_parallel_workers_per_gather=0
     shm_size: 256mb
     deploy:
       resources:
         limits:
-          cpus: "0.5"
-          memory: 2048M
+          cpus: "${DB_CPUS:-0.4}"
+          memory: ${DB_MEMORY:-2048M}
 
   redis:
     # очередь, замки и дедупликация — в памяти; снимок раз в минуту, чтобы очередь пережила перезапуск.
@@ -72,12 +73,12 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.15"
-          memory: 512M
+          cpus: "${REDIS_CPUS:-0.1}"
+          memory: ${REDIS_MEMORY:-512M}
 
   lb:
     deploy:
       resources:
         limits:
-          cpus: "0.15"
-          memory: 256M
+          cpus: "${LB_CPUS:-0.1}"
+          memory: ${LB_MEMORY:-256M}

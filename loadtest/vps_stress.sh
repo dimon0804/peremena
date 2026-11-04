@@ -59,9 +59,11 @@ for N in "$@"; do
   INSPECT=$(for c in bot db redis lb; do
     docker inspect -f "{\"name\":\"$c\",\"restarts\":{{.RestartCount}},\"oom_killed\":{{.State.OOMKilled}},\"status\":\"{{.State.Status}}\"}" "$PROJECT-$c-1"
   done | paste -sd, - | sed 's/^/[/; s/$/]/')
-  CONFIG=$(docker exec "$PROJECT-bot-1" python -c \
-    "import json,os; print(json.dumps({k: os.environ.get(k) for k in ('WEB_CONCURRENCY','HANDLER_CONCURRENCY','DB_POOL_SIZE','DB_MAX_OVERFLOW','MAX_RPS','ACCESS_LOG','EVENT_STREAM_MAXLEN')}))")
-  CONFIG=$(echo "$CONFIG" | sed "s/}\$/, \"FAKE_LIMIT\": \"${FAKE_LIMIT:-30}\", \"DURATION\": \"$DURATION\"}/")
+  CONFIG=$(docker exec "$PROJECT-bot-1" python -c     "import json,os; print(json.dumps({k: os.environ.get(k) for k in ('WEB_CONCURRENCY','HANDLER_CONCURRENCY','DB_POOL_SIZE','DB_MAX_OVERFLOW','MAX_RPS','ACCESS_LOG','EVENT_STREAM_MAXLEN')}))")
+  LIMITS=$(for c in bot db redis lb; do
+    docker inspect -f "\"$c\": {\"cpus\": {{.HostConfig.NanoCpus}}, \"memory\": {{.HostConfig.Memory}}}" "$PROJECT-$c-1"
+  done | paste -sd, -)
+  CONFIG=$(echo "$CONFIG" | sed "s/}\$/, \"FAKE_LIMIT\": \"${FAKE_LIMIT:-30}\", \"DURATION\": \"$DURATION\", \"limits\": {$LIMITS}}/")
   "${P[@]}" run --rm -T loadgen loadtest/vps_profile.py merge --step "loadtest/results/raw/$LABEL/step-$N.json" \
     --stats "$STATS" --logs "$RAW/bot-$N.log" --t0 "$T0" --t1 "$T1" --inspect "$INSPECT" --config "$CONFIG" \
     --label "$LABEL" --out "loadtest/results/vps-$LABEL-$N.json"
