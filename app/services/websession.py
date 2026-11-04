@@ -8,7 +8,9 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import secrets
+import time
 from datetime import timedelta
 
 from sqlalchemy import delete, select
@@ -20,16 +22,55 @@ from ..models import User, WebSession
 CODE_TTL = 10 * 60
 SESSION_DAYS = 30
 COOKIE = "pm_session"
+# Метка браузера, который начал вход: сессию по коду получит только он, а не тот, кто подсмотрел код
+LOGIN_COOKIE = "pm_login"
 
 
 def _hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-async def start_login(user_agent: str = "") -> str:
+def new_nonce(current: str | None = None) -> str:
+    """Метка браузера для входа. Уже выданную оставляем — чтобы вход работал в нескольких вкладках."""
+    if current and 20 <= len(current) <= 64 and current.replace("-", "").replace("_", "").isalnum():
+        return current
+    return secrets.token_urlsafe(24)
+
+
+async def start_login(user_agent: str = "", nonce: str = "") -> str:
     code = secrets.token_urlsafe(12).replace("-", "x").replace("_", "y")  # payload MAX: [A-Za-z0-9_-]
-    await ctx().kv.set(f"login:{code}", {"status": "pending", "ua": user_agent[:300]}, CODE_TTL)
+    await ctx().kv.set(f"login:{code}", {"status": "pending", "ua": user_agent[:300], "at": int(time.time()),
+                                         "nonce": _hash(nonce) if nonce else ""}, CODE_TTL)
     return code
+
+
+def device_label(user_agent: str) -> str:
+    """«Chrome, Windows» — кратко, чтобы человек в боте узнал свой компьютер."""
+    ua = user_agent or ""
+    browser = next((name for mark, name in (
+        ("YaBrowser", "Яндекс Браузер"), ("Edg/", "Edge"), ("OPR/", "Opera"), ("Firefox/", "Firefox"),
+        ("Chrome/", "Chrome"), ("Safari/", "Safari"),
+    ) if mark in ua), "")
+    system = next((name for mark, name in (
+        ("Android", "Android"), ("iPhone", "iPhone"), ("iPad", "iPad"), ("Windows", "Windows"),
+        ("Mac OS X", "macOS"), ("Linux", "Linux"),
+    ) if mark in ua), "")
+    return ", ".join(x for x in (browser, system) if x) or "неизвестное устройство"
+
+
+async def login_origin(data: dict, user_id: int) -> str:
+    """«Устройство: Chrome, Windows · запрошен в 14:32» — время в поясе пользователя."""
+    from datetime import datetime, timezone
+
+    from ..timeutil import to_local
+    from .chats import get_user
+
+    text = "Устройство: " + device_label(data.get("ua", ""))
+    if data.get("at"):
+        user = await get_user(user_id)
+        when = datetime.fromtimestamp(int(data["at"]), timezone.utc).replace(tzinfo=None)
+        text += f" · запрошен в {to_local(when, user.tz if user else None):%H:%M}"
+    return text
 
 
 async def make_pin(code: str) -> str:
@@ -43,9 +84,17 @@ async def make_pin(code: str) -> str:
     raise RuntimeError("не удалось выдать код входа")
 
 
-async def code_by_pin(pin: str) -> str | None:
+PIN_TRIES_PER_HOUR = 10
+
+
+async def code_by_pin(pin: str, user_id: int | None = None) -> str | None:
+    """Код входа по 6 цифрам. С user_id — не больше PIN_TRIES_PER_HOUR попыток в час (против перебора)."""
+    from .. import ratelimit
+
     pin = "".join(ch for ch in pin if ch.isdigit())
     if len(pin) != 6:
+        return None
+    if user_id is not None and not await ratelimit.hit("pin", user_id, PIN_TRIES_PER_HOUR, 3600):
         return None
     code = await ctx().kv.get(f"loginpin:{pin}")
     return code if isinstance(code, str) else None
@@ -73,14 +122,21 @@ async def reject_login(code: str) -> None:
         await ctx().kv.set(f"login:{code}", data, CODE_TTL)
 
 
-async def finish_login(code: str) -> tuple[str, str | None]:
-    """(статус, токен). Токен выдаётся один раз — код после этого сгорает."""
+async def finish_login(code: str, nonce: str | None = None) -> tuple[str, str | None]:
+    """(статус, токен). Токен выдаётся один раз — код после этого сгорает.
+    Если вход начат с меткой браузера, статус и сессию получает только браузер с той же меткой."""
     data = await get_login(code)
     if not data:
         return "expired", None
+    expected = data.get("nonce") or ""
+    if expected and not hmac.compare_digest(expected.encode(), _hash(nonce or "").encode()):
+        return "expired", None  # чужой браузер: для него этого кода как будто нет
     if data.get("status") != "confirmed":
         return data.get("status", "pending"), None
-    await ctx().kv.delete(f"login:{code}")
+    # забираем код атомарно: из параллельных опросов сессию получит только один
+    data = await ctx().kv.pop(f"login:{code}")
+    if not data or data.get("status") != "confirmed":
+        return "expired", None
     return "ok", await issue(data["user_id"], data.get("ua", ""))
 
 

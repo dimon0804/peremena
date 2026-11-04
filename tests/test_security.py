@@ -245,6 +245,72 @@ def test_webhook_non_ascii_secret_is_403_not_500(web):
         assert r.status_code == 403
 
 
+# ---------------------------------------------------------------- вход на сайт через бота
+def test_login_code_works_only_in_browser_that_started_it(web, monkeypatch):
+    import asyncio
+
+    from fastapi.testclient import TestClient
+
+    from app.services import websession
+
+    with web(MAX_BOT_TOKEN="test-token") as client:
+        assert client.post("/api/auth/start").status_code == 403  # без X-Peremena
+        assert client.post("/api/auth/logout").status_code == 403
+        client.get("/api/me?dev_user=777")
+        start = client.post("/api/auth/start", headers={**H, "User-Agent": "Mozilla/5.0 (Windows NT 10.0) "
+                                                        "Chrome/120.0 Safari/537.36"}).json()
+        asyncio.run(websession.confirm_login(start["code"], 777))
+        # подсмотревший код (другой браузер, без метки) сессию не получает и даже статуса не видит
+        other = TestClient(client.app)
+        r = other.get(f"/api/auth/status?code={start['code']}")
+        assert r.json()["status"] == "expired" and websession.COOKIE not in other.cookies
+        # браузер, начавший вход, — получает
+        assert client.get(f"/api/auth/status?code={start['code']}").json()["status"] == "ok"
+        assert client.get("/api/me").json()["user"]["id"] == 777
+        assert client.post("/api/auth/logout", headers=H).status_code == 200
+
+        monkeypatch.setattr("app.webapp.site_api.AUTH_STARTS_PER_HOUR", 2)
+        codes = [client.post("/api/auth/start", headers=H).status_code for _ in range(3)]
+        assert codes[-1] == 429
+
+
+def test_parallel_finish_login_gives_one_session(env):
+    import asyncio
+
+    from app.services import websession
+    from app.state import DbKV
+
+    loop, fake, c = env
+    for kv in (c.kv, DbKV()):
+        c.kv = kv
+        code = run(loop, websession.start_login("ua"))
+        run(loop, websession.confirm_login(code, 777))
+
+        async def race():
+            return await asyncio.gather(*[websession.finish_login(code) for _ in range(5)])
+        tokens = [t for _, t in run(loop, race()) if t]
+        assert len(tokens) == 1, type(kv).__name__
+
+
+def test_login_pin_bruteforce_is_limited_and_device_shown(env):
+    from app.services import websession
+
+    from .conftest import msg_update
+
+    loop, fake, c = env
+    code = run(loop, websession.start_login("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0) Safari/604.1"))
+    pin = run(loop, websession.make_pin(code))
+    wrong = [f"{(int(pin) + i) % 1_000_000:06d}" for i in range(1, 11)]
+    for i, p in enumerate(wrong):
+        run(loop, handle_update(msg_update(TEACHER, p, mid=f"w{i}")))
+    run(loop, handle_update(msg_update(TEACHER, pin, mid="right")))
+    assert "нет или он устарел" in fake.texts_to(user_id=TEACHER["user_id"])[-1]
+    # другой пользователь со своим лимитом — видит запрос и устройство
+    run(loop, handle_update(msg_update(TEACHER2, pin, mid="t2")))
+    text = fake.texts_to(user_id=TEACHER2["user_id"])[-1]
+    assert "Вход на сайт" in text and "Safari, iPhone" in text and "запрошен в" in text
+
+
 # ---------------------------------------------------------------- адрес клиента и прокси
 def test_demo_limit_ignores_spoofed_forwarded_for(web):
     with web(DEMO_PER_IP_HOUR="1") as client:

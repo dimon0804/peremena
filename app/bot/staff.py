@@ -392,11 +392,13 @@ async def on_login_cb(cid: str, uid: int, tail: str) -> None:
 
 
 async def ask_login_confirm(uid: int, code: str) -> None:
-    if not await websession.get_login(code):
+    data = await websession.get_login(code)
+    if not data:
         await send(uid, "Код для входа устарел. Обновите страницу на сайте и попробуйте ещё раз.")
         return
-    await send(uid, "🔐 <b>Вход на сайт «Перемены»</b>\n\nПодтвердите, только если вы сами сейчас входите "
-                    "на сайт. Если код или ссылку прислал кто-то другой — нажмите «Это не я».",
+    await send(uid, "🔐 <b>Вход на сайт «Перемены»</b>\n\n" + html.escape(await websession.login_origin(data, uid))
+               + "\n\nПодтвердите, только если вы сами сейчас входите "
+                 "на сайт. Если код или ссылку прислал кто-то другой — нажмите «Это не я».",
                [[kb.cb("✅ Войти", f"lg:ok:{code}"), kb.cb("Это не я", f"lg:no:{code}")]])
 
 
@@ -408,7 +410,7 @@ async def try_login_pin(uid: int, text: str) -> bool:
     m = PIN_RE.match(text or "")
     if not m:
         return False
-    code = await websession.code_by_pin(m[1] + m[2])
+    code = await websession.code_by_pin(m[1] + m[2], uid)
     if not code:
         await send(uid, "Такого кода входа нет или он устарел. Обновите страницу входа на сайте — появится новый.")
         return True
