@@ -18,9 +18,9 @@ from ..db import session, utcnow
 from ..demo_ids import DEMO_BASE, DEMO_SPAN, SANDBOX_SIZE, SLOTS, is_demo, sandbox_base, sandbox_id_of
 from ..models import (
     Absence, Announcement, Campaign, ClassChat, DemoSandbox, FaqEmbedding, FaqEntry, InboxItem, IntegrationToken,
-    JournalLink, Lesson, LibraryItem, LibraryReport, Material, Member, Metric, OpenQuestion, Poll, PollTarget, Region,
-    RegionCampaign, RegionMember, RosterEntry, School, SchoolMember, SubjectTeacher, User, Webhook, WebhookDelivery,
-    WebSession,
+    JournalLink, Lesson, LibraryItem, LibraryReport, Material, Meeting, MeetingSlot, Member, Metric, OpenQuestion, Poll,
+    PollTarget, QuestionTiming, Region, RegionCampaign, RegionMember, RosterEntry, School, SchoolMember, SubjectTeacher,
+    TeacherActivity, User, Webhook, WebhookDelivery, WebSession,
 )
 from ..timeutil import local_now, to_utc
 from . import search
@@ -210,6 +210,7 @@ async def create_sandbox() -> DemoSandbox:
                              created_at=now - timedelta(days=rnd.randint(0, 6))) for _ in range(n))
 
         await _seed_integrations(s, sid, teacher, chat, excursion, PARENTS_9B, now)
+        await _seed_meetings_and_metrics(s, teacher, chat, parents, now, rnd)
 
         row = await s.get(DemoSandbox, sid)
         row.teacher_id, row.parent_id = teacher, parents[21]  # у этого «родителя» неотвеченные сборы
@@ -258,6 +259,38 @@ async def _seed_integrations(s, sid: int, teacher: int, chat: int, poll: Poll, p
                               payload=json.dumps(body, ensure_ascii=False, indent=2)))
 
 
+async def _seed_meetings_and_metrics(s, teacher: int, chat: int, parents: list[int], now, rnd) -> None:
+    """Запись на встречу (послезавтра, трое уже записались) и вымышленная история для метрик пилота:
+    время ответа на вопросы за месяц и активные дни учителя. Всё помечено demo — это не данные пилота."""
+    meet = Meeting(teacher_id=teacher, chat_id=chat, title="Консультации по итогам четверти", format="office",
+                   place="каб. 214", created_at=now - timedelta(days=1))
+    s.add(meet)
+    await s.flush()
+    start = local_now(TZ).replace(hour=15, minute=0, second=0, microsecond=0) + timedelta(days=2)
+    booked = {0: 3, 2: 8, 5: 12}  # номер слота → номер родителя
+    for i in range(8):
+        who = booked.get(i)
+        s.add(MeetingSlot(
+            meeting_id=meet.id, starts_at=to_utc(start + timedelta(minutes=15 * i)), minutes=15,
+            user_id=parents[who] if who is not None else None,
+            name=_name(*PARENTS_9B[who][:2]) if who is not None else "",
+            booked_at=now - timedelta(hours=rnd.randint(1, 20)) if who is not None else None))
+    for i in range(42):
+        asked = now - timedelta(minutes=rnd.randint(30, 29 * 24 * 60))
+        if i < 31:      # справочник и доска — секунды
+            by, delay = "bot", timedelta(seconds=rnd.randint(1, 6))
+        elif i < 39:    # учитель — в рабочее время, от минут до вечера
+            by, delay = "teacher", timedelta(minutes=rnd.randint(4, 300))
+        else:           # пока без ответа
+            by, delay = None, None
+        s.add(QuestionTiming(teacher_id=teacher, chat_id=chat, channel=rnd.choice(("dm", "dm", "app", "chat")),
+                             asked_at=asked, answered_at=asked + delay if by else None, answered_by=by,
+                             forwarded=by != "bot", demo=True))
+    for d in range(30):
+        if d == 29 or rnd.random() < 0.6:
+            s.add(TeacherActivity(user_id=teacher, day=(now - timedelta(days=d)).date().isoformat(), demo=True))
+
+
 async def sandbox_for(user_id: int) -> DemoSandbox | None:
     if not is_demo(user_id):
         return None
@@ -289,6 +322,9 @@ async def delete_sandbox(sid: int, keep_row: bool = False) -> None:
             (FaqEntry, users(FaqEntry.teacher_id)),
             (Material, users(Material.teacher_id)), (InboxItem, users(InboxItem.teacher_id)),
             (Metric, users(Metric.teacher_id)), (OpenQuestion, users(OpenQuestion.teacher_id)),
+            (QuestionTiming, users(QuestionTiming.teacher_id)), (TeacherActivity, users(TeacherActivity.user_id)),
+            (MeetingSlot, MeetingSlot.meeting_id.in_(select(Meeting.id).where(chats(Meeting.chat_id)))),
+            (Meeting, chats(Meeting.chat_id)),
             (WebhookDelivery, WebhookDelivery.webhook_id.in_(select(Webhook.id).where(users(Webhook.owner_id)))),
             (Webhook, users(Webhook.owner_id)), (IntegrationToken, users(IntegrationToken.owner_id)),
             (Campaign, Campaign.school_id.in_(school_ids)), (SchoolMember, SchoolMember.school_id.in_(school_ids)),

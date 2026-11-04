@@ -208,6 +208,14 @@ async def build_digest(teacher: User, include_empty: bool = False) -> tuple[str,
     # кто сегодня не придёт — список, который раньше учитель собирал из сообщений в чате
     from . import attendance, faq_learning
 
+    from . import meetings
+
+    meet_today = await meetings.today_lines(teacher)  # консультации с родителями сегодня
+    if meet_today:
+        lines.append(f"🤝 <b>Сегодня встречи с родителями ({len(meet_today)})</b>")
+        lines += meet_today
+        lines.append("")
+
     absent_text, absent_n = await attendance.render_day(teacher, with_title=False)
     if absent_n:
         lines.append(f"🤒 <b>Сегодня не придут ({absent_n})</b>")
@@ -238,7 +246,7 @@ async def build_digest(teacher: User, include_empty: bool = False) -> tuple[str,
             lines.append("")
 
     if not items and not polls and not closed_recent and not weekly and not absent_n and not auto_n \
-            and not include_empty:
+            and not meet_today and not include_empty:
         return None
     if not items and not polls and not closed_recent:
         lines.append("Ничего срочного. Хорошего дня!")

@@ -63,6 +63,10 @@ def split_caption(caption: str) -> tuple[str, str]:
 async def save(teacher_id: int, media: dict, caption: str = "", chat_id: int | None = None,
                source: str = "manual", sent_at=None) -> tuple[Material, bool]:
     """Сохраняет материал. Возвращает (материал, создан_ли_новый)."""
+    if source in ("manual", "upload"):  # файл учитель положил сам (а не бот подобрал из истории чата)
+        from . import metrics
+
+        await metrics.touch(teacher_id)
     title, tags = split_caption(caption)
     async with session() as s:
         existing = await s.scalar(select(Material).where(

@@ -1,7 +1,8 @@
 """Подписка на календарь (iCalendar, RFC 5545) по секретной ссылке.
 
-Учитель видит в своём Яндекс/Google/Apple Календаре сроки сборов («ответили 18 из 24») и домашку
-своих классов, родитель — сроки сборов, где ждут его ответа (с напоминанием), и домашние задания.
+Учитель видит в своём Яндекс/Google/Apple Календаре сроки сборов («ответили 18 из 24»), домашку
+своих классов и занятые слоты «Записи на встречу»; родитель — сроки сборов, где ждут его ответа
+(с напоминанием), домашние задания и свою встречу с учителем (с напоминанием за 2 часа).
 Календарь сам перечитывает ленту, поэтому цифры в описании свежие без единого действия учителя.
 
 В ленте нет чужих имён: у учителя — только счётчики, у родителя — только его собственный ответ.
@@ -11,11 +12,11 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from urllib.parse import quote
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from ..core import ctx
 from ..db import session
-from ..models import Announcement, Poll, User
+from ..models import Announcement, Meeting, MeetingSlot, Poll, User
 from ..services import board, chats, polls, school
 from ..timeutil import local_now, utcnow
 
@@ -115,6 +116,34 @@ async def _poll_rows(chat_ids: list[int]) -> list[Poll]:
         ).order_by(Poll.deadline))).all())
 
 
+async def _meeting_events(user_id: int, titles: dict[int, str]) -> list[list[str]]:
+    """Встречи: у учителя — занятые слоты его записей (без имён: кто записался — в боте, /meet),
+    у родителя — его собственная встреча с напоминанием за 2 часа."""
+    from ..services import meetings
+
+    since = utcnow() - timedelta(days=PAST_DAYS)
+    async with session() as s:
+        rows = (await s.execute(
+            select(MeetingSlot, Meeting).join(Meeting, Meeting.id == MeetingSlot.meeting_id).where(
+                MeetingSlot.user_id.is_not(None), MeetingSlot.starts_at >= since,
+                or_(Meeting.teacher_id == user_id, MeetingSlot.user_id == user_id))
+            .order_by(MeetingSlot.starts_at))).all()
+    out = []
+    for slot, m in rows:
+        cls = titles.get(m.chat_id, "")
+        where = meetings.fmt_format(m)
+        stamp = slot.booked_at or m.created_at
+        if m.teacher_id == user_id:
+            out.append(_event(f"meet-{slot.id}", f"🤝 {m.title}" + (f" · {cls}" if cls else ""),
+                              f"Записался родитель ({where}). Кто именно — в боте: /meet",
+                              start=slot.starts_at, minutes=slot.minutes, stamp=stamp))
+        else:
+            out.append(_event(f"meet-{slot.id}-u", f"🤝 Встреча с учителем: {m.title}",
+                              f"{where}\n{cls}\nОтменить или перенести — в боте: /meet",
+                              start=slot.starts_at, minutes=slot.minutes, alarm_before=120, stamp=stamp))
+    return out
+
+
 async def feed_for(user: User) -> str:
     """Лента пользователя: всё, что касается его как учителя, и всё, что касается его как родителя."""
     tz = user.tz or ctx().settings.default_tz
@@ -166,6 +195,7 @@ async def feed_for(user: User) -> str:
         events.append(_event(f"poll-{p.id}-u", summary, desc, start=p.deadline, alarm_before=alarm,
                              url=link, stamp=p.created_at))
 
+    events += await _meeting_events(user.user_id, titles)
     events += await _hw_events(sorted(set(staff_chats) | set(member)), titles, tz)
     name = "Перемена"
     if len(titles) == 1:

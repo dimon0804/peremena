@@ -1,12 +1,15 @@
 """Демо-данные для показа мини-приложения без MAX: python scripts/seed_demo.py
 
-Создаёт школу, два класса, сборы, справочник, доску и полку. Затем запустите сервис с DEV_AUTH=true
+Создаёт школу, два класса, сборы, справочник, доску и полку, а также вымышленную историю для метрик
+пилота (время ответа родителям, активные дни 60 учителей за 10 недель) — она помечена demo=True,
+и экран метрик прямо пишет, что это демо, а не пилот. Затем запустите сервис с DEV_AUTH=true
 и откройте http://localhost:8080/app/?dev_user=100 (классный руководитель и завуч),
 ?dev_user=120 (предметник) или ?dev_user=201 (родитель).
 """
 from __future__ import annotations
 
 import asyncio
+import random
 import sys
 from datetime import timedelta
 from pathlib import Path
@@ -16,8 +19,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app import db  # noqa: E402
 from app.config import get_settings  # noqa: E402
 from app.models import (  # noqa: E402
-    Announcement, ClassChat, FaqEntry, Material, Member, Metric, Poll, PollTarget, School, SchoolMember,
-    SubjectTeacher, User,
+    Announcement, ClassChat, FaqEntry, Material, Member, Metric, Poll, PollTarget, QuestionTiming, School,
+    SchoolMember, SubjectTeacher, TeacherActivity, User,
 )
 from app.timeutil import utcnow  # noqa: E402
 
@@ -95,8 +98,51 @@ async def main() -> None:
 
             ss.add_all(Metric(teacher_id=100, kind=kind, minutes=MINUTES[kind], created_at=now - timedelta(days=1))
                        for _ in range(n))
+        seed_pilot_history(ss, sch.id, now)
     await db.close_db()
     print("Демо-данные созданы")
+    print("Метрики пилота посчитаны на ВЫМЫШЛЕННОЙ истории (строки помечены demo) — это проверка расчёта, "
+          "а не результат пилота: /metrics в боте или /api/admin/metrics?dev_user=100")
+
+
+# Вымышленная история для метрик пилота. Все строки помечены demo=True: экран метрик и API прямо пишут,
+# что это демо, а не пилот. Учителя 5000+ — «коллеги» по демо-школе без своих классов, только активные дни.
+DEMO_TEACHERS = range(5000, 5060)
+DEMO_WEEKS = 10          # когорты по 6 учителей: приходят неделя за неделей последние 10 недель
+
+
+def seed_pilot_history(ss, school_id: int, now) -> None:
+    rnd = random.Random(7)
+    today = now.date()
+    monday = today - timedelta(days=today.weekday())
+    for i, uid in enumerate(DEMO_TEACHERS):
+        ss.add(User(user_id=uid, first_name=f"Учитель {i + 1}", last_name="(демо)"))
+        ss.add(SchoolMember(school_id=school_id, user_id=uid, role="teacher"))
+        first = monday - timedelta(weeks=DEMO_WEEKS - i % DEMO_WEEKS) + timedelta(days=rnd.randint(0, 4))
+        days = {first}
+        stays = rnd.random() < 0.72          # «прижился»: работает с ботом и через месяц
+        for d in range(1, (today - first).days + 1):
+            day = first + timedelta(days=d)
+            if day.weekday() >= 5:
+                continue
+            chance = 0.55 if stays else (0.35 if d < 12 else 0.03)
+            if rnd.random() < chance:
+                days.add(day)
+        ss.add_all(TeacherActivity(user_id=uid, day=d.isoformat(), demo=True) for d in sorted(days))
+    # классный руководитель 100: последние 30 дней активности и вопросы родителей с временем ответа
+    ss.add_all(TeacherActivity(user_id=100, day=(today - timedelta(days=d)).isoformat(), demo=True)
+               for d in range(30) if d == 29 or rnd.random() < 0.7)
+    for i in range(60):
+        asked = now - timedelta(minutes=rnd.randint(20, 29 * 24 * 60))
+        if i < 44:
+            by, delay = "bot", timedelta(seconds=rnd.randint(1, 8))
+        elif i < 56:
+            by, delay = "teacher", timedelta(minutes=rnd.randint(3, 360))
+        else:
+            by, delay = None, None
+        ss.add(QuestionTiming(teacher_id=100, chat_id=-5000, channel=rnd.choice(("dm", "dm", "app", "chat")),
+                              asked_at=asked, answered_at=asked + delay if by else None, answered_by=by,
+                              forwarded=by != "bot", demo=True))
 
 
 if __name__ == "__main__":

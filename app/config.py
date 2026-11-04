@@ -123,6 +123,10 @@ class Settings(BaseSettings):
         return out
 
     @property
+    def admin_ids(self) -> set[int]:
+        return self.platform_admins
+
+    @property
     def mode(self) -> str:
         if self.updates_mode in ("webhook", "polling"):
             return self.updates_mode

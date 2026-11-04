@@ -25,6 +25,9 @@ GROUP_SCORE = 0.85    # отвечаем в общем чате (только е
 
 async def add_entry(teacher_id: int, question: str, answer: str, keywords: str | None = None,
                     chat_id: int | None = None, school_id: int | None = None) -> FaqEntry:
+    from . import metrics
+
+    await metrics.touch(teacher_id)  # активный день учителя (удержание)
     async with session() as s:
         e = FaqEntry(
             teacher_id=teacher_id, chat_id=chat_id, school_id=school_id, question=question.strip()[:1000],
@@ -41,6 +44,9 @@ async def add_entry(teacher_id: int, question: str, answer: str, keywords: str |
 
 
 async def update_entry(entry_id: int, teacher_id: int, **fields) -> FaqEntry | None:
+    from . import metrics
+
+    await metrics.touch(teacher_id)  # активный день учителя (удержание)
     async with session() as s:
         e = await s.get(FaqEntry, entry_id)
         if e is None or e.teacher_id != teacher_id:

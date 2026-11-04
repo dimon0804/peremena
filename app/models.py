@@ -570,3 +570,73 @@ class WebhookDelivery(Base):
     error: Mapped[str] = mapped_column(String(300), default="")
     payload: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+# ---------------------------------------------------------------- Метрики пилота: время ответа и удержание
+class QuestionTiming(Base):
+    """Замер времени ответа родителю: когда спросили и когда пришёл первый ответ (бот или учитель).
+    Текста вопроса и того, кто спросил, здесь нет — только время, класс, канал и кто ответил."""
+    __tablename__ = "question_timings"
+    __table_args__ = (Index("ix_question_timings_teacher_asked", "teacher_id", "asked_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    teacher_id: Mapped[int] = mapped_column(BigInteger, index=True)   # чей класс (справочник)
+    chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    channel: Mapped[str] = mapped_column(String(10), default="dm")    # dm | chat | app
+    asked_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    answered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    answered_by: Mapped[str | None] = mapped_column(String(10), nullable=True)  # bot | teacher
+    forwarded: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())  # ушёл учителю
+    demo: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())  # демо-данные, не пилот
+
+
+class TeacherActivity(Base):
+    """Учитель был активен в этот день (UTC): одна строка на учителя в день — для когортного удержания."""
+    __tablename__ = "teacher_activity"
+    __table_args__ = (UniqueConstraint("user_id", "day"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    day: Mapped[str] = mapped_column(String(10), index=True)          # YYYY-MM-DD
+    demo: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+
+
+# ---------------------------------------------------------------- «Запись на встречу»
+class Meeting(Base):
+    """Консультации учителя с родителями по слотам: окна времени нарезаны на слоты одинаковой длины."""
+    __tablename__ = "meetings"
+    __table_args__ = (Index("ix_meetings_chat_closed", "chat_id", "closed"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    teacher_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    title: Mapped[str] = mapped_column(String(300), default="")
+    format: Mapped[str] = mapped_column(String(10), default="office")  # office — очно | call — звонок
+    place: Mapped[str] = mapped_column(String(300), default="")        # кабинет или как созвонимся
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    closed: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+
+    slots: Mapped[list["MeetingSlot"]] = relationship(
+        back_populates="meeting", cascade="all, delete-orphan", lazy="selectin", order_by="MeetingSlot.starts_at"
+    )
+
+
+class MeetingSlot(Base):
+    """Слот встречи. Занять можно только свободный слот (UPDATE … WHERE user_id IS NULL — без гонок),
+    а один родитель держит не больше одного слота на встречу (уникальность meeting_id + user_id)."""
+    __tablename__ = "meeting_slots"
+    __table_args__ = (
+        UniqueConstraint("meeting_id", "user_id"),
+        Index("ix_meeting_slots_remind", "reminded", "starts_at"),  # напоминания за 2 часа (tick)
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    meeting_id: Mapped[int] = mapped_column(ForeignKey("meetings.id", ondelete="CASCADE"), index=True)
+    starts_at: Mapped[datetime] = mapped_column(DateTime)              # UTC
+    minutes: Mapped[int] = mapped_column(Integer, default=15)
+    user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
+    name: Mapped[str] = mapped_column(String(300), default="")
+    booked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    reminded: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+
+    meeting: Mapped[Meeting] = relationship(back_populates="slots")

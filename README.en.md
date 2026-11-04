@@ -32,6 +32,9 @@ Built for the «Идея фикс» hackathon (“Teacher's Arsenal” track) by
 | 🏛 **School** | Classes join a school by code: a shared FAQ base and school-wide polls with a per-class breakdown for the deputy head. |
 | 🏛 **Education authority (region / district)** | `/region`: a school joins a district or region by code; methodologists join with a staff code or are appointed by a platform admin (`ADMIN_MAX_IDS`). A poll launched from above for the whole region, selected schools or grades is split into school-level and class-level polls; the homeroom teacher sees where it came from and may add a note, but cannot change the text. Delivery uses the regular poll dispatch within MAX rate limits. A bottom-up summary (“82 % answered, school No. 5 — 40 %”) with CSV export shows numbers only — no parents' names. |
 | 📚 **Template library** | `/library`: shared poll templates and FAQ cards, searchable by topic, type and grade, sorted by popularity, with a “taken N times” counter. One tap to take a template. Publishing is anonymous and checked for phone numbers, e-mails and children's names; reports and moderation by a platform admin; 20 starter templates from the team. Also in the mini app and `GET /api/v1/library`. |
+
+| 🤝 **Meeting sign-up** | `/meet`: the teacher sets time windows for parent consultations (in person or by phone); parents pick a free slot with a button, can cancel or reschedule, and get a reminder 2 hours before. Double booking is prevented by the database. Meetings show up in the teacher's schedule, morning digest and the iCal feed. |
+| 📈 **Pilot metrics** | Median time to answer a parent (bot or teacher, 7 and 30 days, p90, share answered by the bot, unanswered counted separately) and weekly-cohort teacher retention (D7, D30). Teachers see their answer time in `/stats`; the deputy head sees the school and platform admins (`ADMIN_MAX_IDS`) see everything via `/metrics` and `/api/admin/metrics`. Until a real pilot, numbers exist only on clearly labelled demo history. |
 | 🤒 **Absences**, 💰 **money collection**, ⏱ **usefulness counter**, 📱 **mini app** | Absence notes in one tap, money collections with paid/pending tracking, weekly stats, and a mini app / web dashboard with the same features. |
 
 The core has no generative AI: buttons, member lists, a database and deterministic search (Snowball stemming + trigrams).
@@ -220,7 +223,9 @@ TEST_DATABASE_URL=postgresql://test:test@127.0.0.1:55432/test python -m pytest -
 ## Data and security
 
 - No chat archive. Stored: what the teacher explicitly saved, who answered a poll, and short-lived working data
-  that expires automatically (unanswered questions — 30 days, digest items — 7 days, absence notes — 14 days).
+  that expires automatically (unanswered questions — 30 days, digest items — 7 days, absence notes — 14 days,
+  answer-time records without any text — 180 days, teacher active days — 400 days, meeting sign-ups — 30 days
+  after the last slot).
   Parents can erase their data with `/forget`.
 - Mini app sign-in is verified by the MAX launch-data signature (HMAC-SHA256); webhooks by a secret header;
   website sign-in is bound to the browser that started it; rate limits on codes and PINs.

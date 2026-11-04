@@ -1,7 +1,7 @@
 """регион и округ, сборы сверху, открытая библиотека шаблонов
 
 Revision ID: 0009
-Revises: 0007
+Revises: 0008
 Create Date: 2026-11-04 23:00:00
 
 Уровень выше школы: регион (и округ внутри него), методисты, сбор от управления, который
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 
 
 revision = '0009'
-down_revision = '0007'
+down_revision = '0008'
 branch_labels = None
 depends_on = None
 

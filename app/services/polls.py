@@ -143,6 +143,9 @@ def build_poll(teacher_id: int, chat_id: int, template: str, text: str, options:
 
 async def create_poll(teacher_id: int, chat_id: int, template: str, text: str, options: list[str],
                       deadline, amount: int | None = None, send_at=None) -> Poll:
+    from . import metrics
+
+    await metrics.touch(teacher_id)  # активный день учителя (удержание)
     async with session() as s:
         poll = build_poll(teacher_id, chat_id, template, text, options, deadline, amount, send_at)
         s.add(poll)
@@ -589,6 +592,10 @@ async def remind(poll_id: int, auto: bool = False) -> dict:
     poll = await get_poll(poll_id)
     if poll is None or poll.closed:
         return {"sent": 0, "group": 0, "pending": 0}
+    if not auto:
+        from . import metrics
+
+        await metrics.touch(poll.teacher_id)  # активный день учителя (удержание)
     if not auto and not await c.kv.add_once(f"rmd:{poll_id}", ttl=60):
         # двойное нажатие «Напомнить» (или кнопка + приложение) — второй раз родителям не пишем
         return {"sent": 0, "group": 0, "pending": 0, "dup": True}
@@ -667,6 +674,10 @@ async def close_poll(poll_id: int, by_deadline: bool = False) -> Poll | None:
     if not won or poll is None:
         return poll
     await stats.add(poll.teacher_id, "poll_done")
+    if not by_deadline:
+        from . import metrics
+
+        await metrics.touch(poll.teacher_id)  # активный день учителя (удержание)
     await _webhook("on_poll_closed", poll)
     if poll.group_message_id:
         try:

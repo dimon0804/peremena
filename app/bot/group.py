@@ -7,7 +7,7 @@ import secrets
 
 from .. import keyboards as kb
 from ..core import ctx
-from ..services import attendance, board, chats, faq, faq_learning, polls, quiet, search, shelf, stats
+from ..services import attendance, board, chats, faq, faq_learning, metrics, polls, quiet, search, shelf, stats
 
 log = logging.getLogger(__name__)
 
@@ -154,10 +154,15 @@ async def on_message(update: dict) -> None:
     # к боту обратились прямо в чате (@бот или ответом на его сообщение) — отвечаем и без автоответа:
     # «родитель или ученик спрашивает бота напрямую — в личке или упоминанием в чате»
     question = addressed_question(msg, text)
+    tm = None
     if question is not None:
-        if await answer_mention(chat, uid, question, body.get("mid")):
+        asked_at = metrics.asked_at_of(msg.get("timestamp"))
+        if await answer_mention(chat, uid, question, body.get("mid"), asked_at):
             return
         text = question
+        if question:
+            # вопрос боту без готового ответа: ждём учителя — его ответ реплаем закроет замер
+            tm = await metrics.opened(chat.teacher_id, chat_id, "chat", asked_at)
     elif not search.looks_like_question(text):
         return
 
@@ -196,7 +201,7 @@ async def on_message(update: dict) -> None:
                     kind="chat_question", chat_id=chat_id, from_user_id=uid, from_name=name, raw_text=text[:500],
                 )
     # запоминаем вопрос: если учитель ответит на него реплаем, предложим сохранить ответ
-    await c.kv.set(f"lq:{body.get('mid')}", {"text": text[:1000], "user_id": uid}, 3 * 24 * 3600)
+    await c.kv.set(f"lq:{body.get('mid')}", {"text": text[:1000], "user_id": uid, "tm": tm}, 3 * 24 * 3600)
     # и копим вопросы без ответа в справочнике — частые бот предложит учителю сохранить
     hits = faq.rank(text, await faq.candidates_for_chats([chat_id]), limit=1)
     if not hits or hits[0].score < faq.ANSWER_SCORE:
@@ -231,7 +236,7 @@ def addressed_question(msg: dict, text: str) -> str | None:
     return q.strip(" ,:;—-\n\t")
 
 
-async def answer_mention(chat, uid: int, question: str, mid: str | None) -> bool:
+async def answer_mention(chat, uid: int, question: str, mid: str | None, asked_at=None) -> bool:
     """Ответ на прямое обращение к боту в чате: доска, затем справочник (тот же порог, что в личке —
     человек спросил именно бота). True — ответили; False — ответа нет, вопрос идёт дальше (учителю/в подсказки)."""
     c = ctx()
@@ -247,6 +252,7 @@ async def answer_mention(chat, uid: int, question: str, mid: str | None) -> bool
         if items and await c.safe_send(chat_id=chat_id, text=await board.render_answer(items, question, tz),
                                        reply_to=mid):
             await stats.add(chat.teacher_id, "faq_answer")
+            await metrics.bot_answered(chat.teacher_id, chat_id, "chat", asked_at)
             return True
     hits = faq.rank(question, await faq.candidates_for_chats([chat_id]), limit=1)
     if hits and hits[0].score >= faq.ANSWER_SCORE:
@@ -255,6 +261,7 @@ async def answer_mention(chat, uid: int, question: str, mid: str | None) -> bool
                              attachments=kb.kb_list([[kb.cb("Это не то", f"fq:no:{e.id}")]])):
             await faq.mark_hit(e.id)
             await stats.add(e.teacher_id, "faq_answer")
+            await metrics.bot_answered(chat.teacher_id or e.teacher_id, chat_id, "chat", asked_at)
             return True
     if not await c.kv.add_once(f"mnx:{chat_id}:{uid}", ttl=10 * 60):
         return False  # «ответа нет» одному человеку — не чаще раза в 10 минут, чтобы не засорять чат
@@ -276,6 +283,10 @@ async def on_teacher_message(chat_id: int, uid: int, msg: dict, text: str) -> No
     link = msg.get("link") or {}
     if link.get("type") != "reply" or not text or len(text) < 2:
         return
+    asked = await c.kv.get(f"lq:{(link.get('message') or {}).get('mid')}")
+    if asked and asked.get("tm"):  # ответ на вопрос, заданный боту, — замер времени ответа закрыт учителем
+        await metrics.close(asked["tm"], "teacher")
+        await metrics.touch(uid)
     teacher = await chats.get_user(uid)
     if not teacher or not teacher.suggest_save:
         return
