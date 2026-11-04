@@ -69,6 +69,10 @@ def test_polling_survives_kv_errors_and_reports_liveness(env, monkeypatch):
 
     async def get_updates(marker, timeout=30):
         await asyncio.sleep(0.2)  # long polling: пока ждём, прошлая пачка успевает обработаться
+        # на PostgreSQL обработка дольше 0,2 с — ждём её явно, иначе маркер зависит от скорости машины
+        pending = [t for t in updates._tasks if not t.done()]
+        if pending:
+            await asyncio.wait(pending, timeout=5)
         calls["n"] += 1
         if calls["n"] > 4:
             raise asyncio.CancelledError
