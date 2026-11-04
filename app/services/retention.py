@@ -3,7 +3,8 @@
 Бот держит переписку родителей ровно столько, сколько она нужна для дела:
 * «входящие» учителя, уже показанные в сводке, — 7 дней (недоставленные — 30);
 * вопросы без ответа для подсказок справочнику — 30 дней (дальше они и так не учитываются);
-* отметки «не придёт» — 14 дней (хватает на сводку за прошлую неделю).
+* отметки «не придёт» — 14 дней (хватает на сводку за прошлую неделю);
+* уроки расписания с конкретной датой из выгрузки журнала — 60 дней после этой даты.
 Закрытые сборы хранятся — это история класса, но в них только имя и факт ответа.
 """
 from __future__ import annotations
@@ -15,7 +16,7 @@ from sqlalchemy import delete, select, update
 
 from ..core import ctx
 from ..db import session, utcnow
-from ..models import Absence, InboxItem, Member, OpenQuestion, Poll, PollTarget, User
+from ..models import Absence, InboxItem, Lesson, Member, OpenQuestion, Poll, PollTarget, User
 
 log = logging.getLogger(__name__)
 
@@ -23,6 +24,7 @@ INBOX_DELIVERED_DAYS = 7
 INBOX_PENDING_DAYS = 30
 OPEN_QUESTION_DAYS = 30
 ABSENCE_DAYS = 14
+LESSON_DAYS = 60
 FORGOTTEN_NAME = "Родитель (данные удалены)"
 
 
@@ -38,6 +40,8 @@ async def cleanup() -> dict:
             OpenQuestion.created_at < now - timedelta(days=OPEN_QUESTION_DAYS)))).rowcount
         out["absences"] = (await s.execute(delete(Absence).where(
             Absence.created_at < now - timedelta(days=ABSENCE_DAYS)))).rowcount
+        out["lessons"] = (await s.execute(delete(Lesson).where(
+            Lesson.day.is_not(None), Lesson.day < (now - timedelta(days=LESSON_DAYS)).date().isoformat()))).rowcount
     if any(out.values()):
         log.info("Очистка по срокам хранения: %s", out)
     return out

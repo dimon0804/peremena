@@ -1,4 +1,4 @@
-"""Бот: подписка на календарь (/calendar) и «что важно на неделе» (/week)."""
+"""Бот: подписка на календарь (/calendar), «что важно на неделе» (/week), вход в журнал (m:journal)."""
 from __future__ import annotations
 
 import html
@@ -60,7 +60,14 @@ async def show_week(uid: int) -> None:
     await send(uid, week.render(await week.collect(user)), [[kb.cb("🗓 В мой календарь", "m:cal")]])
 
 
-MENU = {"cal": show_calendar, "calnew": ask_rotate, "week": show_week}
+async def show_journal(uid: int) -> None:
+    from . import journal
+
+    if await chats.is_teacher(uid):
+        await journal.show(uid)
+
+
+MENU = {"cal": show_calendar, "calnew": ask_rotate, "week": show_week, "journal": show_journal}
 
 
 async def on_menu(uid: int, action: str) -> bool:

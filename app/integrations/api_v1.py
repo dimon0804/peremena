@@ -13,7 +13,7 @@ from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.openapi.utils import get_openapi
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
@@ -156,6 +156,44 @@ async def get_board(days: int = Query(14, ge=1, le=60), kind: str | None = Query
     return [{"id": a.id, "class": _class(key, a.chat_id), "kind": a.kind, "subject": a.subject or None,
              "text": a.text, "for_date": a.for_date, "created_at": a.created_at.isoformat() + "Z"}
             for a in items if board.is_visible(a) and (kind is None or a.kind == kind)]
+
+
+@router.get("/schedule", summary="Расписание уроков (из выгрузки журнала или «Дневник.ру»)")
+async def get_schedule(day: date | None = Query(None, description="YYYY-MM-DD, по умолчанию сегодня"),
+                       days: int = Query(7, ge=1, le=31), class_id: int | None = None,
+                       key: Key = Depends(api_key)):
+    from .journals import service as journal
+
+    owner = await chats.get_user(key.owner_id)
+    start = day or local_now(owner.tz if owner else None).date()
+    ids = [i for i in ([class_id] if class_id is not None else list(key.chats)) if i in key.chats]
+    out = []
+    for i in range(days):
+        d = start + timedelta(days=i)
+        for cid, lessons in (await journal.lessons_for(ids, d)).items():
+            out += [{"class": _class(key, cid), "day": d.isoformat(), "number": x.number or None,
+                     "subject": x.subject, "time": x.time or None, "room": x.room or None} for x in lessons]
+    return out
+
+
+@router.get("/export/{kind}.csv", summary="Выгрузка для журнала: absences — отсутствия, polls — итоги сборов",
+            response_class=Response)
+async def export_csv(kind: str, start: date = Query(alias="from"), end: date = Query(alias="to"),
+                     class_id: int | None = None, key: Key = Depends(api_key)):
+    """CSV в UTF-8 с BOM, разделитель «;» — открывается в Excel и загружается в импорт журналов и таблиц."""
+    from .journals import export
+
+    if kind not in ("absences", "polls"):
+        raise HTTPException(404, "Такой выгрузки нет: absences или polls")
+    if end < start or (end - start).days > 400:
+        raise HTTPException(422, "Период — от from до to, не длиннее 400 дней")
+    ids = [i for i in ([class_id] if class_id is not None else list(key.chats)) if i in key.chats]
+    titles = {cid: c.title for cid, c in key.chats.items()}
+    owner = await chats.get_user(key.owner_id)
+    data = await (export.absences_csv(ids, titles, start, end) if kind == "absences"
+                  else export.polls_csv(ids, titles, start, end, owner.tz if owner else None))
+    return Response(data, media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{kind}_{start:%Y%m%d}-{end:%Y%m%d}.csv"'})
 
 
 # ------------------------------------------------------------------ запись

@@ -29,6 +29,7 @@ from .webapp.api import router as api_router
 from .webapp.site_api import router as site_api_router
 from .integrations.api_v1 import router as api_v1_router
 from .integrations.routes import router as integrations_router
+from .integrations.journals.routes import router as journals_router
 
 log = logging.getLogger("peremena")
 
@@ -151,6 +152,7 @@ app.include_router(api_router)
 app.include_router(site_api_router)
 app.include_router(integrations_router)  # календарь, ключи, вебхуки, печать
 app.include_router(api_v1_router)        # открытый API для школьных систем
+app.include_router(journals_router)      # электронный журнал: импорт выгрузок, экспорт, «Дневник.ру»
 
 # Что разрешено грузить страницам сайта и мини-приложения: свои файлы и мост MAX (st.max.ru).
 # Инлайновые стили нужны интерфейсу (style="…" в разметке), инлайновых скриптов нет.
@@ -158,6 +160,7 @@ CSP = ("default-src 'self'; script-src 'self' https://st.max.ru; style-src 'self
        "img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self'; "
        "object-src 'none'; base-uri 'self'; form-action 'self'")
 BODY_LIMIT = 1024 * 1024  # JSON-запросы и вебхук; загрузка файлов проверяет свой лимит сама
+OWN_LIMIT = ("/api/materials/upload", "/api/journals/preview")  # здесь лимит проверяет сам обработчик
 DEV_ONLY = ("/api/docs", "/openapi.json")
 
 
@@ -210,7 +213,7 @@ class HttpPolicy:
                 except ValueError:
                     length = 0
                 break
-        if length > BODY_LIMIT and path != "/api/materials/upload":
+        if length > BODY_LIMIT and path not in OWN_LIMIT:
             return await JSONResponse({"detail": "Слишком большой запрос"}, status_code=413)(scope, receive, send)
         extra = [(b"x-content-type-options", b"nosniff"), (b"referrer-policy", b"strict-origin-when-cross-origin")]
         if path not in DEV_ONLY:

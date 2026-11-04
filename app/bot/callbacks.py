@@ -81,6 +81,12 @@ async def on_callback(update: dict) -> None:
         if head == "sc":
             await staff.on_school_cb(cid, uid, tail)
             return
+        if head == "jr":
+            await ack(cid)
+            from . import journal
+
+            await journal.on_cb(uid, tail)
+            return
         if head == "ab":
             await absence.on_cb(cid, uid, user, tail)
             return

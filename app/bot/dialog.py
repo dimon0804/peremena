@@ -10,7 +10,8 @@ from ..core import ctx
 from ..models import User
 from ..services import answers, chats, faq, faq_learning, polls, quiet, school, search, shelf, stats
 from ..timeutil import fmt_dt, fmt_minutes, local_now, parse_deadline, parse_hours, preset_deadline
-from . import absence, staff
+from . import absence, journal, staff
+from .journal import is_journal_caption
 from .common import (
     ADMIN_HELP, ONBOARD_HELP, PARENT_HELP, SUBJECT_HELP, TEACHER_HELP, admin_menu, clear_state, get_state,
     parent_menu, parse_command, send, set_state, subject_menu, teacher_menu,
@@ -45,6 +46,9 @@ async def on_message(update: dict) -> None:
         await staff.try_login_pin(uid, rest) or await send(
             uid, "Чтобы войти на сайт, отправьте мне 6 цифр со страницы входа, например: 123 456")
         return
+    if cmd == "journal" and shelf.extract_media(msg):
+        text = "журнал"  # файл с подписью «/journal» — это выгрузка, разбираем её ниже
+        cmd = None
     if cmd:
         await clear_state(uid)
         await run_command(uid, cmd, rest)
@@ -61,8 +65,13 @@ async def on_message(update: dict) -> None:
     roles = await school.roles(uid)
     is_teacher = roles.is_class_teacher
     if media:
-        if roles.is_class_teacher or roles.is_subject_teacher:
+        if roles.is_class_teacher and is_journal_caption(text) and any(m["type"] == "file" for m in media):
+            # «журнал», «выгрузка», «расписание» в подписи — это выгрузка из электронного журнала, а не материал
+            await journal.handle_file(uid, next(m for m in media if m["type"] == "file"))
+        elif roles.is_class_teacher or roles.is_subject_teacher:
             await save_to_shelf(uid, media, text)
+            if roles.is_class_teacher:
+                await journal.offer(uid, media)
         else:
             await send(uid, "Файлы на полку класса может класть только учитель. Если это справка — "
                             "передайте её учителю так, как он просил.")
@@ -85,6 +94,10 @@ async def run_command(uid: int, cmd: str, rest: str) -> None:
         return
     if cmd == "shelf":
         await (shelf_search(uid, rest) if rest else ask_shelf(uid))
+        return
+    if cmd == "journal":
+        if await _teacher_or_explain(uid):
+            await journal.show(uid)
         return
     if cmd in ("week", "calendar"):
         from . import integrations
@@ -176,6 +189,8 @@ async def handle_state(uid: int, state: dict, text: str, msg: dict) -> bool:
         return await absence.name_step(uid, data, text) if step == "name" and text else False
     if flow == "board":
         return await staff.board_step(uid, step, data, text)
+    if flow == "journal":
+        return await journal.on_state(uid, msg)
     if flow == "subj_name":
         return await staff.subj_name_step(uid, data, text) if text else False
     if flow == "school_name":
@@ -612,7 +627,7 @@ async def answer_text(uid: int, text: str, is_teacher: bool) -> None:
         await send(uid, ONBOARD_HELP)
     elif a.kind == "absence":
         await absence.offer(uid)
-    elif a.kind in ("board", "news"):
+    elif a.kind in ("board", "news", "schedule"):
         await send(uid, a.text)
     elif a.kind == "board_missing":
         await send(uid, a.text, [[kb.cb("✉️ Спросить учителя", "fw:ask")]] if a.can_forward else None)

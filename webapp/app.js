@@ -488,6 +488,7 @@
         render(`<h1>Польза и настройки</h1>
           <button type="button" class="btn ghost block link-card" data-act="goSchool"><svg class="i" aria-hidden="true"><use href="#i-school"/></svg><span>${S.me.school ? esc(S.me.school.name) : "Школа: общая база ответов и сводка"}</span><svg class="i chev" aria-hidden="true"><use href="#i-chev"/></svg></button>
           <button type="button" class="btn ghost block link-card" data-act="goIntegrations"><svg class="i" aria-hidden="true"><use href="#i-list"/></svg><span>Интеграции: календарь, API, вебхуки</span><svg class="i chev" aria-hidden="true"><use href="#i-chev"/></svg></button>
+          <button type="button" class="btn ghost block link-card" data-act="goJournal"><svg class="i" aria-hidden="true"><use href="#i-file"/></svg><span>Электронный журнал: импорт и выгрузка</span><svg class="i chev" aria-hidden="true"><use href="#i-chev"/></svg></button>
           <div class="card">
             <div class="overline">Бот сэкономил вам за 7 дней</div>
             <div class="stat-big" style="margin:8px 0">${fmtMinutes(st.week.minutes)}</div>
@@ -1144,6 +1145,10 @@
     try {
       const r = await api(`/api/ask?q=${encodeURIComponent(q)}`);
       let html = "";
+      if (!r.answer && ["board", "news", "schedule"].includes(r.kind) && r.text_plain) {
+        html += `<div class="card faq answer-card"><div class="answer-text" style="white-space:pre-line">${esc(r.text_plain)}</div></div>`;
+        out.innerHTML = html; S.lastQ = q; if (btn) btn.disabled = false; return;
+      }
       if (r.answer) {
         html += `<div class="card faq answer-card"><div class="muted small">${esc(r.answer.question)}</div><div class="answer-text">${esc(r.answer.answer)}</div>
           <div class="answer-foot">Из справочника класса · ответ сохранил учитель</div>
@@ -1385,6 +1390,147 @@
     } catch (e) { if (win) win.close(); toast(e.message, true); }
   };
 
+  // ------------------------------------------------------------------ электронный журнал: импорт выгрузки и экспорт
+  const WD = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"];
+  const dayLabel = (d, wd) => (d ? new Date(d + "T00:00:00").toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" }) : WD[wd] || "");
+  const isoDay = (offset) => { const d = new Date(); d.setDate(d.getDate() + offset); return d.toISOString().slice(0, 10); };
+
+  function journalPreview(p) {
+    const s = p.summary, smp = p.sample;
+    const list = (items, fn) => (items.length ? `<ul class="list">${items.map((x) => `<li><span>${fn(x)}</span></li>`).join("")}</ul>` : "");
+    return `<div class="card" id="jr-preview">
+      <div class="card-title">${esc(p.filename || "Выгрузка")}</div>
+      <p><b>Нашёл: ${esc(p.text)}.</b></p>
+      ${s.tables.length ? `<p class="muted small">${s.tables.map(esc).join("<br>")}</p>` : ""}
+      ${s.warnings.length ? `<p class="small warn">${s.warnings.map(esc).join("<br>")}</p>` : ""}
+      ${smp.students.length ? `<h2>Ученики</h2>${list(smp.students, esc)}` : ""}
+      ${smp.lessons.length ? `<h2>Расписание</h2>${list(smp.lessons, (x) => `${esc(dayLabel(x.day, x.weekday))}${x.number ? ", " + x.number + " урок" : ""} — ${esc(x.subject)}`)}` : ""}
+      ${smp.homework.length ? `<h2>Задания</h2>${list(smp.homework, (x) => `<b>${esc(x.subject)}</b>${x.day ? " · " + esc(dayLabel(x.day)) : ""}: ${esc(x.text)}`)}` : ""}
+      <p class="muted small">Показаны первые строки. Задания лягут на доску без сообщения в чат, повторная загрузка ничего не задвоит.</p>
+      <button type="button" class="btn block" data-act="jrImport">Загрузить</button>
+    </div>`;
+  }
+
+  Object.assign(VIEWS, {
+    async journal() {
+      loading();
+      try {
+        const d = await api("/api/journals");
+        S.jr = { data: d, preview: null, chat: S.jr?.chat || d.classes[0]?.chat_id };
+        const classOpts = d.classes.map((c) => `<option value="${c.chat_id}"${c.chat_id === S.jr.chat ? " selected" : ""}>${esc(c.title || c.chat_id)}</option>`).join("");
+        const rows = d.classes.map((c) => `<li><span><b>${esc(c.title)}</b><br><span class="muted small">${c.roster ? `в чате ${c.in_chat} из ${c.roster} учеников` : "списка класса нет"} · ${c.has_schedule ? "расписание есть" : "расписания нет"}</span></span>
+          ${c.roster ? `<button type="button" class="btn sm ghost" data-act="jrRoster" data-id="${c.chat_id}">Кого нет</button>` : ""}</li>`).join("");
+        const dn = d.dnevnik_enabled ? d.classes.map((c) => `<div class="class-row">
+            <div class="card-head"><b class="name">${esc(c.title)}</b><span class="chip ${c.dnevnik ? "done" : ""}">${c.dnevnik ? "подключён" : "не подключён"}</span></div>
+            ${c.dnevnik?.last_status ? `<div class="muted small">${esc(c.dnevnik.last_status)} · ${when(c.dnevnik.last_sync_at)}</div>` : ""}
+            <div class="row tools"><button type="button" class="btn sm ${c.dnevnik ? "ghost" : ""}" data-act="jrDnLink" data-id="${c.chat_id}">${c.dnevnik ? "Настройки" : "Подключить"}</button>
+            ${c.dnevnik ? `<button type="button" class="btn sm" data-act="jrDnSync" data-id="${c.chat_id}">Забрать неделю</button>` : ""}</div></div>`).join("") : "";
+        render(`<h1>Электронный журнал</h1>
+          <p class="muted lead-in">Скачайте из журнала таблицу (Excel или CSV) и загрузите сюда: домашка ляжет на доску класса, расписание — в ответы бота на «какие уроки завтра», а по списку класса будет видно, кого ещё нет в чате.</p>
+          <div class="card">
+            <div class="card-title">Загрузить выгрузку</div>
+            ${d.classes.length > 1 ? `<label class="field"><span>Класс</span><select id="jr-chat">${classOpts}</select></label>` : ""}
+            <label class="btn outline block upload"><svg class="i" aria-hidden="true"><use href="#i-upload"/></svg>Выбрать файл CSV или XLSX<input type="file" id="jr-file" class="sr-only" accept=".csv,.xlsx,.txt,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"></label>
+            <p class="muted small">До ${d.max_mb} МБ. Столбцы узнаю по названиям: «ФИО», «Предмет», «Дата», «Домашнее задание», дни недели в шапке. Не узнал — возьмите шаблон:
+              <a href="${esc(d.template.xlsx)}" download>XLSX</a> · <a href="${esc(d.template.roster)}" download>ученики.csv</a> · <a href="${esc(d.template.schedule)}" download>расписание.csv</a> · <a href="${esc(d.template.homework)}" download>задания.csv</a></p>
+          </div>
+          <div id="jr-out" aria-live="polite"></div>
+          ${rows ? `<div class="card"><div class="card-title">Классы</div><ul class="list">${rows}</ul></div>` : ""}
+          <div class="card">
+            <div class="card-title">Обратно в журнал</div>
+            <p class="muted small">CSV для Excel и импорта в журнал: UTF-8, разделитель «;». Отметки «не придёт» я храню две недели — выгружайте их раз в неделю.</p>
+            <div class="row tools">
+              <label class="field"><span>С</span><input type="date" id="jr-from" value="${isoDay(-13)}"></label>
+              <label class="field"><span>По</span><input type="date" id="jr-to" value="${isoDay(0)}"></label>
+            </div>
+            <div class="row tools">
+              <button type="button" class="btn sm" data-act="jrExport" data-kind="absences">Пропуски</button>
+              <button type="button" class="btn sm outline" data-act="jrExport" data-kind="polls">Итоги сборов</button>
+            </div>
+          </div>
+          ${d.dnevnik_enabled ? `<div class="card"><div class="card-title">«Дневник.ру» по API</div>
+            <p class="muted small">Расписание и домашние задания класса забираются по токену OAuth. Коннектор пока не проверен на живом «Дневник.ру» — если что-то не пришло, загрузите выгрузку файлом.</p>${dn}</div>` : ""}`);
+        const f = document.getElementById("jr-file");
+        // value сбрасываем, чтобы тот же файл после правки в Excel можно было выбрать снова
+        f.addEventListener("change", () => { const file = f.files[0]; f.value = ""; ACTIONS.jrPreview(file); });
+        document.getElementById("jr-chat")?.addEventListener("change", (e) => { S.jr.chat = Number(e.target.value); });
+      } catch (e) { fail(e); }
+    },
+  });
+  TAB_OF.journal = "more";
+  ACTIONS.goJournal = () => go("journal");
+
+  ACTIONS.jrPreview = async (file) => {
+    if (!file) return;
+    const out = document.getElementById("jr-out");
+    out.innerHTML = '<div class="skeleton" aria-busy="true"><i></i></div>';
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      if (S.jr.chat) form.append("chat_id", String(S.jr.chat));
+      const p = await api("/api/journals/preview", { method: "POST", form });
+      S.jr.preview = p;
+      out.innerHTML = journalPreview(p);  // кнопку «Загрузить» обрабатывает общее делегирование data-act
+    } catch (e) { out.innerHTML = `<div class="card"><p class="err">${esc(e.message)}</p></div>`; }
+  };
+  ACTIONS.jrImport = async (el) => {
+    if (!S.jr?.preview || el.disabled) return;
+    el.disabled = true;
+    try {
+      const r = await api("/api/journals/import", { method: "POST", body: { ref: S.jr.preview.ref, chat_id: Number(S.jr.chat) } });
+      const x = r.result, ros = r.roster;
+      haptic("success");
+      const parts = [];
+      if (x.hw_added || x.hw_updated || x.hw_same) parts.push(`заданий: новых ${x.hw_added}, обновлено ${x.hw_updated}, без изменений ${x.hw_same}`);
+      if (x.lessons) parts.push(`уроков в расписании: ${x.lessons}`);
+      if (x.students) parts.push(`учеников в списке: ${x.students}`);
+      document.getElementById("jr-out").innerHTML = `<div class="card"><p class="ok">Загружено: ${esc(parts.join("; "))}.</p>
+        ${x.students ? `<p>В чате ${ros.in_chat} из ${ros.total}.${ros.missing.length ? ` Ещё не в чате: ${ros.missing.map(esc).join(", ")}.` : " Все на месте."}</p>` : ""}</div>`;
+      S.jr.preview = null;
+    } catch (e) { toast(e.message, true); el.disabled = false; }
+  };
+  ACTIONS.jrRoster = async (el) => {
+    try {
+      const r = await api(`/api/journals/roster/${el.dataset.id}`);
+      modal(`<h2 class="modal-title">Список класса и чат</h2>
+        <p>В чате ${r.in_chat} из ${r.total}.</p>
+        ${r.missing.length ? `<p class="muted small">Ещё не в чате (или родитель не назвал ребёнка):</p><ul class="list">${r.missing.map((n) => `<li><span>${esc(n)}</span></li>`).join("")}</ul>` : "<p>Все ученики на месте.</p>"}
+        <p class="muted small">Ученика я узнаю, когда родитель назовёт ребёнка (например, при отметке «не придёт») или если имя родителя совпадает со списком.</p>
+        <div class="btns one"><button class="btn ghost" value="cancel" formnovalidate>Закрыть</button></div>`, () => {});
+    } catch (e) { toast(e.message, true); }
+  };
+  ACTIONS.jrExport = async (el) => {
+    const win = blankTab();
+    try {
+      const q = new URLSearchParams({ from: document.getElementById("jr-from").value, to: document.getElementById("jr-to").value });
+      const links = await api(`/api/journals/export-links?${q}`);
+      openUrl(absUrl(links[el.dataset.kind]), win);
+    } catch (e) { if (win) win.close(); toast(e.message, true); }
+  };
+  ACTIONS.jrDnLink = (el) => {
+    const c = S.jr.data.classes.find((x) => String(x.chat_id) === el.dataset.id) || {};
+    const dn = c.dnevnik || {};
+    modal(`<h2 class="modal-title">«Дневник.ру»: ${esc(c.title || "")}</h2>
+      <label class="field"><span>ID класса (учебной группы)</span><input type="text" name="group" required maxlength="40" pattern="[0-9A-Za-z_-]+" value="${esc(dn.group_ref || "")}"></label>
+      <label class="field"><span>ID школы <em class="hint">для домашних заданий</em></span><input type="text" name="school" maxlength="40" pattern="[0-9A-Za-z_-]*" value="${esc(dn.school_ref || "")}"></label>
+      <label class="field"><span>Токен OAuth <em class="hint">${dn.own_token ? "сохранён; пусто — оставить как есть" : S.jr.data.school_token ? "пусто — общий токен школы" : "нужен токен"}</em></span><input type="password" name="token" maxlength="500" autocomplete="off"></label>
+      <p class="muted small">Токен хранится зашифрованным и наружу не показывается.</p>
+      <div class="btns"><button class="btn ghost" value="cancel" formnovalidate>Отмена</button><button class="btn" value="ok">Сохранить</button></div>`,
+    async (fd) => {
+      const token = String(fd.get("token") || "").trim();
+      await api(`/api/journals/dnevnik/${el.dataset.id}`, { method: "PUT", body: { group_ref: String(fd.get("group") || "").trim(), school_ref: String(fd.get("school") || "").trim(), token: token || null } });
+      toast("Сохранено"); VIEWS.journal();
+    });
+  };
+  ACTIONS.jrDnSync = async (el) => {
+    el.disabled = true;
+    try {
+      const r = await api(`/api/journals/dnevnik/${el.dataset.id}/sync`, { method: "POST", body: {} });
+      toast(r.text ? `Пришло: ${r.text}` : "Нового ничего нет");
+      VIEWS.journal();
+    } catch (e) { toast(e.message, true); el.disabled = false; }
+  };
+
   // ------------------------------------------------------------------ демо-режим
   function demoBanner() {
     const parent = !S.me.is_teacher;
@@ -1452,6 +1598,11 @@
     if (isNewcomer(S.me)) { S.route = { name: "welcome", args: {} }; drawTabs(); VIEWS.welcome(); return; }
     const start = WA?.initDataUnsafe?.start_param || params.get("start") || "";
     const tabs = tabsFor(S.me).map((t) => t[0]);
+    if (S.me.is_teacher && start === "journal") {
+      S.route = { name: "more", args: {} };
+      go("journal");
+      return;
+    }
     if (S.me.is_teacher && /^poll_\d+$/.test(start)) {
       S.route = { name: "polls", args: {} };
       go("pollDetail", { id: start.slice(5) });

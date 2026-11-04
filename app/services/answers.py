@@ -23,7 +23,7 @@ ASK_TTL = 3600 * 6  # сколько помним вопрос для кнопк
 class Answer:
     # board — по доске; board_missing — на доске нет; news; faq — уверенный ответ справочника;
     # suggest — «возможно, вы имели в виду»; shelf — материалы; absence — похоже на отсутствие;
-    # onboard — человек ещё ни в одном классе; none — ничего не нашлось
+    # onboard — человек ещё ни в одном классе; schedule — расписание из журнала; none — ничего не нашлось
     kind: str
     text: str = ""                      # готовый текст ответа (HTML: только <b>, <i>)
     entry: FaqEntry | None = None       # kind=faq
@@ -56,6 +56,22 @@ async def _remember(uid: int, text: str, chat_ids: list[int]) -> None:
 
 async def _board(uid: int, text: str, chat_ids: list[int], tz: str | None, is_staff: bool,
                  parent_chats: list[int]) -> Answer | None:
+    from ..integrations.journals import schedule, service as journal
+
+    # «какие уроки завтра?», «что взять в среду?» — по расписанию из электронного журнала
+    if schedule.is_schedule_question(text) and (schedule.is_bring_question(text)
+                                                or not board.is_homework_question(text)):
+        if await journal.has_schedule(chat_ids):
+            titles = await board._chat_titles(set(chat_ids)) if len(chat_ids) > 1 else {}
+            reply, found = await schedule.answer(text, chat_ids, tz, titles)
+            if found:
+                return Answer("schedule", reply, chat_ids=parent_chats, as_teacher=is_staff and not parent_chats)
+            if not board.is_homework_question(text):
+                return Answer("schedule", reply + (" Загрузить его из журнала — /journal" if is_staff and not
+                                                   parent_chats else ""), chat_ids=parent_chats)
+        elif is_staff and not parent_chats and not board.is_homework_question(text):
+            return Answer("schedule", "🗓 Расписания пока нет. Его можно загрузить из выгрузки электронного журнала — "
+                                      "/journal", as_teacher=True)
     if board.is_homework_question(text):
         items = await board.find_homework(text, chat_ids, tz)
         subj = board.subject_in(text)

@@ -76,6 +76,14 @@ class Settings(BaseSettings):
     demo_per_ip_hour: int = 10
     demo_max_sandboxes: int = 1000  # живых песочниц одновременно (каждая — около 150 строк в базе)
 
+    # --- Электронный журнал ---
+    # Коннектор «Дневник.ру» по API (OAuth-токен). Выключен по умолчанию: на живом API не проверен,
+    # импорт выгрузок (CSV/XLSX) и экспорт работают и без него.
+    dnevnik_enabled: bool = False
+    dnevnik_api_url: str = "https://api.dnevnik.ru/v2"
+    # Общий токен школы (если учитель не указал свой). Секрет — только в окружении, не в репозитории.
+    dnevnik_token: str = ""
+
     # --- Прочее ---
     default_tz: str = "Europe/Moscow"
     host: str = "0.0.0.0"

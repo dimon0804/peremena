@@ -282,6 +282,64 @@ class Announcement(Base):
     published: Mapped[bool] = mapped_column(Boolean, default=False)
     message_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    # откуда запись: manual — учитель написал сам; journal — импорт выгрузки журнала; dnevnik — «Дневник.ру».
+    # Повторный импорт обновляет только свои записи и не трогает написанное руками.
+    source: Mapped[str] = mapped_column(String(20), default="manual", server_default="manual")
+
+
+# ---------------------------------------------------------------- Электронный журнал
+class Lesson(Base):
+    """Урок в расписании класса — из выгрузки журнала или «Дневник.ру». Бот отвечает на «какие уроки завтра».
+    day — конкретная дата; если её нет (расписание «по дням недели»), урок повторяется каждую неделю в weekday."""
+    __tablename__ = "lessons"
+    __table_args__ = (
+        Index("ix_lessons_chat_day", "chat_id", "day"),
+        Index("ix_lessons_chat_weekday", "chat_id", "weekday"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger)
+    day: Mapped[str | None] = mapped_column(String(10), nullable=True)  # YYYY-MM-DD
+    weekday: Mapped[int] = mapped_column(Integer, default=0)            # 0 — понедельник
+    number: Mapped[int] = mapped_column(Integer, default=0)             # номер урока, 0 — не указан
+    subject: Mapped[str] = mapped_column(String(100), default="")
+    time: Mapped[str] = mapped_column(String(20), default="")           # «08:30–09:15»
+    room: Mapped[str] = mapped_column(String(30), default="")
+    source: Mapped[str] = mapped_column(String(20), default="journal")  # journal | dnevnik
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class RosterEntry(Base):
+    """Ученик из списка класса (выгрузка журнала) — чтобы учитель видел, кого ещё нет в чате.
+    Хранится только «Фамилия Имя» и родители в виде «Фамилия И.» — так же, как бот и так показывает
+    участников чата. Отчество, даты рождения, телефоны и почта отбрасываются ещё при разборе файла."""
+    __tablename__ = "roster"
+    __table_args__ = (UniqueConstraint("chat_id", "name"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    name: Mapped[str] = mapped_column(String(200))
+    parents: Mapped[str] = mapped_column(String(500), default="")  # «Иванова А.; Иванов П.»
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class JournalLink(Base):
+    """Подключение класса к электронному журналу по API (сейчас — «Дневник.ру»).
+    Токен учителя хранится зашифрованным ключом сервиса; без SECRET_KEY копия таблицы его не раскрывает.
+    Пустой токен — берётся общий токен школы из настроек сервиса (DNEVNIK_TOKEN)."""
+    __tablename__ = "journal_links"
+    __table_args__ = (UniqueConstraint("chat_id", "provider"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    owner_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    provider: Mapped[str] = mapped_column(String(20), default="dnevnik")
+    school_ref: Mapped[str] = mapped_column(String(40), default="")   # id школы в журнале
+    group_ref: Mapped[str] = mapped_column(String(40), default="")    # id класса (учебной группы)
+    token_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_status: Mapped[str] = mapped_column(String(300), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 # ---------------------------------------------------------------- Сайт

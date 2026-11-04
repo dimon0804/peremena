@@ -169,6 +169,7 @@ button.card > .card-head, button.card > .row { display: flex; }
 .bar > i { display: block; height: 100%; background: var(--accent-fill); border-radius: 99px; transition: width .3s var(--ease-out); }
 .money-bar > i { background: var(--ok); }
 .ok { color: var(--ok-ink); font-weight: 600; }
+p.warn { color: var(--warn-ink); }
 .names { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 4px 16px; line-height: 1.6; }
 .names span { overflow-wrap: anywhere; }
 
