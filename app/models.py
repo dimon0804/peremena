@@ -182,6 +182,8 @@ class InboxItem(Base):
     text: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     delivered: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    # ключ переданного вопроса (qq:<ref> в KV) — чтобы ответить родителю прямо из утренней сводки
+    ref: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
 
 # ---------------------------------------------------------------- «Счётчик пользы»

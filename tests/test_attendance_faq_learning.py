@@ -50,7 +50,7 @@ def test_parent_marks_absence_in_bot_and_teacher_sees_it(env):
     assert "Иванов Пётр" in api_.texts_to(user_id=parent["user_id"])[-1]
     # и оно же в утренней сводке
     teacher = run(loop, api.chats.get_user(TEACHER["user_id"]))
-    text, _ = run(loop, quiet.build_digest(teacher))
+    text, _, _ = run(loop, quiet.build_digest(teacher))
     assert "Сегодня не придут (1)" in text and "Иванов Пётр" in text
 
 

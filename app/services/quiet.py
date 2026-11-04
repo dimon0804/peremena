@@ -11,7 +11,7 @@ import html
 import logging
 from datetime import timedelta
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from .. import keyboards as kb
 from ..core import ctx
@@ -61,6 +61,7 @@ async def notify_teacher(
     raw_text: str = "",
     buttons: list[list[dict]] | None = None,
     urgent: bool = False,
+    ref: str | None = None,
 ) -> str:
     """Доставка учителю. Возвращает:
     * "sent"   — сообщение ушло сразу;
@@ -80,7 +81,7 @@ async def notify_teacher(
     async with session() as s:
         s.add(InboxItem(
             teacher_id=teacher_id, chat_id=chat_id, from_user_id=from_user_id, from_name=from_name,
-            kind=kind, text=raw_text or text,
+            kind=kind, text=raw_text or text, ref=ref,
         ))
     return status
 
@@ -91,7 +92,13 @@ async def has_pending(teacher_id: int) -> bool:
             InboxItem.teacher_id == teacher_id, InboxItem.delivered.is_(False)).limit(1)))
 
 
-async def build_digest(teacher: User, include_empty: bool = False) -> tuple[str, list[list[dict]]] | None:
+DIGEST_ITEMS = 15     # сколько пунктов «пока вы отдыхали» показываем в одной сводке
+DIGEST_REPLIES = 8    # кнопок «Ответить» под сводкой
+
+
+async def build_digest(teacher: User, include_empty: bool = False) -> tuple[str, list[list[dict]], list[int]] | None:
+    """(текст, кнопки, id показанных пунктов «входящих»). Доставленными потом отмечаются только показанные:
+    остальные и пришедшие после сборки останутся до следующей сводки."""
     c = ctx()
     async with session() as s:
         items = (await s.scalars(
@@ -137,9 +144,11 @@ async def build_digest(teacher: User, include_empty: bool = False) -> tuple[str,
             lines.append(f"{html.escape(p.title)} — ответили {answered}/{len(p.targets)}")
         lines.append("")
 
+    shown = list(items[:DIGEST_ITEMS])
     if items:
         lines.append(f"🌙 <b>Пока вы отдыхали</b> — {len(items)}")
-        for it in items[:15]:
+        replies: list[list[dict]] = []
+        for it in shown:
             when = to_local(it.created_at, teacher.tz)
             who = f"{html.escape(it.from_name)}: " if it.from_name else ""
             label = KIND_LABEL.get(it.kind, "Сообщение")
@@ -147,9 +156,13 @@ async def build_digest(teacher: User, include_empty: bool = False) -> tuple[str,
             if it.from_user_id:
                 who = f'<a href="max://user/{it.from_user_id}">{html.escape(it.from_name or "родитель")}</a>: '
             lines.append(f"• {when:%H:%M} · {label} · {who}{body}")
-        if len(items) > 15:
-            lines.append(f"…и ещё {len(items) - 15}")
+            if it.ref and it.kind == "question" and len(replies) < DIGEST_REPLIES:
+                # вопрос, переданный родителем ночью, можно ответить прямо отсюда — ответ уйдёт ему в личку
+                replies.append([kb.cb(f"✍️ Ответить: {it.from_name or 'родитель'}"[:60], f"fr:{it.ref}")])
+        if len(items) > len(shown):
+            lines.append(f"…и ещё {len(items) - len(shown)} — пришлю следующей сводкой: /morning")
         lines.append("")
+        buttons += replies
 
     # кто сегодня не придёт — список, который раньше учитель собирал из сообщений в чате
     from . import attendance, faq_learning
@@ -189,33 +202,38 @@ async def build_digest(teacher: User, include_empty: bool = False) -> tuple[str,
         lines.append("Ничего срочного. Хорошего дня!")
     if c.bot_username:
         buttons.append([kb.app("Открыть «Перемену»", c.bot_username, "home")])
-    return "\n".join(lines).strip(), buttons
+    return "\n".join(lines).strip(), buttons, [it.id for it in shown]
+
+
+async def deliver_digest(teacher: User, include_empty: bool = False) -> str:
+    """Собирает и отправляет сводку: "sent" — ушла, "empty" — слать нечего, "failed" — не доставлена."""
+    built = await build_digest(teacher, include_empty)
+    if not built:
+        return "empty"
+    text, buttons, shown_ids = built
+    sent = await ctx().safe_send(user_id=teacher.user_id, text=text, attachments=kb.kb_list(buttons))
+    if not sent:
+        return "failed"
+    if shown_ids:
+        async with session() as s:
+            await s.execute(update(InboxItem).where(InboxItem.id.in_(shown_ids)).values(delivered=True))
+        await stats.add(teacher.user_id, "quiet_held", len(shown_ids))
+    return "sent"
 
 
 async def send_digest(teacher: User, include_empty: bool = False) -> bool:
-    built = await build_digest(teacher, include_empty)
-    if not built:
-        return False
-    text, buttons = built
-    sent = await ctx().safe_send(user_id=teacher.user_id, text=text, attachments=kb.kb_list(buttons))
-    if sent:
-        async with session() as s:
-            items = (await s.scalars(
-                select(InboxItem).where(InboxItem.teacher_id == teacher.user_id, InboxItem.delivered.is_(False))
-            )).all()
-            for it in items:
-                it.delivered = True
-        await stats.add(teacher.user_id, "quiet_held", len(items))
-    return bool(sent)
+    return await deliver_digest(teacher, include_empty) == "sent"
 
 
 async def morning_tick() -> None:
-    """Раз в минуту: кому из учителей пора получить утреннюю сводку."""
+    """Раз в минуту: кому из учителей пора получить утреннюю сводку.
+    Сводку получают все классные руководители — и с выключенным тихим режимом: в ней ещё
+    «кто сегодня не придёт», сборы со сроком сегодня и итоги недели."""
     async with session() as s:
         # только классные руководители: родителей в базе в десятки раз больше, перебирать их каждую минуту незачем
         teacher_ids = select(ClassChat.teacher_id).where(ClassChat.active.is_(True), ClassChat.teacher_id.is_not(None))
         teachers = (await s.scalars(
-            select(User).where(User.quiet_enabled.is_(True), User.user_id.in_(teacher_ids),
+            select(User).where(User.user_id.in_(teacher_ids),
                                ~User.user_id.between(DEMO_BASE, DEMO_BASE + DEMO_SPAN))  # демо-учителям сводка не нужна
         )).all()
     for t in teachers:
@@ -232,10 +250,16 @@ async def morning_tick() -> None:
 
         if not await is_teacher(t.user_id):
             continue
+        # не доставилась (сбой MAX) — повторим, но не чаще раза в 20 минут
+        if not await ctx().kv.add_once(f"dg:{t.user_id}:{today}", ttl=20 * 60):
+            continue
         try:
-            await send_digest(t)
+            status = await deliver_digest(t)
         except Exception:  # одна ошибка не должна сорвать сводки остальным
             log.exception("Утренняя сводка для %s", t.user_id)
+            continue
+        if status == "failed":
+            continue  # день не отмечаем: иначе сводки не было бы до завтра
         async with session() as s:
             u = await s.get(User, t.user_id)
             if u:

@@ -623,7 +623,7 @@ async def forward_question(uid: int, chat_id: int | None = None) -> None:
             f"<i>Ответьте кнопкой — ответ уйдёт родителю, а сохранить его в справочник я предложу.</i>")
     status = await quiet.notify_teacher(
         ch.teacher_id, text, kind="question", chat_id=chat_id, from_user_id=uid, from_name=name,
-        raw_text=q["text"], buttons=[[kb.cb("✍️ Ответить", f"fr:{qid}")]],
+        raw_text=q["text"], buttons=[[kb.cb("✍️ Ответить", f"fr:{qid}")]], ref=qid,
     )
     if status == "sent":
         await send(uid, "✅ Передал учителю. Ответ придёт сюда или в чат класса.")

@@ -67,7 +67,7 @@ def test_night_digest_is_not_good_morning(env, monkeypatch):
     night = datetime(2026, 10, 27, 0, 5, tzinfo=zone("Europe/Moscow"))
     monkeypatch.setattr(quiet, "local_now", lambda tz=None: night)
     teacher = run(loop, dialog.chats.get_user(TEACHER["user_id"]))
-    text, _ = run(loop, quiet.build_digest(teacher, include_empty=True))
+    text, _, _ = run(loop, quiet.build_digest(teacher, include_empty=True))
     assert "Доброе утро" not in text and "Сводка" in text
 
 
