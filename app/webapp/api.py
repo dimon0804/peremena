@@ -8,10 +8,11 @@ import html
 import io
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from starlette.datastructures import UploadFile
 
 from .. import ratelimit
 from ..core import ctx
@@ -494,22 +495,45 @@ async def send_material(mid: int, body: SendIn, user: User = Depends(current_use
 
 
 UPLOAD_KIND = {"image": ("image/",), "video": ("video/",), "audio": ("audio/",)}
+UPLOAD_MAX = 100 * 1024 * 1024
+UPLOAD_BODY_MAX = UPLOAD_MAX + 1024 * 1024  # запас на заголовки частей multipart
+TOO_BIG = "Файл больше 100 МБ — отправьте его боту в личку"
+
+
+async def _read_limited(file: UploadFile, limit: int) -> bytes:
+    """Читает файл частями и останавливается, как только он превысил лимит."""
+    buf = bytearray()
+    while chunk := await file.read(1024 * 1024):
+        buf += chunk
+        if len(buf) > limit:
+            raise HTTPException(413, TOO_BIG)
+    return bytes(buf)
 
 
 @router.post("/materials/upload")
-async def upload_material(
-    file: UploadFile = File(...),
-    title: str = Form(""),
-    tags: str = Form(""),
-    user: User = Depends(staff_user),
-):
+async def upload_material(request: Request, user: User = Depends(staff_user)):
+    # Тело разбираем вручную и только после проверки входа: параметры File/Form заставили бы FastAPI
+    # прочитать всю форму ещё до авторизации.
     if is_demo(user.user_id):
         raise HTTPException(403, "В демо-режиме файлы не загружаются — посмотрите полку на готовых примерах")
-    content = await file.read()
+    try:
+        length = int(request.headers.get("content-length", ""))
+    except ValueError:
+        raise HTTPException(411, "Нужен заголовок Content-Length")
+    if length > UPLOAD_BODY_MAX:
+        raise HTTPException(413, TOO_BIG)
+    try:
+        form = await request.form(max_files=1, max_fields=10)
+    except Exception:  # битый multipart, лишние файлы или поля
+        raise HTTPException(400, "Не удалось разобрать форму")
+    file = form.get("file")
+    if not isinstance(file, UploadFile):
+        raise HTTPException(400, "Нет файла")
+    title = form.get("title") if isinstance(form.get("title"), str) else ""
+    tags = form.get("tags") if isinstance(form.get("tags"), str) else ""
+    content = await _read_limited(file, UPLOAD_MAX)
     if not content:
         raise HTTPException(400, "Пустой файл")
-    if len(content) > 100 * 1024 * 1024:
-        raise HTTPException(413, "Файл больше 100 МБ — отправьте его боту в личку")
     ctype = file.content_type or ""
     kind = next((k for k, prefixes in UPLOAD_KIND.items() if ctype.startswith(prefixes)), "file")
     try:

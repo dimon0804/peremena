@@ -12,9 +12,62 @@ from app.services import chats
 from app.webapp import api
 from app.webapp.auth import InitDataError, validate_init_data
 
-from .conftest import CHAT2_ID, CHAT_ID, PARENTS, TEACHER, TEACHER2
+from .conftest import CHAT2_ID, CHAT_ID, PARENTS, TEACHER, TEACHER2, FakeApi
 
 TOKEN = "123:abc"
+H = {"X-Peremena": "1"}
+
+
+class FakeWebApi(FakeApi):
+    """Поддельный MAX API для сервиса целиком (TestClient + lifespan)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.uploads: list[int] = []
+
+    async def upload(self, kind, filename, content, content_type=None):
+        self.uploads.append(len(content))
+        return {"token": "t"}
+
+    async def get_updates(self, marker=None, timeout=30):
+        import asyncio
+
+        await asyncio.sleep(3600)
+
+
+@pytest.fixture
+def web(tmp_path, monkeypatch):
+    """Фабрика TestClient: web(MAX_BOT_TOKEN="x", ...) — сервис с нужными переменными окружения."""
+    from fastapi.testclient import TestClient
+
+    from app.config import get_settings
+
+    holder = {}
+
+    def make(**env):
+        base = {"MAX_BOT_TOKEN": "", "BOT_USERNAME": "peremena_test_bot", "REDIS_URL": "", "DEV_AUTH": "true",
+                "UPDATES_MODE": "webhook", "WEBHOOK_URL": "", "PUBLIC_URL": "", "SECRET_KEY": "",
+                "DATABASE_URL": f"sqlite+aiosqlite:///{tmp_path / 'w.db'}"}
+        for k, v in {**base, **env}.items():
+            monkeypatch.setenv(k, v)
+        get_settings.cache_clear()
+        fake = holder["api"] = FakeWebApi()
+        monkeypatch.setattr("app.main.MaxClient", lambda *a, **k: fake)
+        from app.main import app
+
+        return TestClient(app)
+
+    make.holder = holder
+    yield make
+    get_settings.cache_clear()
+
+
+async def _make_class(chat_id: int, teacher_id: int) -> None:
+    from app.db import session
+    from app.models import ClassChat
+
+    async with session() as s:
+        s.add(ClassChat(chat_id=chat_id, title="9Б", teacher_id=teacher_id))
 
 
 def _sign(fields: dict, token: str = TOKEN) -> str:
@@ -167,3 +220,27 @@ def test_demo_and_real_schools_do_not_mix_and_join_is_limited(env):
     with pytest.raises(HTTPException) as err:  # даже верный код — после лимита
         run(loop, api.join_school(api.JoinIn(code=real_code), teacher2))
     assert err.value.status_code == 429
+
+
+# ---------------------------------------------------------------- загрузка файлов
+def test_upload_checks_auth_and_size_before_reading_body(web):
+    import asyncio
+
+    with web() as client:
+        fake = web.holder["api"]
+        huge = {"content-type": "multipart/form-data; boundary=xx", "content-length": str(500 * 1024 * 1024), **H}
+        # без входа и не учитель — отказ до разбора тела
+        assert client.post("/api/materials/upload", content=b"--xx--", headers=huge).status_code == 401
+        assert client.post("/api/materials/upload?dev_user=7", content=b"--xx--", headers=huge).status_code == 403
+        asyncio.run(_make_class(-7000, 8))
+        # заявленный размер больше лимита — 413, тело не читается
+        assert client.post("/api/materials/upload?dev_user=8", content=b"--xx--", headers=huge).status_code == 413
+        # обычная загрузка работает
+        ok = client.post("/api/materials/upload?dev_user=8", headers=H, data={"title": "Расписание", "tags": "8 класс"},
+                         files={"file": ("a.txt", b"hello", "text/plain")})
+        assert ok.status_code == 200, ok.text
+        assert ok.json()["title"].startswith("Расписание") and fake.uploads == [5]
+        # два файла в одной форме — отказ
+        two = client.post("/api/materials/upload?dev_user=8", headers=H,
+                          files=[("file", ("a.txt", b"1", "text/plain")), ("file", ("b.txt", b"2", "text/plain"))])
+        assert two.status_code == 400
