@@ -17,6 +17,32 @@ log = logging.getLogger(__name__)
 _tasks: set[asyncio.Task] = set()
 
 
+# Очередь событий в Redis (app/events.py) или None — обработка в этом процессе
+queue = None
+
+
+async def enqueue(update: dict) -> bool:
+    """Кладёт событие в общую очередь. False — очереди нет или Redis недоступен: обработаем сами,
+    чтобы не потерять событие."""
+    if queue is None:
+        return False
+    try:
+        await queue.publish(update)
+        return True
+    except Exception as e:
+        log.warning("Очередь событий недоступна (%s) — обрабатываю событие в этом процессе", e)
+        return False
+
+
+def submit(update: dict) -> asyncio.Task:
+    """Принять событие: в очередь (если она есть) или в обработку здесь же. Задача завершается, когда
+    событие надёжно принято (в очереди) или обработано — на это смотрит маркер long polling."""
+    async def run():
+        if not await enqueue(update):
+            await handle_update(update)
+    return spawn(run())
+
+
 def spawn(coro) -> asyncio.Task:
     """Обработка в фоне: вебхук должен сразу вернуть 200, иначе MAX будет повторять доставку."""
     task = asyncio.create_task(coro)
@@ -74,7 +100,7 @@ async def polling_loop(c: Ctx) -> None:
         try:
             data = await c.api.get_updates(marker, timeout=30)
             started_from = marker
-            tasks = {spawn(handle_update(upd)) for upd in data.get("updates") or []}
+            tasks = {submit(upd) for upd in data.get("updates") or []}
             if tasks:
                 batches.append((started_from, tasks))
             new_marker = data.get("marker")

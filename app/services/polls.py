@@ -287,14 +287,20 @@ async def record_answer(poll_id: int, user: dict, option: int, chat_id_hint: int
         t = await s.scalar(select(PollTarget).where(PollTarget.poll_id == poll_id, PollTarget.user_id == uid))
         if t is None and uid == poll.teacher_id:
             return poll, "forbidden"
-        if t is None and chat_id_hint != poll.chat_id and not await chats.is_present(poll.chat_id, uid):
+        # участник класса — тем же соединением (вложенная сессия брала бы второе из пула)
+        member = None if t is not None else await s.scalar(
+            select(Member).where(Member.chat_id == poll.chat_id, Member.user_id == uid))
+        if t is None and chat_id_hint != poll.chat_id and not (member is not None and member.present):
             # чужой сбор (ссылка ?start=poll_N переслана постороннему): ответ не принимаем,
             # иначе итог «1/4» вместо «1/3» и в списке класса чужой человек
             return poll, "forbidden"
         status = "ok"
         if t is None:
             # человек пришёл в чат позже рассылки — добавляем его в список
-            name = await chats.member_name(poll.chat_id, uid, "")
+            name = member.name if member is not None and member.name else ""
+            if not name:
+                u = await s.get(User, uid)
+                name = u.display_name if u else ""
             if not name or name == str(uid):
                 from ..models import display_name
 
@@ -654,23 +660,24 @@ async def list_polls(teacher_id: int, include_closed: bool = False, limit: int =
 
 async def pending_for_user(user_id: int) -> list[Poll]:
     """Открытые сборы, где пользователь ещё не ответил (для родителя)."""
+    # Классы — до открытия сессии: вложенная сессия держала бы два соединения на запрос, и при сотнях
+    # одновременных «Мои сборы» пул заканчивался бы взаимной блокировкой (все ждут второе соединение).
+    open_chats = [c.chat_id for c in await chats.member_chats(user_id)]
     async with session() as s:
-        rows = (await s.scalars(
+        rows = list((await s.scalars(
             select(Poll).join(PollTarget, PollTarget.poll_id == Poll.id)
             .where(PollTarget.user_id == user_id, PollTarget.answer.is_(None), Poll.closed.is_(False))
             .order_by(Poll.deadline)
-        )).all()
-        open_chats = [c.chat_id for c in await chats.member_chats(user_id)]
+        )).all())
         if open_chats:
-            # сборы в чатах, куда человек пришёл после рассылки
-            extra = (await s.scalars(
-                select(Poll).where(Poll.chat_id.in_(open_chats), Poll.closed.is_(False))
-            )).all()
+            # сборы в чатах, куда человек пришёл после рассылки: его нет в списке получателей
+            mine = select(PollTarget.poll_id).where(PollTarget.user_id == user_id)
             known = {p.id for p in rows}
-            for p in extra:
-                if p.id not in known and not any(t.user_id == user_id for t in p.targets) and p.teacher_id != user_id:
-                    rows = list(rows) + [p]
-    return list(rows)
+            rows += [p for p in (await s.scalars(
+                select(Poll).where(Poll.chat_id.in_(open_chats), Poll.closed.is_(False),
+                                   Poll.teacher_id != user_id, Poll.id.not_in(mine))
+            )).all() if p.id not in known]
+    return rows
 
 
 async def is_addressee(poll: Poll, user_id: int) -> bool:

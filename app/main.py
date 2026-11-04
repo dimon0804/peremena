@@ -20,6 +20,7 @@ from .config import BASE_DIR, get_settings
 from .core import Ctx, set_ctx
 from .max_api import MaxApiError, MaxClient
 from .state import make_kv
+from .events import EventQueue
 from .leader import Leader, make_backend
 from .updates import JOB_OPTS, Background, drain, leader_only, make_scheduler, spawn
 from .webapp.api import router as api_router
@@ -67,6 +68,12 @@ async def startup() -> tuple[Ctx, list]:
     c = Ctx(settings=settings, api=api, kv=kv, bot_username=settings.bot_username)
     set_ctx(c)
     background: list = []
+    mode = settings.event_queue.strip().lower()
+    updates.queue = None
+    if kv.redis is not None and mode in ("auto", "redis"):
+        updates.queue = EventQueue(kv.redis)
+    elif mode == "redis":
+        log.error("EVENT_QUEUE=redis, но Redis не подключён — события обрабатываются в принявшем процессе")
     role = settings.role.strip().lower() or "all"
     if role not in ("all", "web", "worker"):
         log.error("ROLE=%s не поддерживается (all | web | worker) — работаю как all", settings.role)
@@ -95,6 +102,9 @@ async def startup() -> tuple[Ctx, list]:
             log.warning("Не удалось обновить меню команд: %s", e)
         background += await _start_background(c, make_scheduler(c), polling=settings.mode == "polling",
                                                subscribe_webhook=settings.mode == "webhook")
+        if updates.queue is not None:  # обработчики очереди — в каждом процессе all/worker, не только у лидера
+            background.append(asyncio.create_task(
+                updates.queue.consume(handle_update, settings.handler_concurrency), name="event-queue"))
     else:
         log.info("ROLE=web: планировщик и long polling работают в другом экземпляре (ROLE=worker или all)")
     c.started = True
@@ -119,6 +129,11 @@ async def lifespan(app: FastAPI):
         for b in background:
             if isinstance(b, Background):
                 b.shutdown()
+        if updates.queue is not None:
+            await updates.queue.drain()
+        for b in background:
+            if isinstance(b, asyncio.Task):
+                b.cancel()
         await drain()  # начатые обработки (рассылка, ответ на кнопку) доводим до конца, пока живы API и база
         await c.api.close()
         await c.kv.close()
@@ -221,7 +236,9 @@ async def webhook(request: Request, x_max_bot_api_secret: str | None = Header(de
     except ValueError:
         raise HTTPException(400, "bad json")
     if isinstance(update, dict) and update.get("update_type"):
-        spawn(handle_update(update))
+        # с очередью — только XADD в Redis: 200 уходит сразу, а событие уже не потеряется при падении процесса
+        if not await updates.enqueue(update):
+            spawn(handle_update(update))
     return {"ok": True}
 
 
@@ -257,12 +274,17 @@ async def health():
             checks["polling"] = b.polling_ok()
     if leader is not None and leader._task is not None and leader._task.done():
         checks["leader"] = False  # цикл выборов умер — процесс не подхватит задачи, если лидер упадёт
+    consumers = [b for b in background if isinstance(b, asyncio.Task) and b.get_name() == "event-queue"]
+    if consumers:
+        checks["queue"] = not any(t.done() for t in consumers)  # обработчик очереди упал
     ok = all(checks.values())
     body: dict = {"status": "ok" if ok else "degraded"}
     if c.settings.dev_mode:
         body |= {"checks": checks, "version": __version__, "mode": c.settings.mode, "bot": c.bot_username,
                  "db": db.dialect(), "kv": type(c.kv).__name__, "bot_ready": c.started,
-                 "role": c.settings.role, "leader": bool(leader and leader.is_leader), "pool": db.pool_status()}
+                 "role": c.settings.role, "leader": bool(leader and leader.is_leader), "pool": db.pool_status(),
+                 "queue": (await updates.queue.backlog()) if updates.queue is not None else None,
+                 "processed": updates.queue.processed if updates.queue is not None else None}
     return JSONResponse(body, status_code=200 if ok else 503)
 
 

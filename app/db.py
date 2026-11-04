@@ -43,14 +43,13 @@ def engine_options(url: str, pool_size: int | None = None, max_overflow: int | N
     SQLite — файл на одной машине, пул по умолчанию."""
     opts: dict = {"pool_pre_ping": True}
     if url.startswith("postgresql"):
-        if pool_size is None or max_overflow is None or pool_timeout is None:
-            from .config import get_settings
+        from .config import get_settings
 
-            s = get_settings()
-            pool_size = s.db_pool_size if pool_size is None else pool_size
-            max_overflow = s.db_max_overflow if max_overflow is None else max_overflow
-            pool_timeout = s.db_pool_timeout if pool_timeout is None else pool_timeout
-        opts |= {"pool_size": max(1, pool_size), "max_overflow": max(0, max_overflow),
+        s = get_settings()
+        pool_size = s.db_pool_size if pool_size is None else pool_size
+        max_overflow = s.db_max_overflow if max_overflow is None else max_overflow
+        pool_timeout = s.db_pool_timeout if pool_timeout is None else pool_timeout
+        opts |= {"pool_pre_ping": s.db_pre_ping, "pool_size": max(1, pool_size), "max_overflow": max(0, max_overflow),
                  "pool_timeout": pool_timeout,
                  # соединение, которое прокси или сервер могли тихо закрыть, не берём из пула
                  "pool_recycle": 1800}
