@@ -7,7 +7,8 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__, db
@@ -101,9 +102,53 @@ async def lifespan(app: FastAPI):
         await db.close_db()
 
 
-app = FastAPI(title="Перемена", version=__version__, lifespan=lifespan, docs_url="/api/docs", redoc_url=None)
+# Документация API открыта только в режиме разработки (DEV_AUTH без публичного адреса) — см. ниже
+app = FastAPI(title="Перемена", version=__version__, lifespan=lifespan, docs_url=None, redoc_url=None,
+              openapi_url=None)
 app.include_router(api_router)
 app.include_router(site_api_router)
+
+# Что разрешено грузить страницам сайта и мини-приложения: свои файлы и мост MAX (st.max.ru).
+# Инлайновые стили нужны интерфейсу (style="…" в разметке), инлайновых скриптов нет.
+CSP = ("default-src 'self'; script-src 'self' https://st.max.ru; style-src 'self' 'unsafe-inline'; "
+       "img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self'; "
+       "object-src 'none'; base-uri 'self'; form-action 'self'")
+BODY_LIMIT = 1024 * 1024  # JSON-запросы и вебхук; загрузка файлов проверяет свой лимит сама
+DEV_ONLY = ("/api/docs", "/openapi.json")
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    path = request.url.path
+    try:
+        length = int(request.headers.get("content-length") or 0)
+    except ValueError:
+        length = 0
+    if length > BODY_LIMIT and path != "/api/materials/upload":
+        return JSONResponse({"detail": "Слишком большой запрос"}, status_code=413)
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    if path not in DEV_ONLY:  # Swagger грузит скрипты с CDN — ему CSP не ставим, он есть только в разработке
+        # Мини-приложение MAX открывает во фрейме/вебвью — ему frame-ancestors не ограничиваем;
+        # сайт (вход, главная) во фрейм чужого сайта не встраивается.
+        csp = CSP if path == "/app" or path.startswith("/app/") else CSP + "; frame-ancestors 'self'"
+        response.headers.setdefault("Content-Security-Policy", csp)
+    return response
+
+
+@app.get("/openapi.json", include_in_schema=False)
+async def openapi_schema():
+    if not get_settings().dev_mode:
+        raise HTTPException(404, "Not Found")
+    return JSONResponse(app.openapi())
+
+
+@app.get("/api/docs", include_in_schema=False)
+async def api_docs():
+    if not get_settings().dev_mode:
+        raise HTTPException(404, "Not Found")
+    return get_swagger_ui_html(openapi_url="/openapi.json", title="Перемена — API")
 
 
 @app.middleware("http")

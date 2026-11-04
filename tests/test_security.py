@@ -384,6 +384,27 @@ def test_demo_global_limit_and_cleanup_without_token(web):
         assert {"demo", "sessions"} <= jobs
 
 
+# ---------------------------------------------------------------- заголовки, документация, размер запроса
+def test_security_headers_and_docs_only_in_dev(web):
+    with web(PUBLIC_URL="https://peremena.example") as client:
+        for path in ("/", "/login", "/app/", "/app/app.js", "/api/public/stats"):
+            r = client.get(path)
+            assert r.headers["x-content-type-options"] == "nosniff", path
+            assert r.headers["referrer-policy"] == "strict-origin-when-cross-origin", path
+            csp = r.headers["content-security-policy"]
+            assert "script-src 'self' https://st.max.ru" in csp, path
+            # мини-приложение открывается внутри MAX — его во фрейм пускаем, сайт — нет
+            assert ("frame-ancestors" in csp) == (not path.startswith("/app/")), path
+        assert client.get("/api/docs").status_code == 404
+        assert client.get("/openapi.json").status_code == 404
+        big = client.post("/api/ask/forward", content=b"x" * (1024 * 1024 + 1),
+                          headers={**H, "content-type": "application/json"})
+        assert big.status_code == 413
+    with web() as client:  # разработка
+        assert client.get("/api/docs").status_code == 200
+        assert "/api/me" in client.get("/openapi.json").json()["paths"]
+
+
 # ---------------------------------------------------------------- адрес клиента и прокси
 def test_demo_limit_ignores_spoofed_forwarded_for(web):
     with web(DEMO_PER_IP_HOUR="1") as client:
