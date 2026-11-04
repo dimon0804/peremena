@@ -8,7 +8,7 @@ import secrets
 from .. import keyboards as kb
 from ..core import ctx
 from ..models import User
-from ..services import attendance, chats, faq, faq_learning, polls, quiet, school, search, shelf, stats
+from ..services import answers, chats, faq, faq_learning, polls, quiet, school, search, shelf, stats
 from ..timeutil import fmt_dt, fmt_minutes, local_now, parse_deadline, parse_hours, preset_deadline
 from . import absence, staff
 from .common import (
@@ -498,17 +498,28 @@ async def faq_add_step(uid: int, step: str, data: dict, text: str) -> bool:
 async def faq_reply_step(uid: int, data: dict, text: str) -> bool:
     """Учитель отвечает на переданный вопрос: ответ уходит родителю, в справочник — по желанию учителя.
     Автосохранение засоряло справочник: живой тест дал карточку «срочно → ?»."""
-    await clear_state(uid)
     q = await ctx().kv.get(f"qq:{data['qid']}")
     if not q:
+        await clear_state(uid)
         await send(uid, "Вопрос устарел — ответьте родителю напрямую.")
         return True
+    if not text.strip():
+        # картинка или файл без подписи: пустое сообщение родителю и пустая карточка справочника никому не нужны
+        await send(uid, "Ответ нужен текстом — напишите его одним сообщением. Отменить — /cancel")
+        return True
+    await clear_state(uid)
     sent = await ctx().safe_send(
         user_id=q["from_user_id"],
         text=f"✉️ <b>Ответ учителя</b> на ваш вопрос «{html.escape(q['text'][:200])}»:\n\n{html.escape(text)}",
     )
+    if not sent:
+        # вопрос не снимаем: кнопка «Ответить» продолжит работать, можно попробовать позже
+        await send(uid, "⚠️ Не удалось доставить ответ родителю — возможно, он остановил бота. "
+                        "Попробуйте ещё раз позже или напишите ему напрямую.",
+                   [[kb.cb("✍️ Ответить ещё раз", f"fr:{data['qid']}")]])
+        return True
     await ctx().kv.delete(f"qq:{data['qid']}")
-    head = "✅ Ответ отправлен." if sent else "⚠️ Не удалось доставить ответ родителю."
+    head = "✅ Ответ отправлен."
     if len(search.content_stems(q["text"])) < 2 or len(text.strip()) < 3:
         await send(uid, head)  # «срочно» → «?» в справочник не предлагаем
         return True
@@ -521,69 +532,40 @@ async def faq_reply_step(uid: int, data: dict, text: str) -> bool:
 
 # ====================================================================== вопросы
 async def answer_text(uid: int, text: str, is_teacher: bool) -> None:
+    """Вопрос в личке. Сам поиск ответа — в services.answers (его же использует мини-приложение),
+    здесь только отправка с кнопками."""
     low = text.lower()
-    if is_teacher and low.startswith(("найди", "найти", "полка", "где ")):
+    if low.startswith(("найди", "найти", "полка", "где ")) and (await answers.who(uid)).is_staff:
         await shelf_search(uid, text.split(" ", 1)[1] if " " in text else "")
         return
 
-    user = await chats.get_user(uid)
-    tz = user.tz if user else ctx().settings.default_tz
-    if is_teacher:
-        entries = await faq.list_entries(uid, with_school=True)
-        chat_ids = []
-        board_chats = [c.chat_id for c, _ in await staff.staff_chats(uid)]
-    else:
-        chat_ids = [c.chat_id for c in await chats.member_chats(uid)]
-        board_chats = chat_ids + [c.chat_id for c, _ in await staff.staff_chats(uid)]
-        if not board_chats:
-            await send(uid, ONBOARD_HELP)
-            return
-        entries = await faq.candidates_for_chats(chat_ids)
-
-    # «Заболел, сегодня не придём» — предлагаем отметить отсутствие кнопкой
-    if not is_teacher and attendance.looks_like_absence(text):
+    a = await answers.answer(uid, text)
+    if a.kind == "onboard":
+        await send(uid, ONBOARD_HELP)
+    elif a.kind == "absence":
         await absence.offer(uid)
-        return
-
-    # «Что задали?» и «какие объявления?» — по доске класса
-    if await staff.answer_board_question(uid, text, board_chats, tz):
-        return
-
-    hits = faq.rank(text, entries)
-    if hits and hits[0].score >= faq.ANSWER_SCORE:
-        e = hits[0].item
-        prefix = "👩‍🏫 <i>Так я отвечу родителям:</i>\n\n" if is_teacher else ""
-        await send(uid, prefix + await faq.render_answer(e), [[kb.cb("Это не то", f"fq:no:{e.id}")]] if not is_teacher else None)
-        if not is_teacher:
-            await faq.mark_hit(e.id)
-            await stats.add(e.teacher_id, "faq_answer")
-        return
-
-    # материалы на полке
-    mats = await shelf.find(uid, text, teacher_view=is_teacher, limit=3)
-    if hits:
-        rows = [[kb.cb(h.item.question[:60], f"fq:show:{h.item.id}")] for h in hits]
-        if not is_teacher:
+    elif a.kind in ("board", "news"):
+        await send(uid, a.text)
+    elif a.kind == "board_missing":
+        await send(uid, a.text, [[kb.cb("✉️ Спросить учителя", "fw:ask")]] if a.can_forward else None)
+    elif a.kind == "faq":
+        if a.as_teacher:
+            await send(uid, "👩‍🏫 <i>Так я отвечу родителям:</i>\n\n" + a.text)
+        else:
+            await send(uid, a.text, [[kb.cb("Это не то", f"fq:no:{a.entry.id}")]])
+    elif a.kind == "suggest":
+        rows = [[kb.cb(h.item.question[:60], f"fq:show:{h.item.id}")] for h in a.hits]
+        if a.can_forward:
             rows.append([kb.cb("Нет, спросить учителя", "fw:ask")])
-            await ctx().kv.set(f"q:{uid}", {"text": text, "chats": chat_ids}, 3600 * 6)
-        await send(uid, "🤔 Возможно, вы имели в виду:", rows)
-        return
-    if mats:
-        await send_material_list(uid, mats, is_teacher, header="🗂 Нашёл на полке:")
-        if not is_teacher:
-            await ctx().kv.set(f"q:{uid}", {"text": text, "chats": chat_ids}, 3600 * 6)
+        await send(uid, a.text, rows)
+    elif a.kind == "shelf":
+        await send_material_list(uid, a.materials, a.as_teacher, header=a.text)
+        if a.can_forward:
             await send(uid, "Если это не то — могу передать вопрос учителю.", [[kb.cb("Спросить учителя", "fw:ask")]])
-        return
-
-    if is_teacher:
-        await send(uid, "В справочнике и на полке такого нет. Добавить ответ — /add, найти файл — /shelf.",
-                   teacher_menu())
-        return
-    await ctx().kv.set(f"q:{uid}", {"text": text, "chats": chat_ids}, 3600 * 6)
-    # запоминаем вопрос без ответа: когда тему спросят несколько раз, бот подскажет учителю сохранить ответ
-    await faq_learning.record(chat_ids, uid, text)
-    await send(uid, "В справочнике класса пока нет готового ответа. Передать вопрос учителю?",
-               [[kb.cb("✉️ Передать учителю", "fw:ask")], [kb.cb("Не надо", "fw:x")]])
+    elif a.as_teacher:
+        await send(uid, a.text, teacher_menu())
+    else:
+        await send(uid, a.text, [[kb.cb("✉️ Передать учителю", "fw:ask")], [kb.cb("Не надо", "fw:x")]])
 
 
 async def forward_question(uid: int, chat_id: int | None = None) -> None:
@@ -639,7 +621,7 @@ async def forward_question(uid: int, chat_id: int | None = None) -> None:
 
 # ====================================================================== «Полка»
 async def save_to_shelf(uid: int, media: list[dict], caption: str) -> None:
-    my_chats = await chats.teacher_chats(uid)
+    my_chats = [c for c, _ in await staff.staff_chats(uid)]  # и классы, где он предметник
     for item in media:
         m, created = await shelf.save(uid, item, caption, source="manual")
         rows = [[kb.cb(f"➡️ В {c.title[:30] or 'класс'}", f"sh:to:{m.id}:{c.chat_id}")] for c in my_chats[:4]]
@@ -656,7 +638,7 @@ async def ask_shelf(uid: int) -> None:
 
 
 async def shelf_search(uid: int, query: str) -> None:
-    is_teacher = await chats.is_teacher(uid)
+    is_teacher = (await school.roles(uid)).is_staff  # предметник тоже ищет по своей полке
     if not query.strip():
         await ask_shelf(uid)
         return
@@ -689,7 +671,7 @@ async def show_material(uid: int, mid: int, is_teacher: bool | None = None) -> N
         is_teacher = m.teacher_id == uid
     rows = [[kb.cb("📥 Прислать мне", f"sh:get:{m.id}")]]
     if is_teacher and m.teacher_id == uid:
-        for c in (await chats.teacher_chats(uid))[:4]:
+        for c, _ in (await staff.staff_chats(uid))[:4]:
             rows.append([kb.cb(f"➡️ Переслать в {c.title[:30] or 'класс'}", f"sh:to:{m.id}:{c.chat_id}")])
         rows.append([kb.cb("✏️ Подпись", f"sh:cap:{m.id}"), kb.cb("🗑 Убрать", f"sh:del:{m.id}")])
     await send(uid, await shelf.describe(m), rows)

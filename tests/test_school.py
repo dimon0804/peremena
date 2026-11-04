@@ -16,6 +16,16 @@ def run(loop, coro):
     return loop.run_until_complete(coro)
 
 
+def last_button(api, prefix: str) -> str:
+    for s in reversed(api.sent):
+        for att in s.get("attachments") or []:
+            for row in att.get("payload", {}).get("buttons", []):
+                for b in row:
+                    if b.get("payload", "").startswith(prefix):
+                        return b["payload"]
+    raise AssertionError(f"нет кнопки {prefix}")
+
+
 def added(loop, chat_id, teacher):
     run(loop, handle_update({"update_type": "bot_added", "timestamp": chat_id, "chat_id": chat_id, "user": teacher,
                              "is_channel": False}))
@@ -90,6 +100,8 @@ def test_school_shared_faq_and_campaign(env):
     # первый учитель создаёт школу, второй вступает по коду
     run(loop, handle_update(msg_update(TEACHER, "/school", mid="s1")))
     run(loop, handle_update(msg_update(TEACHER, "Школа № 7", mid="s2")))
+    assert not run(loop, school.roles(TEACHER["user_id"])).school  # создаём только по кнопке
+    run(loop, handle_update(cb_update(TEACHER, last_button(api, "sc:new:"), "s2b")))
     r1 = run(loop, school.roles(TEACHER["user_id"]))
     assert r1.is_admin and r1.school.name == "Школа № 7"
     run(loop, handle_update({"update_type": "bot_started", "timestamp": 3, "chat_id": 2, "user": TEACHER2,

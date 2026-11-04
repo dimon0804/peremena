@@ -360,8 +360,9 @@ async def on_shelf(cid: str, uid: int, tail: str) -> None:
             await ack(cid, "Пересылать может только учитель")
             return
         chat_id = int(parts[2])
-        chat = await chats.get_chat(chat_id)
-        if not chat or chat.teacher_id != uid:
+        # классный руководитель или предметник этого класса
+        chat = next((c for c, _ in await staff.staff_chats(uid) if c.chat_id == chat_id), None)
+        if not chat:
             await ack(cid, "Чат не найден")
             return
         if not await ctx().kv.add_once(f"shto:{m.id}:{chat_id}", ttl=60):

@@ -271,6 +271,12 @@ async def recent_news(chat_ids: list[int], days: int = 7) -> list[Announcement]:
     return [a for a in await list_for_chats(chat_ids, days=days) if a.kind == "news" and is_visible(a)][:5]
 
 
+async def _chat_titles(chat_ids: set[int]) -> dict[int, str]:
+    async with session() as s:
+        return {c.chat_id: c.title for c in (await s.scalars(
+            select(ClassChat).where(ClassChat.chat_id.in_(chat_ids)))).all()}
+
+
 async def render_answer(items: list[Announcement], query: str, tz: str | None) -> str:
     subj = subject_in(query)
     day = date_in(query, tz)
@@ -281,10 +287,13 @@ async def render_answer(items: list[Announcement], query: str, tz: str | None) -
         head += f" на {WEEKDAYS[day.weekday()]} {day:%d.%m}"
     head += "</b>"
     lines = [head, ""]
+    # родитель двоих детей в разных классах: без подписи класса две «Алгебры» не различить
+    titles = await _chat_titles({a.chat_id for a in items}) if len({a.chat_id for a in items}) > 1 else {}
     for a in items[:10]:
         title = html.escape(a.subject or "Без предмета")
+        cls = f" · {html.escape(titles[a.chat_id])}" if titles.get(a.chat_id) else ""
         when = f" (на {fmt_day(a.for_date)})" if a.for_date and not day else ""
-        lines.append(f"<b>{title}</b>{when}: {html.escape(a.text)}")
+        lines.append(f"<b>{title}</b>{cls}{when}: {html.escape(a.text)}")
     lines.append("")
     lines.append("<i>📌 С доски класса — записано учителем.</i>")
     return "\n".join(lines)
@@ -292,8 +301,10 @@ async def render_answer(items: list[Announcement], query: str, tz: str | None) -
 
 async def render_news(items: list[Announcement], tz: str | None) -> str:
     lines = ["📣 <b>Последние объявления</b>", ""]
+    titles = await _chat_titles({a.chat_id for a in items}) if len({a.chat_id for a in items}) > 1 else {}
     for a in items:
-        lines.append(f"• {to_local(a.created_at, tz):%d.%m}: {html.escape(a.text[:300])}")
+        cls = f" · {html.escape(titles[a.chat_id])}" if titles.get(a.chat_id) else ""
+        lines.append(f"• {to_local(a.created_at, tz):%d.%m}{cls}: {html.escape(a.text[:300])}")
     return "\n".join(lines)
 
 

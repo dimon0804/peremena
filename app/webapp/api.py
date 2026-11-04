@@ -303,25 +303,26 @@ async def answer_poll(pid: int, body: AnswerIn, user: User = Depends(current_use
 
 @router.get("/ask")
 async def ask(q: str = Query(min_length=2, max_length=500), user: User = Depends(current_user)):
-    is_t = await chats.is_teacher(user.user_id)
-    if is_t:
-        entries = await faq.list_entries(user.user_id)
-    else:
-        entries = await faq.candidates_for_chats([c.chat_id for c in await chats.member_chats(user.user_id)])
-    hits = faq.rank(q, entries)
+    """Та же логика, что у бота в личке (services.answers): доска («что задали?»), отсутствие («заболел»),
+    справочник, полка; вопрос без ответа копится для подсказок учителю.
+    Поля answer/suggestions/materials — как раньше; новые: kind (board | board_missing | news | faq | suggest |
+    shelf | absence | onboard | none), text (HTML, только <b>/<i>), text_plain, can_forward."""
+    from ..services import answers
+
+    a = await answers.answer(user.user_id, q, user.tz)
     titles = await _titles()
-    mats = await shelf.find(user.user_id, q, teacher_view=is_t, limit=5)
-    answer = None
-    if hits and hits[0].score >= faq.ANSWER_SCORE:
-        e = hits[0].item
-        answer = faq_out(e)
-        if not is_t:
-            await faq.mark_hit(e.id)
-            await stats.add(e.teacher_id, "faq_answer")
+    mats = a.materials
+    if not mats and a.kind in ("faq", "suggest", "none"):
+        mats = await shelf.find(user.user_id, q, teacher_view=not a.chat_ids, limit=5)
+    answer = faq_out(a.entry) if a.kind == "faq" and a.entry else None
     return {
         "answer": answer,
-        "suggestions": [faq_out(h.item) | {"score": h.score} for h in hits if not answer or h.item.id != answer["id"]],
+        "suggestions": [faq_out(h.item) | {"score": h.score} for h in a.hits if not answer or h.item.id != answer["id"]],
         "materials": [material_out(h.item, titles, user.tz) for h in mats],
+        "kind": a.kind,
+        "text": a.text,
+        "text_plain": answers.plain(a.text),
+        "can_forward": a.can_forward,
     }
 
 

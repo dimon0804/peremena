@@ -89,13 +89,19 @@ async def save(teacher_id: int, media: dict, caption: str = "", chat_id: int | N
 
 
 async def visible_materials(user_id: int, teacher_view: bool) -> list[Material]:
-    """Учитель видит всю свою полку; родитель — материалы, отправленные в его чаты."""
+    """Учитель (классный руководитель или предметник) видит всю свою полку и материалы своих классов;
+    родитель — материалы, отправленные в его чаты."""
+    from sqlalchemy import or_
+
     from . import chats
 
+    chat_ids = [c.chat_id for c in await chats.member_chats(user_id)]
     async with session() as s:
         if teacher_view:
-            return list((await s.scalars(select(Material).where(Material.teacher_id == user_id))).all())
-        chat_ids = [c.chat_id for c in await chats.member_chats(user_id)]
+            cond = Material.teacher_id == user_id
+            if chat_ids:
+                cond = or_(cond, Material.chat_id.in_(chat_ids))
+            return list((await s.scalars(select(Material).where(cond))).all())
         if not chat_ids:
             return []
         return list((await s.scalars(select(Material).where(Material.chat_id.in_(chat_ids)))).all())

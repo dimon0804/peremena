@@ -4,6 +4,7 @@ from __future__ import annotations
 import html
 import logging
 import re
+import secrets
 
 from .. import keyboards as kb
 from ..core import ctx
@@ -180,45 +181,6 @@ async def show_board(uid: int) -> None:
     await send(uid, "\n\n".join(lines) if items else "\n".join(lines), rows)
 
 
-async def answer_board_question(uid: int, text: str, chat_ids: list[int], tz: str | None) -> bool:
-    """Ответ родителю/ученику по доске. True — ответ дан."""
-    if board.is_homework_question(text):
-        from ..services import stats
-
-        items = await board.find_homework(text, chat_ids, tz)
-        subj = board.subject_in(text)
-        day = board.date_in(text, tz)
-        prefix = ""
-        if not items and day:
-            # на запрошенный день ничего нет — покажем ближайшее, иначе родитель решит, что не задано вовсе
-            items = await board.find_homework(f"задали {subj or ''}", chat_ids, tz)
-            if items:
-                prefix = (f"На {board.WEEKDAYS[day.weekday()]} {day:%d.%m} на доске ничего не записано. "
-                          f"Ближайшее:\n\n")
-                text = f"задали {subj or ''}"
-        if items:
-            await send(uid, prefix + await board.render_answer(items, text, tz))
-            teacher_ids = {c.teacher_id for c in [await chats.get_chat(a.chat_id) for a in items] if c}
-            for t in teacher_ids:
-                await stats.add(t, "faq_answer")
-            return True
-        what = "📚 На доске класса пока нет задания" + (f" по предмету «{html.escape(subj)}»" if subj else "")
-        if (await school.roles(uid)).is_staff:
-            # учителю «спросить учителя» не нужно — подскажем, как записать
-            await send(uid, what + ". Записать — /hw")
-            return True
-        await send(uid, what + ". Если задание давали устно — могу передать вопрос учителю.",
-                   [[kb.cb("✉️ Спросить учителя", "fw:ask")]])
-        await ctx().kv.set(f"q:{uid}", {"text": text, "chats": chat_ids}, 3600 * 6)
-        return True
-    if board.is_news_question(text):
-        items = await board.recent_news(chat_ids)
-        if items:
-            await send(uid, await board.render_news(items, tz))
-            return True
-    return False
-
-
 # ====================================================================== предметники
 async def start_invite(uid: int) -> None:
     my = await chats.teacher_chats(uid)
@@ -346,27 +308,52 @@ async def show_school(uid: int) -> None:
 
 async def school_name_step(uid: int, text: str) -> bool:
     await clear_state(uid)
-    t = text.strip()
-    if len(t) <= 10 and t.replace("-", "").isalnum() and t.upper() == t and any(ch.isdigit() for ch in t):
-        sch, role = await school.join_by_code(uid, t)
+    t = " ".join(text.split())
+    # сначала — не код ли это приглашения (регистр не важен: «ab3k7m» = «AB3K7M»)
+    if len(t) <= 10 and " " not in t:
+        sch, role = await school.join_by_code(uid, t.upper())
         if sch:
             await send(uid, f"🏫 Вы в школе <b>{html.escape(sch.name)}</b> ({'администратор' if role == 'admin' else 'учитель'}).")
             return True
     if len(t) < 3:
         await send(uid, "Название слишком короткое. /school — попробовать ещё раз.")
         return True
+    # Новую школу (и роль администратора) создаём только по явной кнопке: опечатка в коде приглашения
+    # не должна молча делать учителя завучем отдельной «школы».
+    key = secrets.token_hex(4)
+    await ctx().kv.set(f"scn:{key}", {"uid": uid, "name": t[:300]}, 3600)
+    looks_like_code = len(t) <= 10 and t.replace("-", "").isalnum() and any(ch.isdigit() for ch in t)
+    head = (f"Код «{html.escape(t)}» не найден — проверьте его у завуча.\n\n" if looks_like_code else "")
+    await send(uid, head + f"Создать новую школу «<b>{html.escape(t)}</b>»? Вы станете её администратором и "
+                           "сможете пригласить классных руководителей.",
+               [[kb.cb("🏫 Создать школу", f"sc:new:{key}")], [kb.cb("Отмена", "f:cancel")]])
+    return True
+
+
+async def create_school_confirmed(uid: int, key: str) -> None:
+    data = await ctx().kv.get(f"scn:{key}")
+    if not data or data.get("uid") != uid:
+        await send(uid, "Черновик устарел. /school — начать заново.")
+        return
+    await ctx().kv.delete(f"scn:{key}")
+    if (await school.roles(uid)).school:
+        await send(uid, "Вы уже состоите в школе — /school.")
+        return
+    t = data["name"]
     sch = await school.create_school(uid, t)
     await send(uid,
                f"✅ Школа <b>{html.escape(sch.name)}</b> создана, вы — администратор.\n\n"
                f"Пригласите классных руководителей — перешлите им ссылку:\n{ctx().start_link('school_' + sch.code)}\n\n"
                f"Код для учителей: <code>{sch.code}</code>",
                [[kb.cb("📊 Сводка", "sc:dash")]])
-    return True
 
 
 async def on_school_cb(cid: str, uid: int, tail: str) -> None:
     r = await school.roles(uid)
-    if tail == "dash":
+    if tail.startswith("new:"):
+        await ack(cid)
+        await create_school_confirmed(uid, tail[4:])
+    elif tail == "dash":
         await ack(cid)
         await show_school(uid)
     elif tail == "admin" and r.is_admin and r.school:
