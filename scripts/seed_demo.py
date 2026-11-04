@@ -55,7 +55,7 @@ async def main() -> None:
                     SchoolMember(school_id=sch.id, user_id=110, role="teacher"),
                     SubjectTeacher(chat_id=-5000, user_id=120, subject="Английский язык")])
 
-        p1 = Poll(teacher_id=100, chat_id=-5000, template="consent", title="Экскурсия в музей, 28 октября, 300 ₽.",
+        p1 = Poll(teacher_id=100, chat_id=-5000, template="consent", title="Экскурсия в музей в субботу, 300 ₽.",
                   text="Экскурсия в музей, 28 октября, 300 ₽.\nНужно согласие до пятницы.",
                   options=["Согласен", "Не согласен", "Нужно уточнить"], clarify_option=2,
                   deadline=now + timedelta(days=2), created_at=now - timedelta(days=1))

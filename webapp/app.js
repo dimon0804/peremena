@@ -306,7 +306,7 @@
         const absent = att.items.length
           ? `<div class="card absent"><div class="card-head"><div class="card-title">Сегодня не придут: ${att.items.length}</div><span class="muted small">${esc(att.day_text)}</span></div>
               <ul class="list">${att.items.map((a) => `<li><span class="name">${esc(a.who)}</span><span class="muted">${esc(a.reason_text)}${a.comment ? " · " + esc(a.comment) : ""}</span></li>`).join("")}</ul></div>`
-          : `<div class="card absent quiet-note small muted">Сегодня все на месте: никто из родителей не отметил, что ребёнок не придёт.</div>`;
+          : `<div class="card quiet-note small muted">Сегодня все на месте: никто из родителей не отметил, что ребёнок не придёт.</div>`;
         render(`${pageHead("Сборы", '<button type="button" class="btn head-action" data-act="newPoll"><svg class="i" aria-hidden="true"><use href="#i-plus"/></svg>Новый сбор</button>')}
           ${absent}
           ${items.length ? "" : `<div class="empty"><div class="empty-ico" aria-hidden="true"><svg><use href="#i-list"/></svg></div><b>Сборов пока нет</b>Согласия, справки, деньги на экскурсию: бот пришлёт каждому родителю кнопки в личку и сам посчитает, кто ответил.
