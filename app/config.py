@@ -73,6 +73,16 @@ class Settings(BaseSettings):
         return bool(self.public_url or self.webhook_url)
 
     @property
+    def is_public(self) -> bool:
+        """Сервис смотрит в интернет (задан публичный адрес или вебхук)."""
+        return bool(self.public_url or self.webhook_url)
+
+    @property
+    def dev_mode(self) -> bool:
+        """DEV_AUTH действует только без публичного адреса: в проде вход по ?dev_user=<id> — это вход под любым."""
+        return self.dev_auth and not self.is_public
+
+    @property
     def signing_key(self) -> bytes:
         """Ключ подписей (ссылки на выгрузку): SECRET_KEY, иначе выводится из токена. Без токена и SECRET_KEY —
         случайный на время работы процесса: из пустой строки вывели бы ключ, известный всем."""

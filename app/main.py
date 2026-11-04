@@ -32,6 +32,9 @@ async def startup() -> tuple[Ctx, list]:
     c = Ctx(settings=settings, api=api, kv=kv, bot_username=settings.bot_username)
     set_ctx(c)
     background: list = []
+    if settings.dev_auth and settings.is_public:
+        log.error("!!! DEV_AUTH=true при заданном PUBLIC_URL/WEBHOOK_URL — это вход под любым пользователем. "
+                  "Режим разработки ИГНОРИРУЕТСЯ; уберите DEV_AUTH из настроек прода.")
     if not settings.max_bot_token:
         log.warning("MAX_BOT_TOKEN не задан — работает только веб-часть (API и мини-приложение)")
         return c, background

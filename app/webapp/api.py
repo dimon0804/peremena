@@ -56,7 +56,7 @@ async def current_user(
             "last_name": u.get("last_name"), "username": u.get("username"),
         })
         return user
-    if c.settings.dev_auth and dev_user:
+    if c.settings.dev_mode and dev_user:
         user = await chats.get_user(dev_user)
         if user is None:
             user = await chats.upsert_user({"user_id": dev_user, "first_name": f"Dev {dev_user}"})

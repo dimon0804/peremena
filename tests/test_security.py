@@ -245,6 +245,13 @@ def test_webhook_non_ascii_secret_is_403_not_500(web):
         assert r.status_code == 403
 
 
+def test_dev_auth_ignored_on_public_deploy(web):
+    with web(PUBLIC_URL="https://peremena.example") as client:
+        assert client.get("/api/me?dev_user=100").status_code == 401
+    with web() as client:  # локально — работает как раньше
+        assert client.get("/api/me?dev_user=100").status_code == 200
+
+
 # ---------------------------------------------------------------- вход на сайт через бота
 def test_login_code_works_only_in_browser_that_started_it(web, monkeypatch):
     import asyncio
