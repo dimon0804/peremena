@@ -405,6 +405,30 @@ def test_security_headers_and_docs_only_in_dev(web):
         assert "/api/me" in client.get("/openapi.json").json()["paths"]
 
 
+def test_health_checks_and_hides_details(web, monkeypatch):
+    import asyncio
+
+    with web(PUBLIC_URL="https://peremena.example", MAX_BOT_TOKEN="test-token", UPDATES_MODE="polling") as client:
+        r = client.get("/health")
+        assert r.status_code == 200 and r.json() == {"status": "ok"}
+
+        async def kill_polling():
+            for t in client.app.state.background:
+                if isinstance(t, asyncio.Task):
+                    t.cancel()
+            await asyncio.sleep(0.05)
+        client.portal.call(kill_polling)
+        r = client.get("/health")
+        assert r.status_code == 503 and r.json() == {"status": "degraded"}
+
+    async def db_down():
+        return False
+    with web() as client:
+        assert client.get("/health").json()["checks"]["db"] is True  # подробности — в разработке
+        monkeypatch.setattr("app.main._db_ok", db_down)
+        assert client.get("/health").status_code == 503
+
+
 # ---------------------------------------------------------------- адрес клиента и прокси
 def test_demo_limit_ignores_spoofed_forwarded_for(web):
     with web(DEMO_PER_IP_HOUR="1") as client:

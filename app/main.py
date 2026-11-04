@@ -89,6 +89,7 @@ async def lifespan(app: FastAPI):
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     c, background = await startup()
     app.state.ctx = c
+    app.state.background = background
     try:
         yield
     finally:
@@ -181,18 +182,40 @@ async def webhook(request: Request, x_max_bot_api_secret: str | None = Header(de
     return {"ok": True}
 
 
+async def _db_ok() -> bool:
+    from sqlalchemy import text
+
+    try:
+        async with db.session() as s:
+            await asyncio.wait_for(s.execute(text("SELECT 1")), timeout=3)
+        return True
+    except Exception:
+        log.exception("health: база недоступна")
+        return False
+
+
+async def _kv_ok(c: Ctx) -> bool:
+    try:
+        return bool(await asyncio.wait_for(c.kv.ping(), timeout=3))
+    except Exception:
+        return False
+
+
 @app.get("/health")
 async def health():
+    """200 — всё работает, 503 — что-то сломалось (на это смотрит HEALTHCHECK в Docker).
+    Подробности — только в режиме разработки: снаружи незачем знать версию и устройство сервиса."""
     c = app.state.ctx
-    return {
-        "status": "ok",
-        "version": __version__,
-        "mode": c.settings.mode,
-        "bot": c.bot_username,
-        "db": db.dialect(),
-        "kv": type(c.kv).__name__,
-        "bot_ready": c.started,
-    }
+    checks = {"db": await _db_ok(), "kv": await _kv_ok(c)}
+    polling = [b for b in getattr(app.state, "background", []) if isinstance(b, asyncio.Task)]
+    if polling:  # long polling упал — бот перестал получать сообщения
+        checks["polling"] = not any(t.done() for t in polling)
+    ok = all(checks.values())
+    body: dict = {"status": "ok" if ok else "degraded"}
+    if c.settings.dev_mode:
+        body |= {"checks": checks, "version": __version__, "mode": c.settings.mode, "bot": c.bot_username,
+                 "db": db.dialect(), "kv": type(c.kv).__name__, "bot_ready": c.started}
+    return JSONResponse(body, status_code=200 if ok else 503)
 
 
 SITE_DIR = BASE_DIR / "site"
