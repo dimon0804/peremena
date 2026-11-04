@@ -527,3 +527,11 @@ def test_upload_size_limit_is_checked_by_handler(env):
     assert r.status_code == 401
     r = client.post("/api/faq", content=big, headers={"X-Peremena": "1", "Content-Type": "application/json"})
     assert r.status_code == 413
+
+
+def test_roster_rows_that_are_not_names_are_reported():
+    """Строки, где в столбце ФИО не имя (цифры, мусор после склейки ячеек), не пропадают молча — учитель видит предупреждение."""
+    data = "ФИО ученика;Родители\nИванов Иван Иванович;Иванова Анна\n12345;\nСалтыков-Щедрин Константин;\n—-;\n".encode("utf-8")
+    p = parse.parse_file(data, "spisok.csv")
+    assert [s["name"] for s in p.students] == ["Иванов Иван", "Салтыков-Щедрин Константин"]
+    assert any("не похожи на имя" in w for w in p.warnings)

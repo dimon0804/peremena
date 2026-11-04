@@ -427,9 +427,13 @@ def parse_table(title: str, rows: list[list[str]], today: date) -> Parsed:
 
     if has_name and "subject" not in cols:
         seen = set()
+        skipped = 0
         for row in body:
+            raw = " ".join(_get(row, cols, k) for k in ("student", "last", "first")).strip()
             name = student_name(_get(row, cols, "student"), _get(row, cols, "last"), _get(row, cols, "first"))
             if not name or len(name) < 2 or any(name.lower().startswith(s) for s in SKIP_NAMES):
+                if raw and not any(raw.lower().startswith(s) for s in SKIP_NAMES):
+                    skipped += 1  # в ячейке что-то есть, но на имя не похоже — скажем учителю, а не промолчим
                 continue
             if name.lower() in seen:
                 continue
@@ -441,6 +445,8 @@ def parse_table(title: str, rows: list[list[str]], today: date) -> Parsed:
             p.students.append({"name": name, "parents": list(dict.fromkeys(parents))[:4]})
         if p.students:
             p.tables.append(_where(title) + "список класса")
+        if skipped:
+            p.warnings.append(_where(title) + f"{skipped} строк(и) со столбцом ФИО не похожи на имя и пропущены — проверьте файл")
         return p
 
     # уроки и/или домашние задания

@@ -372,14 +372,16 @@ async def summary(rc: RegionCampaign) -> dict:
 
 def render_summary_text(d: dict) -> str:
     lines = [f"🏛 <b>{html.escape(d['title'])}</b>",
-             f"Ответили <b>{d['pct']} %</b> ({d['answered']} из {d['total']}) · школ: {len(d['schools'])}, "
+             (f"Ответили <b>{d['pct']} %</b> ({d['answered']} из {d['total']})" if d["total"]
+              else "Родителям ещё не разослан") + f" · школ: {len(d['schools'])}, "
              f"классов: {d['classes']}"]
     if d["waiting_dispatch"]:
         lines.append(f"Ещё рассылается: {d['waiting_dispatch']} класс(ов).")
     if d["schools"]:
         lines.append("")
         for sc in d["schools"][:15]:
-            lines.append(f"• {html.escape(sc['name'])} — {sc['pct']} % ({sc['answered']}/{sc['total']})")
+            lines.append(f"• {html.escape(sc['name'])} — " + (f"{sc['pct']} % ({sc['answered']}/{sc['total']})"
+                                                               if sc["total"] else "ещё не разослан"))
         if len(d["schools"]) > 15:
             lines.append(f"…и ещё {len(d['schools']) - 15}. Полная таблица — в приложении, с выгрузкой в CSV.")
     return "\n".join(lines)
@@ -452,7 +454,7 @@ async def render_dashboard_text(reg: Region) -> str:
     for c in d["campaigns"][:5]:
         worst = c["schools"][:1]
         tail = f", {html.escape(worst[0]['name'])} — {worst[0]['pct']} %" if worst and len(c["schools"]) > 1 else ""
-        lines.append(f"• {html.escape(c['title'])}: ответили {c['pct']} %{tail}")
+        lines.append(f"• {html.escape(c['title'])}: " + (f"ответили {c['pct']} %{tail}" if c["total"] else "ещё не разослан"))
     return "\n".join(lines)
 
 

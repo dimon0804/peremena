@@ -1753,9 +1753,11 @@
     </div>`;
   }
 
+  // пока родителям ничего не ушло, «0 %» читается как «никто не ответил» — показываем, что сбор ещё не разослан
+  const rcPct = (o) => (o.total ? `${o.pct}<small>%</small>` : "—");
   const rcCard = (c) => `<button type="button" class="card tap poll-card" data-act="openRegionCampaign" data-id="${c.id}">
       <span class="card-title">${esc(c.title)}</span>
-      <span class="row spread poll-nums"><span class="big sm">${c.pct}<small>%</small></span><span class="muted small">${c.schools.length} ${plural(c.schools.length, "школа", "школы", "школ")} · ${c.classes} ${plural(c.classes, "класс", "класса", "классов")}</span></span>
+      <span class="row spread poll-nums"><span class="big sm">${rcPct(c)}</span><span class="muted small">${c.schools.length} ${plural(c.schools.length, "школа", "школы", "школ")} · ${c.classes} ${plural(c.classes, "класс", "класса", "классов")}</span></span>
       <span class="bar" role="img" aria-label="Ответили ${c.pct}%"><i style="width:${c.pct}%"></i></span>
       ${c.total && c.schools.length > 1 ? `<span class="muted small">Меньше всего ответили: ${esc(c.schools[0].name)} — ${c.schools[0].pct}%</span>` : ""}</button>`;
 
@@ -1905,15 +1907,15 @@
         render(`<div class="card">
             <h1 class="card-title lg">${esc(c.title)}</h1>
             <div class="muted small">${c.schools.length} ${plural(c.schools.length, "школа", "школы", "школ")} · ${c.classes} ${plural(c.classes, "класс", "класса", "классов")}${c.deadline_text ? " · до " + esc(c.deadline_text) : ""}</div>
-            <div class="big" style="margin-top:18px">${c.pct}<small>%</small></div>
+            <div class="big" style="margin-top:18px">${rcPct(c)}</div>
             <div class="bar" role="img" aria-label="Ответили ${c.pct}%"><i style="width:${c.pct}%"></i></div>
-            <div class="small">Ответили ${c.answered} из ${c.total}${c.waiting_dispatch ? ` · ещё ждут рассылки: ${c.waiting_dispatch} ${plural(c.waiting_dispatch, "класс", "класса", "классов")}` : ""}</div>
+            <div class="small">${c.total ? `Ответили ${c.answered} из ${c.total}` : "Родителям ещё не разослан"}${c.waiting_dispatch ? ` · ещё ждут рассылки: ${c.waiting_dispatch} ${plural(c.waiting_dispatch, "класс", "класса", "классов")}` : ""}</div>
             <ul class="list">${c.options.map((o, i) => `<li><span>${esc(o)}</span><b>${c.per_option[i] || 0}</b></li>`).join("")}</ul>
             <p class="muted small">Здесь только цифры. Кто именно не ответил, видят классный руководитель и завуч своей школы.</p>
             <button type="button" class="btn ghost" data-act="rgExport" data-url="${esc(c.export_url)}" data-id="${c.id}"><svg class="i" aria-hidden="true"><use href="#i-download"/></svg>Скачать таблицу</button>
           </div>
           <h2>По школам</h2>
-          ${c.schools.map((s) => `<div class="card"><div class="card-head"><b class="name">${esc(s.name)}</b><span class="nums">${s.pct}% · ${s.answered}/${s.total}</span></div>
+          ${c.schools.map((s) => `<div class="card"><div class="card-head"><b class="name">${esc(s.name)}</b><span class="nums">${s.total ? `${s.pct}% · ${s.answered}/${s.total}` : "ещё не разослан"}</span></div>
             <div class="bar"><i style="width:${s.pct}%"></i></div>
             <details><summary class="muted small">Классы · ${s.classes.length}</summary><ul class="list">${s.classes.map((k) => `<li><span>${esc(k.title)}</span><span class="muted small">${k.dispatched ? `${k.pct}% · ${k.answered}/${k.total}` : "ещё не разослан"}</span></li>`).join("")}</ul></details></div>`).join("")}`);
       } catch (e) { fail(e); }

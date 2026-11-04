@@ -275,6 +275,7 @@ section { padding-block: clamp(64px, 10vw, 128px); position: relative; }
 /* --- подключение --- */
 .start-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 24px clamp(32px, 6vw, 96px); }
 .start .lead { color: var(--muted); max-width: 22em; }
+.start .caps { font-size: clamp(36px, 5vw, 60px); } /* «ПОДКЛЮЧИТЬ» пиксельным шрифтом шире узкой колонки при 72px */
 .steps { list-style: none; counter-reset: step; margin: 0; padding: 0; }
 .steps li { counter-increment: step; position: relative; padding: 0 0 24px 84px; min-height: 72px; }
 .steps li::before { content: counter(step); position: absolute; left: 0; top: -6px; width: 60px; height: 60px; display: grid; place-items: center;

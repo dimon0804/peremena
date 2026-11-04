@@ -214,7 +214,8 @@ def test_filters_bot_flow_and_demo_isolation(env):
     items = run(loop, rcs())
     assert len(items) == 2 and items[-1].template == "certificate" and items[-1].grades == [5, 6, 7, 8, 9]
     run(loop, handle_update(cb_update(METH, f"rg:sum:{items[-1].id}", "b8")))
-    assert "Ответили <b>0 %</b>" in fake.texts_to(user_id=METH["user_id"])[-1]
+    # классные сборы ещё ждут окна для приписки и родителям не ушли — «0 %» вводил бы в заблуждение
+    assert "Родителям ещё не разослан" in fake.texts_to(user_id=METH["user_id"])[-1]
 
     # учитель сразу рассылает сам, не дожидаясь окна
     p = run(loop, polls.list_polls(TEACHER["user_id"]))[0]
