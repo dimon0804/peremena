@@ -4,26 +4,71 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="light dark">
-  <title>Перемена</title>
+  <meta name="theme-color" content="#ede5fa" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#1b1624" media="(prefers-color-scheme: dark)">
+  <meta name="robots" content="noindex">
+  <title>Кабинет — Перемена</title>
   <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
   <link rel="stylesheet" href="styles.css">
-  <script src="https://st.max.ru/js/max-web-app.js"></script>
+  <script>
+    /* Мост MAX нужен только внутри мессенджера. MAX передаёт данные запуска в адресе (#WebAppData=…),
+       а при перезагрузке страницы они лежат в sessionStorage — так же их ищет сам max-web-app.js.
+       В обычном браузере чужой скрипт не грузим вовсе: кабинет открывается без ожидания CDN. */
+    (function () {
+      var key = "WebAppData", inMax = false;
+      try {
+        inMax = location.hash.indexOf(key) > -1 || !!sessionStorage.getItem(key);
+        var nav = performance.getEntriesByType && performance.getEntriesByType("navigation")[0];
+        if (!inMax && nav && nav.name.indexOf(key) > -1) inMax = true;
+      } catch (e) { /* приватный режим без sessionStorage — значит, не MAX */ }
+      if (!inMax) return;
+      var s = document.createElement("script");
+      s.src = "https://st.max.ru/js/max-web-app.js";
+      s.async = false;
+      window.__maxScript = s;
+      document.head.appendChild(s);
+    })();
+  </script>
 </head>
 <body>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <symbol id="i-list" viewBox="0 0 24 24"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V3h6v1M8.5 12.5l2.5 2.5 4.5-5"/></symbol>
+      <symbol id="i-board" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></symbol>
+      <symbol id="i-ask" viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-5 4z"/><path d="M10 8a2 2 0 1 1 3 1.7c-.6.4-1 .8-1 1.5M12 13.5v.01"/></symbol>
+      <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+      <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 21a2 2 0 0 1 2-2h13v2H6M9 8h6"/></symbol>
+      <symbol id="i-school" viewBox="0 0 24 24"><path d="M3 21h18M5 21V10l7-5 7 5v11M10 21v-5h4v5"/></symbol>
+      <symbol id="i-more" viewBox="0 0 24 24"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5M10 2h4"/></symbol>
+      <symbol id="i-back" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></symbol>
+      <symbol id="i-chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+      <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></symbol>
+      <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 20V9M7 14l5-5 5 5M5 4h14"/></symbol>
+      <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></symbol>
+      <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></symbol>
+      <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></symbol>
+      <symbol id="i-video" viewBox="0 0 24 24"><rect x="3" y="5" width="13" height="14" rx="2"/><path d="M16 10l5-3v10l-5-3"/></symbol>
+      <symbol id="i-audio" viewBox="0 0 24 24"><path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/></symbol>
+    </defs>
+  </svg>
+
   <header class="topbar">
     <div class="brand">ПЕРЕМЕНА</div>
     <div class="topbar-sub" id="who"></div>
   </header>
 
-  <main id="view" class="view" aria-live="polite">
-    <div class="loading">Загружаю…</div>
+  <main id="view" class="view">
+    <div class="skeleton" aria-busy="true" aria-label="Загружаю"><i></i><i></i><i></i></div>
   </main>
 
-  <nav class="tabbar" id="tabbar" hidden></nav>
+  <nav class="tabbar" id="tabbar" aria-label="Разделы" hidden></nav>
 
-  <div class="toast" id="toast" role="status" hidden></div>
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
-  <dialog id="modal" class="modal">
+  <dialog id="modal" class="modal" aria-labelledby="modal-title">
     <form method="dialog" class="modal-body" id="modal-body"></form>
   </dialog>
 

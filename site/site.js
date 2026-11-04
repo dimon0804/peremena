@@ -76,33 +76,59 @@
 
     const setStatus = (text, cls = "") => { status.textContent = text; status.className = "status " + cls; };
 
+    const ways = $("#login-ways"), off = $("#login-off"), pin = $("#pin");
+
+    // бот не подключён или сервер не отвечает — не пустой QR, а понятное объяснение и демо
+    function unavailable() {
+      clearInterval(timer);
+      ways.hidden = true;
+      off.hidden = false;
+      again.hidden = true;
+      $("#demo-note").hidden = true;
+      $("#login-lead").hidden = true;
+      setStatus("");
+    }
+
     async function start() {
       clearInterval(timer);
       again.hidden = true;
-      setStatus("Готовлю ссылку…");
+      ways.hidden = false;
+      off.hidden = true;
+      $("#login-lead").hidden = false;
+      pin.textContent = "Готовлю код…";
+      pin.classList.add("wait");
+      qr.classList.add("wait");
+      qr.innerHTML = "";
+      link.hidden = true;
+      setStatus("");
+      let r, d;
       try {
-        const r = await fetch("/api/auth/start", { method: "POST", headers: { "X-Peremena": "1" } });
-        const d = await r.json();
-        if (!r.ok) throw new Error(d.detail || "Вход временно недоступен");
-        code = d.code;
-        $("#pin").textContent = d.pin;
-        if (d.bot_username) $("#bot-name").href = `https://max.ru/${d.bot_username}`;
-        qr.innerHTML = d.qr_svg;
-        link.href = d.link;
-        link.hidden = false;
-        deadline = Date.now() + d.expires_in * 1000;
-        setStatus("Ждём подтверждения в боте…");
-        timer = setInterval(poll, 2000);
-      } catch (e) {
-        setStatus(e.message, "err");
+        r = await fetch("/api/auth/start", { method: "POST", headers: { "X-Peremena": "1" } });
+        d = await r.json().catch(() => ({}));
+      } catch (_) { unavailable(); return; }
+      if (r.status === 503 || r.status >= 500) { unavailable(); return; }
+      if (!r.ok) {
+        setStatus(r.status === 429 ? "Слишком много попыток. Подождите минуту и попробуйте снова." : "Не получилось подготовить вход. Попробуйте ещё раз.", "err");
         again.hidden = false;
+        return;
       }
+      code = d.code;
+      pin.textContent = d.pin;
+      pin.classList.remove("wait");
+      if (d.bot_username) $("#bot-name").href = `https://max.ru/${d.bot_username}`;
+      qr.innerHTML = d.qr_svg;
+      qr.classList.remove("wait");
+      link.href = d.link;
+      link.hidden = false;
+      deadline = Date.now() + d.expires_in * 1000;
+      setStatus("Ждём подтверждения в боте…");
+      timer = setInterval(poll, 2000);
     }
 
     async function poll() {
       if (Date.now() > deadline) {
         clearInterval(timer);
-        setStatus("Ссылка устарела.", "err");
+        setStatus("Код устарел — получите новый.", "err");
         again.hidden = false;
         return;
       }
@@ -111,26 +137,32 @@
         const d = await r.json();
         if (d.status === "ok") {
           clearInterval(timer);
-          setStatus("✓ Вход подтверждён, открываю кабинет…", "ok");
+          setStatus("Вход подтверждён, открываю кабинет…", "ok");
           location.href = "/app/";
         } else if (d.status === "rejected") {
           clearInterval(timer);
-          setStatus("Вход отклонён в боте.", "err");
+          setStatus("Вход отклонён в боте. Если это были не вы — всё в порядке, ничего не произошло.", "err");
           again.hidden = false;
         } else if (d.status === "expired") {
           clearInterval(timer);
-          setStatus("Ссылка устарела.", "err");
+          setStatus("Код устарел — получите новый.", "err");
           again.hidden = false;
         }
       } catch (_) { /* сеть моргнула — попробуем на следующем шаге */ }
     }
 
     again.addEventListener("click", start);
+    $("#retry").addEventListener("click", start);
     // уже вошли — сразу в кабинет
     try {
       const me = await (await fetch("/api/auth/session", { credentials: "same-origin" })).json();
       if (me.logged_in && !me.demo) { location.href = "/app/"; return; }
     } catch (_) { /* продолжаем вход */ }
+    // бот не подключён — сразу понятный экран, без запроса, который заведомо вернёт ошибку
+    try {
+      const s = await (await fetch("/api/public/stats")).json();
+      if (s && "bot_username" in s && !s.bot_username) { unavailable(); return; }
+    } catch (_) { /* проверим самим запросом входа */ }
     start();
   }
 
@@ -138,20 +170,22 @@
   async function startDemo(btn) {
     const label = btn.textContent;
     btn.disabled = true;
+    btn.setAttribute("aria-busy", "true");
     btn.textContent = "Готовлю демо-класс…";
     try {
       const r = await fetch("/api/demo/start", { method: "POST", headers: { "X-Peremena": "1" }, credentials: "same-origin" });
       const d = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(d.detail || "Демо временно недоступно");
+      if (r.status === 429) throw new Error("Слишком много демо подряд — подождите минуту");
+      if (!r.ok) throw new Error(typeof d.detail === "string" ? d.detail : "Демо сейчас недоступно, попробуйте позже");
       location.href = "/app/";
     } catch (e) {
-      btn.textContent = e.message;
-      setTimeout(() => { btn.textContent = label; btn.disabled = false; }, 4000);
+      btn.textContent = e.message && !/fetch/i.test(e.message) ? e.message : "Нет связи с сервером, попробуйте позже";
+      setTimeout(() => { btn.textContent = label; btn.disabled = false; btn.removeAttribute("aria-busy"); }, 4000);
     }
   }
   $$("[data-demo]").forEach((b) => b.addEventListener("click", () => startDemo(b)));
   fetch("/api/auth/session", { credentials: "same-origin" }).then((r) => r.json())
-    .then((s) => { if (s.demo_enabled === false) $$("[data-demo]").forEach((b) => { b.hidden = true; b.closest(".demo-note")?.remove(); }); })
+    .then((s) => { if (s.demo_enabled === false) { $$("[data-demo], .demo-only").forEach((b) => { b.hidden = true; b.closest(".demo-note")?.remove(); }); } })
     .catch(() => {});
 
   if (document.body.dataset.page === "login") login(); else home();

@@ -53,6 +53,15 @@ def _evening(days: int, hour: int = 18):
     return to_utc(day)
 
 
+MONTHS_GEN = ("января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября",
+              "ноября", "декабря")
+
+
+def _day_text(d) -> str:
+    """«14 ноября» — даты в демо считаются от сегодняшнего дня, чтобы сборы не выглядели устаревшими."""
+    return f"{d.day} {MONTHS_GEN[d.month - 1]}"
+
+
 def _name(first: str, last: str) -> str:
     return f"{last} {first[0]}."
 
@@ -115,13 +124,15 @@ async def create_sandbox() -> DemoSandbox:
                    SchoolMember(school_id=school.id, user_id=teacher2, role="teacher")])
 
         # --- сборы
+        trip_day = _day_text(today + timedelta(days=6))  # экскурсия через неделю, согласие — за три дня
         excursion = Poll(teacher_id=teacher, chat_id=chat, template="consent",
-                         title="Экскурсия в Музей космонавтики, 7 ноября",
-                         text="Экскурсия в Музей космонавтики, 7 ноября\nВыезд в 9:00 от школы, возвращение к 15:00.",
+                         title=f"Экскурсия в Музей космонавтики, {trip_day}",
+                         text=f"Экскурсия в Музей космонавтики, {trip_day}\nВыезд в 9:00 от школы, возвращение к 15:00.",
                          options=["Согласен", "Не согласен", "Нужно уточнить"], clarify_option=2,
                          deadline=_evening(3), created_at=now - timedelta(days=1))
-        gift = Poll(teacher_id=teacher, chat_id=chat, template="money", title="Подарок ко Дню учителя",
-                    text="Подарок ко Дню учителя\nСобираем на общий подарок от класса.", amount=200,
+        gift = Poll(teacher_id=teacher, chat_id=chat, template="money", title="Билеты в театр",
+                    text="Билеты в театр\nИдём всем классом на дневной спектакль. "
+                         "Перевод — по номеру телефона Марии Петровны или наличными в классе.", amount=200,
                     options=["Перевёл(а)", "Сдам наличными", "Не участвуем", "Нужно уточнить"], clarify_option=3,
                     deadline=_evening(2), created_at=now - timedelta(days=2))
         rules = Poll(teacher_id=teacher, chat_id=chat, template="ack", title="Правила поведения на каникулах",

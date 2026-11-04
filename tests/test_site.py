@@ -32,6 +32,14 @@ def test_site_pages_and_login_flow(tmp_path, monkeypatch):
         assert client.get("/login").status_code == 200
         assert client.get("/site.css").status_code == 200
         assert client.get("/app/").status_code == 200  # кабинет и мини-приложение по-прежнему на месте
+        # на главной нет выдуманных цифр опроса — только расчётная модель
+        assert "Опрос 25" not in home.text and "расчётная модель" in home.text.lower()
+        # человеку на несуществующем адресе — страница в стиле сайта, программе — JSON
+        for path in ("/nope", "/app/nope.html"):
+            r = client.get(path)
+            assert r.status_code == 404 and "Такой страницы нет" in r.text, path
+        r = client.get("/api/nope")
+        assert r.status_code == 404 and r.headers["content-type"].startswith("application/json")
         # после обновления браузер должен брать новый код, а не старую копию из кэша
         for path in ("/", "/site.js", "/login", "/app/", "/app/app.js"):
             assert client.get(path).headers.get("cache-control") == "no-cache", path
