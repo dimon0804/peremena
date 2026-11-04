@@ -289,7 +289,11 @@ def test_integrations_in_demo_over_http(tmp_path, monkeypatch):
         assert {d["event"] for d in log} >= {"poll.answered", "absence.created"} and log[0]["status"] == "demo"
 
         # календарь демо-класса — по ссылке, без входа
-        feed = TestClient(app).get(ov["calendar"]["url"].replace("http://testserver", ""))  # без входа
+        # тот же клиент (один цикл событий — важно для asyncpg), но без cookie входа
+        saved = dict(client.cookies)
+        client.cookies.clear()
+        feed = client.get(ov["calendar"]["url"].replace("http://testserver", ""))
+        client.cookies.update(saved)
         assert feed.status_code == 200 and "Экскурсия в Музей космонавтики" in unfold(feed.text)
 
         # свой ключ → настоящий запрос к открытому API
