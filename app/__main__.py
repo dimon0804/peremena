@@ -202,7 +202,7 @@ def main(argv: list[str] | None = None) -> int:
         workers = _workers(getattr(args, "workers", None) or s.web_concurrency, s)
         uvicorn.run("app.main:app", host=getattr(args, "host", None) or s.host,
                     port=getattr(args, "port", None) or s.port, proxy_headers=True,
-                    forwarded_allow_ips=s.forwarded_allow_ips, workers=workers,
+                    forwarded_allow_ips=s.forwarded_allow_ips, workers=workers, access_log=s.access_log,
                     # пик вебхуков: очередь соединений и потолок одновременных запросов на процесс
                     backlog=2048, timeout_keep_alive=15)
         return 0

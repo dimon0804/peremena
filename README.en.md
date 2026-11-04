@@ -72,6 +72,21 @@ The schema is created and migrated by Alembic on start. The service port listens
 proxy in front (`docker compose --profile https up -d` starts Caddy with Let's Encrypt). MAX delivers webhooks and opens
 mini apps over HTTPS only.
 
+### Scaling
+
+Built for a whole region: thousands of schools, hundreds of thousands of parents, evening peaks.
+Several instances are safe: the scheduler and long polling run in exactly one leader (Redis `SET NX PX`
+lock, or a PostgreSQL advisory lock without Redis); webhooks go to a Redis Streams queue processed by all
+`all`/`worker` processes; the MAX API rate limit (`MAX_RPS`, 25/s) is shared through Redis.
+
+```bash
+docker compose up -d --scale bot=3                                    # identical instances behind lb
+docker compose -f docker-compose.yml -f docker-compose.scale.yml up -d --scale bot=3 --scale worker=4
+```
+
+Variables: `ROLE` (all/web/worker), `WEB_CONCURRENCY`, `EVENT_QUEUE`, `HANDLER_CONCURRENCY`, `MAX_RPS`,
+`DB_POOL_SIZE`, `DB_MAX_OVERFLOW`. Load test results: [docs/НАГРУЗКА.md](docs/НАГРУЗКА.md), scripts: [loadtest/](loadtest/).
+
 ### Command line
 
 ```bash
