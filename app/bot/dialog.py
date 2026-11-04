@@ -696,7 +696,8 @@ async def show_quiet(uid: int) -> None:
     ]
     if my_chats:
         lines.append("")
-        lines.append("Автоответ прямо в чате класса (по точному совпадению со справочником):")
+        lines.append("Автоответ прямо в чате класса — только когда вопрос почти дословно совпадает с карточкой "
+                     "справочника (в остальных случаях молчу и не мешаю):")
         for c in my_chats:
             lines.append(f"• {html.escape(c.title or str(c.chat_id))}: {'вкл' if c.autoanswer else 'выкл'}")
     rows = [

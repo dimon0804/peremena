@@ -17,7 +17,7 @@ from . import search
 # Пороги уверенности
 ANSWER_SCORE = 0.55   # отвечаем сами в личке
 SUGGEST_SCORE = 0.30  # предлагаем варианты «возможно, вы имели в виду»
-GROUP_SCORE = 0.70    # отвечаем в общем чате (только если учитель включил автоответ)
+GROUP_SCORE = 0.85    # отвечаем в общем чате (только если учитель включил автоответ) — только почти дословно
 
 
 async def add_entry(teacher_id: int, question: str, answer: str, keywords: str | None = None,
