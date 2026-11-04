@@ -4,26 +4,28 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <meta name="theme-color" content="#f6f1fe" media="(prefers-color-scheme: light)">
-  <meta name="theme-color" content="#110d18" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#050208">
   <title>Вход в кабинет — Перемена</title>
   <meta name="description" content="Вход в веб-кабинет «Перемены» без пароля: подтвердите вход в боте в MAX.">
   <meta name="robots" content="noindex">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="preload" href="/fonts/OpenSans-ExtraBold.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/site.css">
 </head>
-<body data-page="login">
+<body data-page="login" class="login-page">
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs><symbol id="mark" viewBox="0 0 16 16"><path fill="#8742ee" d="M2 0h12v1h1v1h1v12h-1v1h-1v1H2v-1H1v-1H0V2h1V1h1z"/><path fill="#fff" d="M7 2h2v1H7zM6 3h4v1H6zM5 4h6v1H5zM4 5h8v4H4zM3 9h10v2H3zM7 12h2v2H7z"/></symbol></defs></svg>
 <header class="top">
   <div class="wrap">
-    <a class="logo" href="/" aria-label="Перемена — на главную">ПЕРЕМЕНА</a>
-    <div class="top-actions"><a class="btn sm outline" href="/">На главную</a></div>
+    <a class="logo" href="/" aria-label="Перемена — на главную"><svg aria-hidden="true"><use href="#mark"/></svg><span>Перемена</span></a>
+    <div class="top-actions"><a class="btn sm ghost" href="/">На главную</a></div>
   </div>
 </header>
 <main class="login" id="main">
-  <div class="login-card">
+  <div class="wave" aria-hidden="true"></div>
+  <div class="login-card s-paper">
     <h1>Вход в кабинет</h1>
-    <p class="muted" id="login-lead">Пароль не нужен: вход подтверждается в боте «Перемена» в MAX. Выберите удобный способ.</p>
+    <p class="muted" id="login-lead">Пароль здесь не нужен. Вход подтверждается в боте «Перемена» в MAX, выберите, как вам удобнее.</p>
 
     <div id="login-ways">
       <div class="way">
@@ -44,20 +46,20 @@
         <p class="muted small-note">Обычной камерой телефона, не из бота: она предложит открыть MAX.</p>
       </div>
 
-      <p class="muted small-note">Затем в боте нажмите «Войти» — кабинет откроется на этой странице сам.</p>
+      <p class="muted small-note">Затем нажмите в боте «Войти», и кабинет откроется на этой странице сам.</p>
     </div>
 
     <div class="login-off" id="login-off" hidden>
       <div class="off-ico" aria-hidden="true">!</div>
       <h2 class="way-title">Вход через бота временно недоступен</h2>
-      <p class="muted">Бот сейчас не на связи. Попробуйте зайти чуть позже, а пока посмотрите кабинет на демо-классе — там всё то же самое.</p>
+      <p class="muted">Бот сейчас не на связи. Попробуйте зайти чуть позже, а пока посмотрите кабинет на демо-классе, там всё то же самое.</p>
       <button type="button" class="btn" data-demo>Попробовать демо</button>
-      <button type="button" class="btn outline" id="retry" style="margin-top:10px">Попробовать войти ещё раз</button>
+      <button type="button" class="btn ghost" id="retry">Попробовать войти ещё раз</button>
     </div>
 
     <div class="status" id="status" role="status" aria-live="polite"></div>
-    <button type="button" class="btn outline" id="again" hidden>Получить новый код</button>
-    <p class="muted small-note demo-note" id="demo-note">Нет MAX под рукой? <button type="button" class="linkish" data-demo>Посмотреть демо-класс</button> — без входа, никому ничего не отправляется.</p>
+    <button type="button" class="btn ghost" id="again" hidden>Получить новый код</button>
+    <p class="muted small-note demo-note" id="demo-note">Нет MAX под рукой? <button type="button" class="linkish" data-demo>Посмотреть демо-класс</button>. Он открывается без входа и никому ничего не отправляет.</p>
   </div>
 </main>
 <script src="/site.js"></script>
