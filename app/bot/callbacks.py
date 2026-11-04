@@ -388,6 +388,26 @@ async def on_faq(cid: str, uid: int, tail: str) -> None:
         await send(uid, "Передать ваш вопрос учителю?", [[kb.cb("✉️ Передать", "fw:ask"), kb.cb("Не надо", "fw:x")]])
         if not q:
             await set_state(uid, "ask", "q", {})
+    elif action == "nb":  # «Это не то» под ответом с доски или из расписания
+        await ack(cid, "Спасибо, учту")
+        q = await c.kv.get(f"q:{uid}")
+        if q and q.get("tm"):
+            await metrics.reopen(q["tm"])
+        if q and q.get("chats"):
+            await faq_learning.record(q["chats"], uid, q["text"])
+        await send(uid, "Передать ваш вопрос учителю?", [[kb.cb("✉️ Передать", "fw:ask"), kb.cb("Не надо", "fw:x")]])
+        if not q:
+            await set_state(uid, "ask", "q", {})
+    elif action == "kw" and arg.isdigit():  # правка ключевых слов карточки прямо в боте
+        await ack(cid)
+        e = await faq.get_entry(int(arg))
+        if not e or e.teacher_id != uid:
+            await send(uid, "Карточка не найдена.")
+            return
+        await set_state(uid, "faq_add", "kw", {"id": e.id})
+        await send(uid, f"Сейчас: <i>{html.escape(e.keywords or '—')}</i>\n\nПришлите новые ключевые слова через запятую — "
+                        "по ним я узнаю вопрос, даже если родитель спросит другими словами.",
+                   [[kb.cb("Отмена", "f:cancel")]])
     elif action == "save":
         draft = await c.kv.get(f"sv:{arg}")
         if not draft or draft["teacher_id"] != uid:

@@ -374,6 +374,32 @@ def test_board_homework_for_parents_and_students(env):
     run(loop, handle_update(msg_update(PARENTS[2], "что задали по алгебре?", mid="h6")))
     assert "№245" in api.texts_to(user_id=P3)[-1] and "записано учителем" in api.texts_to(user_id=P3)[-1]
 
+    # слайд 6 «Каждый ответ подписан» и «Это не то» — и под ответом с доски: промах уходит учителю
+    reply = api.sent[-1]
+    assert [b["text"] for b in buttons_of(reply)] == ["Это не то"]
+    run(loop, handle_update(cb_update(PARENTS[2], "fq:nb", "h7")))
+    assert "Передать ваш вопрос учителю?" in api.texts_to(user_id=P3)[-1]
+    run(loop, handle_update(cb_update(PARENTS[2], "fw:ask", "h8")))
+    assert any("что задали по алгебре" in x for x in api.texts_to(user_id=T))
+
+
+def test_teacher_edits_card_keywords_in_bot(env):
+    """Анкета: «учитель заводит карточку «ключевые слова → ответ»» — ключевые слова правятся прямо в боте."""
+    loop, api, c = env
+    connect(loop)
+    add_card(loop, "Во сколько забирать с продлёнки?", "Группа продлённого дня работает до 18:00.")
+    run(loop, handle_update(cb_update(TEACHER, last_payload(api, "fq:kw:"), "k1")))
+    assert "через запятую" in api.texts_to(user_id=T)[-1]
+    run(loop, handle_update(msg_update(TEACHER, "продлёнка, ГПД, забрать, до скольки", mid="k2")))
+    assert "ГПД" in api.texts_to(user_id=T)[-1]
+
+    async def kw():
+        async with session() as s:
+            return (await s.scalars(select(FaqEntry))).one().keywords
+    assert run(loop, kw()) == "продлёнка, ГПД, забрать, до скольки"
+    run(loop, handle_update(msg_update(PARENTS[0], "до скольки работает ГПД?", mid="k3")))
+    assert "18:00" in api.texts_to(user_id=P1)[-1]
+
 
 def test_roles_menus(env):
     """README «Роли»: классный руководитель, предметник по ссылке, администратор школы, родитель —

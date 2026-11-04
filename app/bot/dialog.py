@@ -618,7 +618,21 @@ async def faq_add_step(uid: int, step: str, data: dict, text: str) -> bool:
         note = f"\n\nСнял из списка «без ответа» вопросов родителей: {closed}." if closed else ""
         await send(uid, f"✅ Сохранил.\n\n<b>{html.escape(e.question)}</b>\n→ {html.escape(e.answer)}\n\n"
                         f"<i>Ключевые слова: {html.escape(e.keywords or '—')}</i>{note}",
-                   [[kb.cb("➕ Ещё", "fq:add"), kb.cb("📖 Весь справочник", "m:faq")]])
+                   [[kb.cb("✏️ Ключевые слова", f"fq:kw:{e.id}")],
+                    [kb.cb("➕ Ещё", "fq:add"), kb.cb("📖 Весь справочник", "m:faq")]])
+        return True
+    if step == "kw":
+        await clear_state(uid)
+        words = ", ".join(w.strip() for w in text.replace(";", ",").replace("\n", ",").split(",") if w.strip())[:500]
+        if not words:
+            await send(uid, "Ключевые слова не поменял: пришлите их через запятую.")
+            return True
+        e = await faq.update_entry(int(data["id"]), uid, keywords=words)
+        if e is None:
+            await send(uid, "Карточка не найдена — возможно, её удалили.")
+            return True
+        await send(uid, f"✅ Ключевые слова карточки «{html.escape(e.question[:100])}»:\n<i>{html.escape(e.keywords)}</i>",
+                   [[kb.cb("📖 Весь справочник", "m:faq")]])
         return True
     return False
 
@@ -675,7 +689,8 @@ async def answer_text(uid: int, text: str, is_teacher: bool, asked_at=None) -> N
     elif a.kind == "absence":
         await absence.offer(uid)
     elif a.kind in ("board", "news", "schedule"):
-        await send(uid, a.text)
+        # родителю — «Это не то», как под ответом справочника: ответ с доски тоже может промахнуться
+        await send(uid, a.text, [[kb.cb("Это не то", "fq:nb")]] if a.chat_ids else None)
     elif a.kind == "board_missing":
         await send(uid, a.text, [[kb.cb("✉️ Спросить учителя", "fw:ask")]] if a.can_forward else None)
     elif a.kind == "faq":

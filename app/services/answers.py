@@ -104,7 +104,7 @@ async def _board(uid: int, text: str, chat_ids: list[int], tz: str | None, is_st
             titles = await board._chat_titles(set(chat_ids)) if len(chat_ids) > 1 else {}
             reply, found = await schedule.answer(text, chat_ids, tz, titles)
             if found:
-                await clock.bot()
+                await _remember(uid, text, parent_chats, await clock.bot())  # для «Это не то»
                 return Answer("schedule", reply, chat_ids=parent_chats, as_teacher=is_staff and not parent_chats)
             if not board.is_homework_question(text):
                 return Answer("schedule", reply + (" Загрузить его из журнала — /journal" if is_staff and not
@@ -131,8 +131,8 @@ async def _board(uid: int, text: str, chat_ids: list[int], tz: str | None, is_st
                 if t != uid:
                     await stats.add(t, "faq_answer")
             first = next((c for c in item_chats if c.teacher_id and c.teacher_id != uid), None)
-            if first:
-                await clock.bot(first.teacher_id, first.chat_id)
+            tm = await clock.bot(first.teacher_id, first.chat_id) if first else await clock.bot()
+            await _remember(uid, text, parent_chats, tm)  # для «Это не то»: вопрос и номер замера
             return Answer("board", prefix + await board.render_answer(items, query, tz), chat_ids=parent_chats)
         what = "📚 На доске класса пока нет задания" + (f" по предмету «{html.escape(subj)}»" if subj else "")
         if is_staff and not parent_chats:
@@ -143,7 +143,7 @@ async def _board(uid: int, text: str, chat_ids: list[int], tz: str | None, is_st
     if board.is_news_question(text):
         items = await board.recent_news(chat_ids)
         if items:
-            await clock.bot()
+            await _remember(uid, text, parent_chats, await clock.bot())
             return Answer("news", await board.render_news(items, tz), chat_ids=parent_chats)
     return None
 
