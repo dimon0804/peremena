@@ -1,23 +1,28 @@
-/* Сайт «Перемены». Айдентика продолжает презентацию команды:
-   Open Sans (ExtraBold заголовки, Light для крупного текста), лавандовые «светлые слайды» #dac2ff,
-   чёрные «тёмные слайды», пурпур #8742ee с карточек шаблона и пиксельная волна по краю.
-   Контраст проверен: белый на #8742ee 5.2:1, #4c1d95 на #dac2ff 6.9:1, #b78bff на чёрном 8:1. */
+/* Сайт «Перемены». Айдентика продолжает презентацию команды и визуальный язык хакатона «Идея фикс»:
+   Open Sans (ExtraBold заголовки, Light для крупного текста), пиксельный Tiny5 (OFL) для крупных заголовков
+   и цифр — как пиксельные надписи хакатона; лавандовые «светлые слайды» #dac2ff, ночной фон #0c0017,
+   пурпур #8742ee и маджента #dd42ee, ступенчатые пиксельные углы, «диалоговые окна» с хвостиком и бегущая строка.
+   Контраст проверен: белый на #8742ee 5.2:1, #4c1d95 на #dac2ff 6.9:1, #b78bff на #0c0017 7.7:1,
+   #1a0526 на #dd42ee 6.4:1. Пиксельный шрифт — только прописные и не мельче 20px. */
 
 @font-face { font-family: "Open Sans"; font-weight: 300; font-style: normal; font-display: swap; src: url("/fonts/OpenSans-Light.woff2") format("woff2"); }
 @font-face { font-family: "Open Sans"; font-weight: 400; font-style: normal; font-display: swap; src: url("/fonts/OpenSans-Regular.woff2") format("woff2"); }
 @font-face { font-family: "Open Sans"; font-weight: 700; font-style: normal; font-display: swap; src: url("/fonts/OpenSans-Bold.woff2") format("woff2"); }
 @font-face { font-family: "Open Sans"; font-weight: 800; font-style: normal; font-display: swap; src: url("/fonts/OpenSans-ExtraBold.woff2") format("woff2"); }
+@font-face { font-family: "Tiny5"; font-weight: 400 900; font-style: normal; font-display: swap; src: url("/fonts/Tiny5-Bold.woff2") format("woff2"); }
 
 :root {
   --violet: #8742ee;          /* заливка: кнопки, плитки, полосы */
   --violet-press: #7432d9;
   --magenta: #dd42ee;         /* лента «Капитан команды», как на слайде 2 */
   --lav: #dac2ff;             /* фон светлых слайдов */
-  --black: #050208;
+  --black: #0c0017;          /* ночной фон хакатона */
+  --night-2: #180d23;         /* карточки на ночном фоне */
   --px: 4px;                  /* шаг пиксельного угла */
   --ease-out: cubic-bezier(.23, 1, .32, 1);
   --wrap: 1200px;
   --font: "Open Sans", "Segoe UI", Roboto, Arial, sans-serif;
+  --pixel: "Tiny5", "Open Sans", "Segoe UI", Arial, sans-serif;
 
   /* секции переопределяют эти переменные под свой фон */
   --bg: #fbf8ff; --ink: #0b0614; --muted: #4a3868; --accent: #5b21b6; --line: #d9c9f2; --focus: #5b21b6;
@@ -25,11 +30,11 @@
 }
 .s-paper { --bg: #fbf8ff; --ink: #0b0614; --muted: #4a3868; --accent: #5b21b6; --line: #ddcff3; --focus: #5b21b6; --pane: #ffffff; }
 .s-lav   { --bg: var(--lav); --ink: #0b0614; --muted: #3d2a5c; --accent: #4c1d95; --line: #b896ef; --focus: #3b0f7a; --pane: #efe4ff; }
-.s-black { --bg: var(--black); --ink: #f5f0ff; --muted: #c7b6e0; --accent: #b78bff; --line: #2c1d44; --focus: #d8b4fe; --pane: #120a1e; color-scheme: dark; }
+.s-black { --bg: var(--black); --ink: #f5f0ff; --muted: #c7b6e0; --accent: #b78bff; --line: #33214f; --focus: #d8b4fe; --pane: var(--night-2); color-scheme: dark; }
 
 @media (prefers-color-scheme: dark) {
-  :root { --bg: #0e0818; --ink: #f5f0ff; --muted: #c7b6e0; --accent: #b78bff; --line: #2c1d44; --focus: #d8b4fe; color-scheme: dark; }
-  .s-paper { --bg: #0e0818; --ink: #f5f0ff; --muted: #c7b6e0; --accent: #b78bff; --line: #2c1d44; --focus: #d8b4fe; --pane: #170e26; }
+  :root { --bg: #110821; --ink: #f5f0ff; --muted: #c7b6e0; --accent: #b78bff; --line: #2c1d44; --focus: #d8b4fe; color-scheme: dark; }
+  .s-paper { --bg: #110821; --ink: #f5f0ff; --muted: #c7b6e0; --accent: #b78bff; --line: #2c1d44; --focus: #d8b4fe; --pane: #170e26; }
   .s-lav   { --bg: #1a0f2e; --ink: #f5f0ff; --muted: #cdbdea; --accent: #c4a0ff; --line: #3a2860; --focus: #d8b4fe; --pane: #22153a; }
 }
 
@@ -51,8 +56,10 @@ a { color: inherit; text-underline-offset: 3px; text-decoration-thickness: 1px; 
 h1, h2, h3 { margin: 0; line-height: 1.1; font-weight: 800; text-wrap: balance; }
 p { margin: 0 0 1em; text-wrap: pretty; }
 .lead { font-weight: 300; font-size: clamp(19px, 2vw, 23px); line-height: 1.5; }
-/* заголовки как на слайдах: ExtraBold, верхний регистр */
-.caps { text-transform: uppercase; font-size: clamp(34px, 6vw, 64px); letter-spacing: -.01em; line-height: 1; margin-bottom: 28px; }
+/* крупные заголовки — пиксельные прописные, как надписи на сайте хакатона */
+.caps, .px { font-family: var(--pixel); font-weight: 700; text-transform: uppercase; letter-spacing: .01em; line-height: .95;
+  font-variant-numeric: lining-nums; -webkit-font-smoothing: none; }
+.caps { font-size: clamp(36px, 6.4vw, 72px); margin-bottom: 28px; }
 section { padding-block: clamp(64px, 10vw, 128px); position: relative; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .skip { position: absolute; left: 12px; top: -80px; z-index: 50; background: #fff; color: #0b0614; padding: 12px 18px; font-weight: 700; }
@@ -73,18 +80,22 @@ section { padding-block: clamp(64px, 10vw, 128px); position: relative; }
 
 /* --- кнопки --- */
 .btn {
+  /* пиксельная кнопка: ступенчатые углы и «полка» снизу, при нажатии кнопка на неё опускается */
+  --ledge: rgba(12, 0, 23, .32);
   display: inline-flex; align-items: center; justify-content: center; gap: 10px; min-height: 52px;
-  padding: 14px 24px; border: 0; background: var(--violet); color: #fff; font: 700 16px/1.2 var(--font);
-  text-decoration: none; cursor: pointer; -webkit-tap-highlight-color: transparent;
-  transition: transform .16s var(--ease-out), background-color .15s ease;
+  padding: 14px 24px 16px; border: 0; background: var(--violet); color: #fff; font: 700 16px/1.2 var(--font);
+  text-decoration: none; cursor: pointer; -webkit-tap-highlight-color: transparent; box-shadow: inset 0 -4px 0 var(--ledge);
+  transition: transform .12s var(--ease-out), box-shadow .12s var(--ease-out), background-color .15s ease;
 }
-.btn:active { transform: scale(.97); }
+.btn:active { transform: translateY(2px); box-shadow: inset 0 -2px 0 var(--ledge); }
 .btn:disabled { opacity: .75; cursor: progress; }
 .btn:focus-visible { clip-path: none; outline-offset: 3px; }
-.btn.alt { background: #f5f0ff; color: #2a0f57; }
+.btn.alt { background: #f5f0ff; color: #2a0f57; --ledge: rgba(135, 66, 238, .35); }
 .s-paper .btn.alt, .s-lav .btn.alt { background: #0b0614; color: #fff; }
 .btn.ghost { background: transparent; color: var(--ink); box-shadow: inset 0 0 0 2px var(--line); }
-.btn.sm { min-height: 44px; padding: 10px 16px; font-size: 15px; }
+.btn.ghost:active { box-shadow: inset 0 0 0 2px var(--line); }
+.btn.sm { min-height: 44px; padding: 10px 16px 12px; font-size: 15px; }
+.btn .i { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: square; }
 .linkish { font: inherit; color: var(--accent); background: none; border: 0; padding: 4px 0; cursor: pointer; text-decoration: underline;
   text-underline-offset: 3px; min-height: 24px; }
 @media (hover: hover) and (pointer: fine) {
@@ -102,8 +113,8 @@ section { padding-block: clamp(64px, 10vw, 128px); position: relative; }
 .top { position: sticky; top: 0; z-index: 10; background: var(--black); color: #f5f0ff; border-bottom: 1px solid #1d1330;
   --ink: #f5f0ff; --line: #3a2860; --focus: #d8b4fe; }
 .top .wrap { display: flex; align-items: center; gap: 28px; min-height: 64px; }
-.logo { display: inline-flex; align-items: center; gap: 10px; text-decoration: none; font-weight: 800; text-transform: uppercase;
-  font-size: 19px; letter-spacing: .02em; min-height: 44px; }
+.logo { display: inline-flex; align-items: center; gap: 10px; text-decoration: none; font: 700 24px/1 var(--pixel); text-transform: uppercase;
+  letter-spacing: .02em; min-height: 44px; -webkit-font-smoothing: none; }
 .logo svg { width: 28px; height: 28px; }
 .nav { display: flex; gap: 2px; margin-right: auto; }
 .nav a { color: #c7b6e0; text-decoration: none; font-weight: 400; font-size: 15px; padding: 0 12px; min-height: 44px; display: inline-flex; align-items: center; }
@@ -117,7 +128,8 @@ section { padding-block: clamp(64px, 10vw, 128px); position: relative; }
 .hero { padding-block: clamp(48px, 8vw, 104px) clamp(64px, 9vw, 120px); overflow: hidden; }
 .hero-grid { position: relative; display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr); gap: clamp(32px, 5vw, 72px); align-items: center; }
 .hero h1 { font-size: clamp(42px, 6.6vw, 82px); line-height: .98; letter-spacing: -.025em; margin-bottom: 28px; }
-.hero h1 .hl { color: var(--accent); }
+.hero h1 .hl { display: inline-block; color: var(--accent); font: 700 1.12em/.9 var(--pixel); text-transform: uppercase; letter-spacing: .01em;
+  margin-top: .08em; -webkit-font-smoothing: none; }
 .hero .lead { color: #e6dcf7; max-width: 34em; margin-bottom: 32px; }
 .hero .note { margin: 20px 0 0; font-size: 15px; color: var(--muted); }
 .hero .note a { color: var(--ink); font-weight: 700; }
@@ -179,7 +191,7 @@ section { padding-block: clamp(64px, 10vw, 128px); position: relative; }
 .scene-text > p:not(.lead) { color: var(--muted); max-width: 36em; }
 .pains { list-style: none; counter-reset: pain; padding: 0; margin: 36px 0 0; border-top: 2px solid var(--ink); }
 .pains li { counter-increment: pain; display: grid; grid-template-columns: 64px 1fr; gap: 4px 16px; padding: 18px 0; border-bottom: 1px solid var(--line); }
-.pains li::before { content: "0" counter(pain); font-weight: 800; font-size: 28px; line-height: 1.05; color: var(--accent); grid-row: span 2; }
+.pains li::before { content: "0" counter(pain); font: 700 32px/1 var(--pixel); color: var(--accent); grid-row: span 2; -webkit-font-smoothing: none; }
 .pains b { font-weight: 700; }
 @media (max-width: 479px) { .pains li { grid-template-columns: 44px 1fr; gap: 2px 10px; } .pains li::before { font-size: 22px; } }
 .scene-chat { margin: 0; position: sticky; top: 96px; }
@@ -223,9 +235,13 @@ section { padding-block: clamp(64px, 10vw, 128px); position: relative; }
 
 .more { border-top: 2px solid var(--ink); padding-top: 28px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2.4fr); gap: 32px; }
 .more-title { font-size: 24px; }
-.more-list { margin: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 48px; }
-.more-list > div { padding: 18px 0; border-bottom: 1px solid var(--line); }
-.more-list dt { font-weight: 700; margin-bottom: 4px; }
+.more-list { margin: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+/* карточки с пиксельной рамкой, как плитки направлений хакатона */
+.more-list > div { padding: 20px 22px 22px; background: var(--pane); box-shadow: inset 0 0 0 2px var(--line), inset 0 -6px 0 var(--line);
+  clip-path: polygon(0 var(--px), var(--px) var(--px), var(--px) 0, calc(100% - var(--px)) 0, calc(100% - var(--px)) var(--px),
+    100% var(--px), 100% calc(100% - var(--px)), calc(100% - var(--px)) calc(100% - var(--px)), calc(100% - var(--px)) 100%,
+    var(--px) 100%, var(--px) calc(100% - var(--px)), 0 calc(100% - var(--px))); }
+.more-list dt { font-weight: 800; font-size: 18px; margin-bottom: 6px; }
 .more-list dd { margin: 0; color: var(--muted); }
 @media (max-width: 959px) { .more { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 639px) { .more-list { grid-template-columns: minmax(0, 1fr); } }
@@ -233,7 +249,7 @@ section { padding-block: clamp(64px, 10vw, 128px); position: relative; }
 /* --- расчёт --- */
 .numbers { overflow: hidden; }
 .numbers-grid { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: clamp(40px, 6vw, 96px); align-items: end; }
-.days-num { font-size: clamp(160px, 30vw, 360px); font-weight: 800; line-height: .8; letter-spacing: -.06em; color: var(--accent); margin: 0 0 24px -.04em; font-variant-numeric: lining-nums; }
+.days-num { font: 700 clamp(170px, 30vw, 380px)/.8 var(--pixel); letter-spacing: 0; -webkit-font-smoothing: none; color: var(--accent); margin: 0 0 24px -.04em; font-variant-numeric: lining-nums; }
 .days h2 { font-size: clamp(26px, 3.4vw, 40px); margin-bottom: 18px; }
 .days .lead { color: #e6dcf7; }
 .receipt { background: #f5f0ff; color: #0b0614; padding: clamp(20px, 3vw, 32px); }
@@ -260,14 +276,25 @@ section { padding-block: clamp(64px, 10vw, 128px); position: relative; }
 .start-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 24px clamp(32px, 6vw, 96px); }
 .start .lead { color: var(--muted); max-width: 22em; }
 .steps { list-style: none; counter-reset: step; margin: 0; padding: 0; }
-.steps li { counter-increment: step; position: relative; padding: 0 0 32px 84px; min-height: 72px; }
+.steps li { counter-increment: step; position: relative; padding: 0 0 24px 84px; min-height: 72px; }
 .steps li::before { content: counter(step); position: absolute; left: 0; top: -6px; width: 60px; height: 60px; display: grid; place-items: center;
-  background: var(--violet); color: #fff; font-size: 30px; font-weight: 800;
+  background: var(--violet); color: #fff; font: 700 34px/1 var(--pixel); box-shadow: inset 0 -4px 0 rgba(12, 0, 23, .32);
   clip-path: polygon(0 var(--px), var(--px) var(--px), var(--px) 0, calc(100% - var(--px)) 0, calc(100% - var(--px)) var(--px), 100% var(--px), 100% calc(100% - var(--px)), calc(100% - var(--px)) calc(100% - var(--px)), calc(100% - var(--px)) 100%, var(--px) 100%, var(--px) calc(100% - var(--px)), 0 calc(100% - var(--px))); }
-.steps li:not(:last-child)::after { content: ""; position: absolute; left: 29px; top: 62px; bottom: 6px; border-left: 2px dashed var(--line); }
+.steps li:not(:last-child)::after { content: ""; position: absolute; left: 29px; top: 62px; bottom: 0; border-left: 4px dotted var(--violet); opacity: .5; }
 .steps h3 { font-size: 21px; margin-bottom: 6px; }
+/* текст шага — «диалоговое окно» с пиксельным хвостиком, как подсказки на карте хакатона */
+.say { position: relative; background: var(--pane); padding: 16px 20px 18px; box-shadow: inset 0 0 0 2px var(--violet); }
+.say::before { content: ""; position: absolute; left: -10px; top: 18px; width: 10px; height: 16px; background: var(--violet);
+  clip-path: polygon(100% 0, 100% 100%, 75% 100%, 75% 87.5%, 50% 87.5%, 50% 75%, 25% 75%, 25% 62.5%, 0 62.5%, 0 37.5%, 25% 37.5%, 25% 25%, 50% 25%, 50% 12.5%, 75% 12.5%, 75% 0); }
 .steps p { color: var(--muted); margin: 0; }
 .after-steps { grid-column: 2; color: var(--muted); margin: 0; }
+@media (max-width: 479px) {
+  .steps li { padding-left: 62px; }
+  .steps li::before { width: 46px; height: 46px; font-size: 28px; }
+  .steps li:not(:last-child)::after { left: 21px; top: 48px; }
+  .say { padding: 14px 16px 16px; }
+  .say::before { top: 14px; }
+}
 .after-steps a { color: var(--accent); font-weight: 700; }
 @media (max-width: 767px) { .start-grid { grid-template-columns: minmax(0, 1fr); } .after-steps { grid-column: 1; } }
 
@@ -289,6 +316,45 @@ section { padding-block: clamp(64px, 10vw, 128px); position: relative; }
   .roles th { margin-bottom: 2px; }
 }
 
+/* --- бегущая строка, как лента «Превратите идею в код» у хакатона --- */
+.ticker { background: var(--black); color: #f5f0ff; overflow: hidden; border-block: 2px solid #2a1747; padding-block: 18px; }
+.ticker-track { display: flex; align-items: center; gap: 28px; width: max-content; padding-left: 28px; }
+.ticker span { font: 700 clamp(24px, 3vw, 34px)/1 var(--pixel); text-transform: uppercase; white-space: nowrap; -webkit-font-smoothing: none; }
+.ticker svg { width: 27px; height: 24px; fill: #b78bff; flex: none; shape-rendering: crispEdges; }
+.ticker svg:nth-of-type(2n) { fill: var(--magenta); }
+@media (prefers-reduced-motion: no-preference) {
+  .ticker-track { animation: ticker 40s linear infinite; }
+}
+@keyframes ticker { to { transform: translateX(-50%); } }
+
+/* --- что дальше: карточки модулей в работе, по образцу карточек направлений хакатона --- */
+.next { overflow: hidden; }
+.next-head { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 24px clamp(32px, 6vw, 96px); align-items: end; margin-bottom: 48px; }
+.next-head .caps { margin-bottom: 0; }
+.next-head .lead { margin: 0; color: var(--muted); }
+.quests { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 20px; }
+.quest { position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 12px; padding: 56px 22px 24px;
+  background: var(--violet); color: #fff; box-shadow: inset 0 0 0 2px #b78bff, inset 0 -8px 0 rgba(12, 0, 23, .3);
+  clip-path: polygon(0 8px, 4px 8px, 4px 4px, 8px 4px, 8px 0, calc(100% - 8px) 0, calc(100% - 8px) 4px, calc(100% - 4px) 4px, calc(100% - 4px) 8px, 100% 8px,
+    100% calc(100% - 8px), calc(100% - 4px) calc(100% - 8px), calc(100% - 4px) calc(100% - 4px), calc(100% - 8px) calc(100% - 4px), calc(100% - 8px) 100%,
+    8px 100%, 8px calc(100% - 4px), 4px calc(100% - 4px), 4px calc(100% - 8px), 0 calc(100% - 8px)); }
+.quest h3 { font: 700 26px/1 var(--pixel); text-transform: uppercase; letter-spacing: .01em; -webkit-font-smoothing: none; }
+.quest p { margin: 0; font-size: 16px; line-height: 1.5; flex: 1; }
+/* номер в уголке — как флажок «01» на карточках направлений */
+.quest-no { position: absolute; top: 0; right: 0; padding: 10px 14px 8px; background: var(--black); color: #e79bf5;
+  font: 700 22px/1 var(--pixel); -webkit-font-smoothing: none; }
+/* статус в рамке из уголков, как «Начать квест» */
+.quest-status { --c: #fff; position: relative; padding: 6px 14px; font-size: 14px; font-weight: 700; color: var(--c);
+  background: linear-gradient(var(--c) 0 0) left top / 8px 2px, linear-gradient(var(--c) 0 0) left top / 2px 8px,
+    linear-gradient(var(--c) 0 0) right top / 8px 2px, linear-gradient(var(--c) 0 0) right top / 2px 8px,
+    linear-gradient(var(--c) 0 0) left bottom / 8px 2px, linear-gradient(var(--c) 0 0) left bottom / 2px 8px,
+    linear-gradient(var(--c) 0 0) right bottom / 8px 2px, linear-gradient(var(--c) 0 0) right bottom / 2px 8px; background-repeat: no-repeat; }
+.quest:has([data-status="ready"]) { background: var(--magenta); color: #1a0526; box-shadow: inset 0 0 0 2px #f0a6f7, inset 0 -8px 0 rgba(12, 0, 23, .3); }
+.quest-status[data-status="ready"] { --c: #1a0526; }
+@media (max-width: 1099px) { .quests { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 959px) { .next-head { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 599px) { .quests { grid-template-columns: minmax(0, 1fr); } .quest { padding-top: 52px; } }
+
 /* --- команда: плитки как на слайде «Команда» --- */
 .team-head { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 24px clamp(32px, 6vw, 96px); align-items: end; margin-bottom: 48px; }
 .team-head .caps { margin-bottom: 0; }
@@ -297,7 +363,8 @@ section { padding-block: clamp(64px, 10vw, 128px); position: relative; }
 .team li { display: flex; flex-direction: column; gap: 2px; position: relative; }
 .team b { font-weight: 700; margin-top: 14px; }
 .team li > span:last-child { color: var(--muted); font-size: 15px; line-height: 1.45; }
-.ava { aspect-ratio: 4 / 5; background: var(--violet); color: #fff; display: grid; place-items: center; font-size: clamp(30px, 4vw, 44px); font-weight: 800; letter-spacing: .02em; }
+.ava { aspect-ratio: 4 / 5; background: var(--violet); color: #fff; display: grid; place-items: center; font: 700 clamp(34px, 4.6vw, 56px)/1 var(--pixel);
+  letter-spacing: .04em; -webkit-font-smoothing: none; box-shadow: inset 0 0 0 2px #b78bff, inset 0 -8px 0 rgba(12, 0, 23, .25); }
 .ribbon { position: relative; margin: -42px -6px 0; background: var(--magenta); color: #1a0526; font-size: 13px; font-weight: 700;
   text-align: center; padding: 6px 4px; box-shadow: 0 0 0 2px #7a0f99; }
 .captain .ribbon + b { margin-top: 18px; }
@@ -307,13 +374,17 @@ section { padding-block: clamp(64px, 10vw, 128px); position: relative; }
 /* --- финал --- */
 .final { overflow: hidden; }
 .final .wrap { position: relative; }
-.final h2 { font-size: clamp(38px, 6.4vw, 80px); letter-spacing: -.025em; max-width: 11em; margin-bottom: 24px; }
+.final h2 { font-size: clamp(40px, 7vw, 88px); max-width: 10em; margin-bottom: 24px; }
 .final .lead { color: #e6dcf7; max-width: 30em; margin-bottom: 32px; }
 
-.foot { padding-block: 28px; border-top: 1px solid #1d1330; font-size: 15px; color: var(--muted); }
-.foot .wrap { display: flex; flex-wrap: wrap; gap: 8px 24px; justify-content: space-between; align-items: center; }
-.foot a { color: var(--ink); display: inline-flex; align-items: center; min-height: 44px; margin-left: 20px; }
-.foot a:first-child { margin-left: 0; }
+.foot { padding-block: 32px; border-top: 1px solid var(--line); font-size: 15px; color: var(--muted); }
+.foot .wrap { display: flex; flex-wrap: wrap; gap: 12px 32px; justify-content: space-between; align-items: center; }
+.foot-about { margin: 0; max-width: 34em; }
+.logo-sm { display: block; font: 700 22px/1 var(--pixel); text-transform: uppercase; color: var(--ink); margin-bottom: 6px; -webkit-font-smoothing: none; }
+.foot-links { display: flex; flex-wrap: wrap; gap: 0 22px; }
+.foot-links a, .foot-links .linkish { color: var(--ink); display: inline-flex; align-items: center; gap: 8px; min-height: 44px; font-size: 15px; }
+.foot-links svg { width: 18px; height: 18px; fill: currentColor; }
+@media (hover: hover) and (pointer: fine) { .foot-links a:hover, .foot-links .linkish:hover { color: var(--accent); } }
 
 /* ---------------------------------------------------------------- вход */
 .login-page { background: var(--lav); min-height: 100vh; }
@@ -322,7 +393,7 @@ section { padding-block: clamp(64px, 10vw, 128px); position: relative; }
 .login .wave { background-image: url("/img/wave-light.svg"); opacity: 1; }
 @media (prefers-color-scheme: dark) { .login .wave { background-image: url("/img/wave-dark.svg"); opacity: .6; } }
 .login-card { position: relative; width: min(560px, 100%); background: var(--pane, #fff); padding: clamp(24px, 4vw, 40px); }
-.login-card h1 { font-size: clamp(30px, 5vw, 44px); text-transform: uppercase; margin-bottom: 14px; }
+.login-card h1 { font: 700 clamp(34px, 5.4vw, 48px)/1 var(--pixel); text-transform: uppercase; margin-bottom: 14px; -webkit-font-smoothing: none; }
 .login-card > .muted { margin-bottom: 8px; }
 .way { padding: 22px 0; border-bottom: 1px solid var(--line); display: grid; justify-items: start; gap: 8px; }
 .way-title { font-size: 18px; font-weight: 800; margin: 0; }
@@ -349,7 +420,7 @@ section { padding-block: clamp(64px, 10vw, 128px); position: relative; }
 .notfound .inner { position: relative; width: 100%; }
 .notfound .code { display: inline-block; font-size: clamp(96px, 20vw, 200px); font-weight: 800; line-height: .9; letter-spacing: -.05em;
   color: var(--accent); margin-bottom: 24px; clip-path: none; }
-.notfound h1 { font-size: clamp(32px, 5vw, 56px); text-transform: uppercase; margin-bottom: 16px; }
+.notfound h1 { font: 700 clamp(36px, 5.6vw, 60px)/1 var(--pixel); text-transform: uppercase; margin-bottom: 16px; -webkit-font-smoothing: none; }
 .notfound p { color: var(--muted); max-width: 30em; margin-bottom: 28px; }
 
 /* ---------------------------------------------------------------- движение */

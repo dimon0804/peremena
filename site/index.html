@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <meta name="theme-color" content="#050208">
+  <meta name="theme-color" content="#0c0017">
   <title>Перемена — бот-помощник классного руководителя в MAX</title>
   <meta name="description" content="Бот в MAX сам собирает с родителей согласия и деньги, отвечает на их вопросы тем, что сохранил учитель, и держит материалы класса под рукой. Демо открывается без регистрации.">
   <meta property="og:type" content="website">
@@ -20,6 +20,7 @@
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
   <link rel="preload" href="/fonts/OpenSans-ExtraBold.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="/fonts/OpenSans-Regular.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/fonts/Tiny5-Bold.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/site.css">
 </head>
 <body>
@@ -28,6 +29,10 @@
   <defs>
     <symbol id="mark" viewBox="0 0 16 16"><path fill="#8742ee" d="M2 0h12v1h1v1h1v12h-1v1h-1v1H2v-1H1v-1H0V2h1V1h1z"/><path fill="#fff" d="M7 2h2v1H7zM6 3h4v1H6zM5 4h6v1H5zM4 5h8v4H4zM3 9h10v2H3zM7 12h2v2H7z"/></symbol>
     <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h13M13 6l6 6-6 6"/></symbol>
+    <!-- пиксельные значки для бегущей строки -->
+    <symbol id="px-heart" viewBox="0 0 9 8"><path d="M1 0h2v1H1zM6 0h2v1H6zM0 1h4v1H0zM5 1h4v1H5zM0 2h9v2H0zM1 4h7v1H1zM2 5h5v1H2zM3 6h3v1H3zM4 7h1v1H4z"/></symbol>
+    <symbol id="px-bolt" viewBox="0 0 7 8"><path d="M3 0h3v1H3zM2 1h3v1H2zM1 2h3v1H1zM0 3h7v1H0zM3 4h3v1H3zM2 5h3v1H2zM1 6h2v1H1zM0 7h1v1H0z"/></symbol>
+    <symbol id="i-github" viewBox="0 0 16 16"><path d="M8 0a8 8 0 0 0-2.5 15.6c.4 0 .5-.2.5-.4v-1.5c-2.2.5-2.7-1-2.7-1-.4-.9-.9-1.2-.9-1.2-.7-.5.1-.5.1-.5.8.1 1.2.8 1.2.8.7 1.3 1.9.9 2.3.7.1-.5.3-.9.5-1.1-1.8-.2-3.6-.9-3.6-4 0-.9.3-1.6.8-2.1-.1-.2-.4-1 .1-2.1 0 0 .7-.2 2.2.8a7.5 7.5 0 0 1 4 0c1.5-1 2.2-.8 2.2-.8.4 1.1.2 1.9.1 2.1.5.6.8 1.3.8 2.1 0 3.1-1.9 3.8-3.6 4 .3.3.5.8.5 1.5v2.2c0 .2.1.5.6.4A8 8 0 0 0 8 0z"/></symbol>
   </defs>
 </svg>
 
@@ -39,6 +44,7 @@
       <a href="#numbers">Расчёт</a>
       <a href="#start">Подключение</a>
       <a href="#school">Школе</a>
+      <a href="#next">Дальше</a>
       <a href="#team">Команда</a>
     </nav>
     <div class="top-actions">
@@ -90,6 +96,14 @@
       </div>
     </div>
   </section>
+
+  <!-- бегущая строка в духе хакатона; слова дублируются, поэтому скрыта от экранных дикторов -->
+  <div class="ticker" aria-hidden="true">
+    <div class="ticker-track">
+      <span>Сборы</span><svg><use href="#px-bolt"/></svg><span>Справочник</span><svg><use href="#px-heart"/></svg><span>Доска класса</span><svg><use href="#px-bolt"/></svg><span>Полка</span><svg><use href="#px-heart"/></svg><span>Тихий режим</span><svg><use href="#px-bolt"/></svg><span>Кто не придёт</span><svg><use href="#px-heart"/></svg>
+      <span>Сборы</span><svg><use href="#px-bolt"/></svg><span>Справочник</span><svg><use href="#px-heart"/></svg><span>Доска класса</span><svg><use href="#px-bolt"/></svg><span>Полка</span><svg><use href="#px-heart"/></svg><span>Тихий режим</span><svg><use href="#px-bolt"/></svg><span>Кто не придёт</span><svg><use href="#px-heart"/></svg>
+    </div>
+  </div>
 
   <!-- сцена: вечерний чат -->
   <section class="scene s-paper" id="problem">
@@ -245,9 +259,9 @@
         <p class="lead">Займёт несколько минут. Родителям ничего устанавливать не нужно, бот пишет им в тот же MAX.</p>
       </div>
       <ol class="steps">
-        <li><h3>Откройте бота</h3><p>Найдите в MAX бота «Перемена» и нажмите «Начать».</p></li>
-        <li><h3>Добавьте его в чат класса</h3><p>Пригласите бота в чат с родителями и сделайте администратором, чтобы он видел, кто в классе.</p></li>
-        <li><h3>Запустите первый сбор</h3><p>В меню бота нажмите «Новый сбор», напишите текст и выберите срок. Дальше бот ведёт сбор сам.</p></li>
+        <li><div class="say"><h3>Откройте бота</h3><p>Найдите в MAX бота «Перемена» и нажмите «Начать».</p></div></li>
+        <li><div class="say"><h3>Добавьте его в чат класса</h3><p>Пригласите бота в чат с родителями и сделайте администратором, чтобы он видел, кто в классе.</p></div></li>
+        <li><div class="say"><h3>Запустите первый сбор</h3><p>В меню бота нажмите «Новый сбор», напишите текст и выберите срок. Дальше бот ведёт сбор сам.</p></div></li>
       </ol>
       <p class="after-steps">С компьютера удобнее? Всё то же самое есть в <a href="/login" data-cabinet>веб-кабинете</a>.</p>
     </div>
@@ -277,6 +291,45 @@
     </div>
   </section>
 
+  <!-- что дальше: модули, которые команда делает сейчас.
+       Как править: одна карточка = один <li class="quest">. Номер — в .quest-no, название — в <h3>, описание — в <p>.
+       Статус — в .quest-status: data-status="wip" (в работе) или "ready" (готово, карточка подсвечивается), текст внутри меняется вручную.
+       Цифры сюда не пишем, пока их нет в работающем боте. -->
+  <section class="next s-black" id="next">
+    <div class="wrap">
+      <div class="next-head">
+        <h2 class="caps">Что дальше</h2>
+        <p class="lead">Над этими модулями команда работает сейчас. Когда модуль выйдет, отметка на карточке сменится на «готово».</p>
+      </div>
+      <ol class="quests">
+        <li class="quest" data-feature="journals">
+          <span class="quest-no" aria-hidden="true">01</span>
+          <h3>Электронные журналы</h3>
+          <p>Список класса подтягивается из выгрузки электронного журнала, переписывать его руками не придётся. Справки и итоги сборов выгружаются обратно в нужном формате.</p>
+          <span class="quest-status" data-status="wip">в работе</span>
+        </li>
+        <li class="quest" data-feature="consultations">
+          <span class="quest-no" aria-hidden="true">02</span>
+          <h3>Запись на консультации</h3>
+          <p>Учитель отмечает свободные окна, а родитель выбирает время кнопкой в боте. Два человека на одно время не запишутся, и список встреч всегда перед глазами.</p>
+          <span class="quest-status" data-status="wip">в работе</span>
+        </li>
+        <li class="quest" data-feature="region">
+          <span class="quest-no" aria-hidden="true">03</span>
+          <h3>Уровень региона</h3>
+          <p>Регион или муниципалитет запускает сбор сразу во все подключённые школы и видит общий итог. Удачные шаблоны сборов и ответов попадают в общую библиотеку.</p>
+          <span class="quest-status" data-status="wip">в работе</span>
+        </li>
+        <li class="quest" data-feature="metrics">
+          <span class="quest-no" aria-hidden="true">04</span>
+          <h3>Метрики</h3>
+          <p>Сколько родитель ждёт ответа и сколько учителей продолжают пользоваться ботом через месяц. Школа и регион увидят это в кабинете без ручных отчётов.</p>
+          <span class="quest-status" data-status="wip">в работе</span>
+        </li>
+      </ol>
+    </div>
+  </section>
+
   <!-- команда -->
   <section class="team-sec s-paper" id="team">
     <div class="wrap">
@@ -297,7 +350,7 @@
   <section class="final s-black">
     <div class="wave" aria-hidden="true"></div>
     <div class="wrap">
-      <h2>Попробуйте на своём классе</h2>
+      <h2 class="px">Попробуйте на своём классе</h2>
       <p class="lead">Бота можно подключить за пару минут. Если сначала хочется посмотреть, демо-класс открывается сразу и ничего никому не отправляет.</p>
       <div class="cta">
         <a class="btn" href="https://max.ru/ideya_fiks_35_bot" data-bot-link>Открыть бота в MAX</a>
@@ -309,8 +362,13 @@
 
 <footer class="foot s-black">
   <div class="wrap">
-    <span>«Перемена», бот-помощник классного руководителя в MAX</span>
-    <span><a href="/login" data-cabinet>Веб-кабинет</a><a href="https://max.ru/ideya_fiks_35_bot" data-bot-link>Бот в MAX</a></span>
+    <p class="foot-about"><span class="logo-sm">Перемена</span> Бот-помощник классного руководителя в MAX. Сделан командой СИЭЛВИ-ДИДЖИТАЛ для хакатона «Идея фикс».</p>
+    <nav class="foot-links" aria-label="Ссылки проекта">
+      <a href="https://max.ru/ideya_fiks_35_bot" data-bot-link>Бот в MAX</a>
+      <button type="button" class="linkish" data-demo>Демо</button>
+      <a href="/login" data-cabinet>Веб-кабинет</a>
+      <a href="https://github.com/dimon0804/peremena" rel="noopener"><svg aria-hidden="true"><use href="#i-github"/></svg>Код на GitHub</a>
+    </nav>
   </div>
 </footer>
 <script src="/site.js"></script>
