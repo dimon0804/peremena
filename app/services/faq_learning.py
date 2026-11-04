@@ -36,9 +36,21 @@ class Cluster:
         # («брать», «завтра») размывают сходство и одна тема распадается на несколько
         return any(_similar(st, m) for m in self.members)
 
+    anon: int = 0  # вопросы без автора (например, из старых записей) — каждый считаем отдельным человеком
+
     @property
     def count(self) -> int:
-        return len(self.ids)
+        """Сколько разных людей спросили: один родитель, переспросивший трижды, — это один человек."""
+        return len(self.users) + self.anon
+
+    @property
+    def people(self) -> str:
+        return people(self.count)
+
+
+def people(n: int) -> str:
+    """«3 человека», «5 человек», «1 человек»."""
+    return f"{n} человек" + ("а" if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14) else "")
 
 
 def _stems(text: str) -> set[str]:
@@ -69,7 +81,7 @@ async def record(chat_ids: list[int], user_id: int | None, text: str) -> list[Cl
     reached = []
     for tid in teacher_ids:
         for c in await clusters(tid, min_count=NUDGE_AT):
-            if stems & c.stems and c.count == NUDGE_AT:
+            if stems & c.stems and c.count >= NUDGE_AT:  # повторные напоминания отсекает _nudge
                 reached.append((tid, c))
     for tid, c in reached:
         await _nudge(tid, c)
@@ -96,6 +108,8 @@ async def clusters(teacher_id: int, min_count: int = 2) -> list[Cluster]:
         target.members.append(st)
         if q.user_id:
             target.users.add(q.user_id)
+        else:
+            target.anon += 1
         if len(q.text) < len(target.question):
             target.question = q.text
     result = [c for c in found if c.count >= min_count]
@@ -132,9 +146,9 @@ async def _nudge(teacher_id: int, c: Cluster) -> None:
     await ctx().kv.set(f"oqc:{c.ids[0]}", {"q": c.question, "ids": c.ids}, 14 * 24 * 3600)
     await notify_teacher(
         teacher_id,
-        f"📖 Про «{html.escape(c.question)}» спросили уже {c.count} раза, а в справочнике ответа нет.\n\n"
+        f"📖 Про «{html.escape(c.question)}» спросили уже {c.people}, а в справочнике ответа нет.\n\n"
         "Сохраните ответ один раз — дальше я буду отвечать на такие вопросы сам.",
-        kind="faq_hint", raw_text=f"Частый вопрос без ответа: «{c.question}» ({c.count}×)",
+        kind="faq_hint", raw_text=f"Частый вопрос без ответа: «{c.question}» ({c.people})",
         buttons=[[kb.cb("💾 Добавить ответ", f"fq:oq:{c.ids[0]}")]],
     )
 
@@ -144,7 +158,7 @@ async def digest_hint(teacher_id: int) -> str:
     if not top:
         return ""
     lines = ["📖 <b>Чаще всего спрашивали без ответа:</b>"]
-    lines += [f"• {html.escape(c.question)} — {c.count}×" for c in top]
+    lines += [f"• {html.escape(c.question)} — {c.people}" for c in top]
     return "\n".join(lines)
 
 

@@ -543,6 +543,39 @@ async def remind(poll_id: int, auto: bool = False) -> dict:
     return {"sent": sent, "group": group, "pending": len(pending)}
 
 
+DEFERRED_KEY = "rma"  # сборы, где учитель ночью попросил «напомнить утром»
+
+
+async def defer_remind(poll_id: int) -> None:
+    ids = await ctx().kv.get(DEFERRED_KEY) or []
+    if poll_id not in ids:
+        await ctx().kv.set(DEFERRED_KEY, [*ids, poll_id], ttl=3 * 24 * 3600)
+
+
+async def run_deferred_reminders() -> int:
+    """Утренние напоминания, отложенные учителем ночью: уходят, как только у родителей наступает день."""
+    ids = await ctx().kv.get(DEFERRED_KEY) or []
+    if not ids:
+        return 0
+    left, sent = [], 0
+    for pid in ids:
+        poll = await get_poll(pid)
+        if poll is None or poll.closed:
+            continue
+        teacher = await _teacher(poll)
+        tz = teacher.tz if teacher else ctx().settings.default_tz
+        if not _is_daytime(tz):
+            left.append(pid)
+            continue
+        res = await remind(pid, auto=True)
+        sent += 1
+        await notify_teacher(poll.teacher_id, f"⏰ Напомнил молчащим по сбору «{html.escape(poll.title)}»: "
+                                              f"в личку {res['sent']}" + (f", в чате {res['group']}" if res["group"] else "") + ".",
+                             kind="report", chat_id=poll.chat_id, raw_text=f"«{poll.title}»: напоминание утром")
+    await ctx().kv.set(DEFERRED_KEY, left, ttl=3 * 24 * 3600)
+    return sent
+
+
 async def close_poll(poll_id: int, by_deadline: bool = False) -> Poll | None:
     c = ctx()
     # атомарно: кнопка «Закрыть» и закрытие по сроку одновременно — итог уходит один раз
@@ -685,6 +718,10 @@ async def tick() -> None:
         await resume_dispatch()
     except Exception:
         log.exception("Досылка сборов")
+    try:
+        await run_deferred_reminders()
+    except Exception:
+        log.exception("Отложенные напоминания")
     now = utcnow()
     async with session() as s:
         polls = (await s.scalars(select(Poll).where(Poll.closed.is_(False), Poll.deadline.is_not(None))

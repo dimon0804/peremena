@@ -9,6 +9,7 @@ from ..core import ctx
 from ..db import session
 from ..models import ClassChat, User
 from ..services import attendance, chats, faq, faq_learning, polls, quiet, school, shelf, stats
+from ..timeutil import fmt_dt
 from . import absence, dialog, staff
 from .common import ack, clear_state, get_state, send, set_state
 
@@ -195,8 +196,8 @@ async def on_poll_flow(cid: str, uid: int, tail: str) -> None:
             return
         await dialog.on_deadline_preset(uid, arg)
     elif action == "send":
-        await ack(cid, "Рассылаю")
-        await dialog.confirm_poll(uid)
+        await ack(cid, "Разошлю утром" if arg == "am" else "Рассылаю")
+        await dialog.confirm_poll(uid, morning=arg == "am")
     else:
         await ack(cid)
 
@@ -256,6 +257,21 @@ async def on_poll_teacher(cid: str, uid: int, head: str, tail: str) -> None:
         await ack(cid)
         await send(uid, polls.full_list(poll))
     elif head == "pr":
+        teacher = await chats.get_user(uid)
+        tz = teacher.tz if teacher else ctx().settings.default_tz
+        morning = polls.next_daytime(tz)
+        can_wait = not polls._is_daytime(tz) and (not poll.deadline or morning < poll.deadline)
+        if target == "am" or (target == "" and can_wait):
+            if target == "am":
+                await polls.defer_remind(poll.id)
+                await ack(cid, "Напомню утром")
+                await send(uid, f"🌙 Напомню молчащим утром — {fmt_dt(morning, tz)}.")
+            else:
+                # граница рабочего дня работает и для родителей: ночью без явного «сейчас» не пишем
+                await ack(cid)
+                await send(uid, f"🌙 У родителей сейчас ночь. Напомнить утром ({fmt_dt(morning, tz)}) или сейчас?",
+                           [[kb.cb("🌙 Утром", f"pr:{poll.id}:am"), kb.cb("Сейчас", f"pr:{poll.id}:now")]])
+            return
         await ack(cid, "Напоминаю")
         res = await polls.remind(poll.id)
         if res.get("dup"):
@@ -337,6 +353,10 @@ async def on_faq(cid: str, uid: int, tail: str) -> None:
     elif action == "open":
         await ack(cid)
         await dialog.show_open_questions(uid)
+    elif action == "page" and arg.isdigit():  # листание кнопок /faq — меняем то же сообщение
+        text, entries = await faq.render_list(uid)
+        rows = dialog.faq_buttons(entries, int(arg), bool(await school.school_of_teacher(uid)))
+        await ack(cid, message={"text": text, "format": "html", "attachments": kb.kb_list(rows)})
     elif action == "nosave":
         await c.kv.delete(f"sv:{arg}")
         await ack(cid, "Хорошо, не сохраняю")

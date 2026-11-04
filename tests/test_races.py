@@ -28,8 +28,9 @@ def make_poll(loop, template="consent", amount=None):
     return run(loop, go())
 
 
-def test_double_tap_remind_sends_once(env):
+def test_double_tap_remind_sends_once(env, monkeypatch):
     loop, api, c = env
+    monkeypatch.setattr(polls, "_is_daytime", lambda tz: True)
     added(loop)
     pid = make_poll(loop)
     before = len(api.texts_to(user_id=PARENTS[0]["user_id"]))

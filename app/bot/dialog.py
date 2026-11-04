@@ -366,10 +366,33 @@ async def show_poll_preview(uid: int, data: dict) -> None:
                      "уйдёт только сообщением в чат, без сверки «кто не ответил».")
     else:
         lines.append(f"Получат в личку: <b>{len(targets)}</b> человек + сообщение в чат класса.")
-    await send(uid, "\n".join(lines), [[kb.cb("✅ Разослать", "f:send")], [kb.cb("Отмена", "f:cancel")]])
+    morning = _morning_slot(user.tz if user else None, dl)
+    if morning:
+        lines.append(f"\n🌙 У родителей сейчас ночь. Могу разослать утром — {fmt_dt(morning, user.tz if user else None)}.")
+        rows = [[kb.cb("🌙 Разослать утром", "f:send:am")], [kb.cb("Разослать сейчас", "f:send")],
+                [kb.cb("Отмена", "f:cancel")]]
+    else:
+        rows = [[kb.cb("✅ Разослать", "f:send")], [kb.cb("Отмена", "f:cancel")]]
+    await send(uid, "\n".join(lines), rows)
 
 
-async def confirm_poll(uid: int) -> None:
+def _morning_slot(tz: str | None, deadline) -> object | None:
+    """Если у родителей сейчас ночь — время (UTC), когда рассылку можно отправить; иначе None."""
+    from datetime import timedelta
+
+    from ..timeutil import utcnow
+
+    if polls._is_daytime(tz):
+        return None
+    at = polls.next_daytime(tz)
+    if at <= utcnow():  # граница окна (например, ровно 21:00) — ближайшее утро
+        at = polls.next_daytime(tz, utcnow() + timedelta(hours=11))
+    if deadline and at >= deadline:
+        return None
+    return at
+
+
+async def confirm_poll(uid: int, morning: bool = False) -> None:
     from datetime import datetime
 
     st = await get_state(uid)
@@ -379,8 +402,16 @@ async def confirm_poll(uid: int) -> None:
     await clear_state(uid)
     data = st["data"]
     dl = datetime.fromisoformat(data["deadline"]) if data.get("deadline") else None
+    user = await chats.get_user(uid)
+    tz = user.tz if user else None
+    send_at = _morning_slot(tz, dl) if morning else None
     poll = await polls.create_poll(uid, data["chat_id"], data["template"], data["text"], data.get("options") or [], dl,
-                                   amount=data.get("amount"))
+                                   amount=data.get("amount"), send_at=send_at)
+    if send_at:
+        # граница рабочего дня работает и для родителей: ночью сбор не будит их уведомлением
+        await send(uid, f"🌙 Сбор сохранён и уйдёт родителям {fmt_dt(send_at, tz)}. Пришлю отчёт о рассылке.\n"
+                        + polls.plan_text(poll, tz))
+        return
     await send(uid, "⏳ Рассылаю…")
     report = await polls.send_poll(poll.id)
     lines = [f"✅ Сбор запущен: в личку доставлено <b>{report['delivered']}</b> из {report['total']}."]
@@ -390,8 +421,7 @@ async def confirm_poll(uid: int) -> None:
     if not report["group_posted"]:
         lines.append("⚠️ Не получилось написать в чат класса — проверьте, что я всё ещё в нём.")
     poll = await polls.get_poll(poll.id)
-    user = await chats.get_user(uid)
-    lines.append(polls.plan_text(poll, user.tz if user else None) + " Статус — /status")
+    lines.append(polls.plan_text(poll, tz) + " Статус — /status")
     await send(uid, "\n".join(lines))
     text, buttons = await polls.status_card(poll)
     await send(uid, text, buttons)
@@ -433,21 +463,39 @@ async def show_my_polls(uid: int) -> None:
 
 
 # ====================================================================== «Справочник»
-async def show_faq(uid: int) -> None:
-    if not await _teacher_or_explain(uid):
-        return
-    text, entries = await faq.render_list(uid)
+FAQ_PAGE = 10  # карточек с кнопками на одной странице /faq
+
+
+def faq_buttons(entries, page: int, in_school: bool) -> list[list[dict]]:
+    """Кнопки удаления (и «в базу школы») постранично: удалить можно любую карточку, а не только первые 10."""
+    pages = max(1, -(-len(entries) // FAQ_PAGE))
+    page = min(max(page, 0), pages - 1)
     rows = [[kb.cb("➕ Добавить", "fq:add")]]
-    in_school = bool(await school.school_of_teacher(uid))
-    for e in entries[:10]:
+    for e in entries[page * FAQ_PAGE:(page + 1) * FAQ_PAGE]:
         row = [kb.cb(f"🗑 {e.question[:40]}", f"fq:del:{e.id}")]
         if in_school and not e.school_id:
             row.append(kb.cb("🏛 В базу школы", f"fq:share:{e.id}"))
         rows.append(row)
+    if pages > 1:
+        nav = []
+        if page > 0:
+            nav.append(kb.cb("◀️ Назад", f"fq:page:{page - 1}"))
+        nav.append(kb.cb(f"{page + 1}/{pages}", f"fq:page:{page}"))
+        if page < pages - 1:
+            nav.append(kb.cb("Дальше ▶️", f"fq:page:{page + 1}"))
+        rows.append(nav)
     c = ctx()
     if c.bot_username:
         rows.append([kb.app("Править в приложении", c.bot_username, "faq")])
-    await send(uid, text, rows)
+    return rows
+
+
+async def show_faq(uid: int) -> None:
+    if not await _teacher_or_explain(uid):
+        return
+    text, entries = await faq.render_list(uid)
+    in_school = bool(await school.school_of_teacher(uid))
+    await send(uid, text, faq_buttons(entries, 0, in_school))
     await show_open_questions(uid, quiet_if_empty=True)
 
 
@@ -462,8 +510,8 @@ async def show_open_questions(uid: int, quiet_if_empty: bool = False) -> None:
     rows = []
     for c in top:
         key = await faq_learning.remember_cluster(c)
-        lines.append(f"• {html.escape(c.question)} — {c.count}×")
-        rows.append([kb.cb(f"💾 {c.question[:45]} ({c.count}×)", f"fq:oq:{key}")])
+        lines.append(f"• {html.escape(c.question)} — {c.people}")
+        rows.append([kb.cb(f"💾 {c.question[:45]} ({c.people})", f"fq:oq:{key}")])
     await send(uid, "\n".join(lines), rows)
 
 
