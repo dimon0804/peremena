@@ -374,9 +374,10 @@ async def confirm_poll(uid: int) -> None:
                      f"ответ всё равно засчитается лично им.")
     if not report["group_posted"]:
         lines.append("⚠️ Не получилось написать в чат класса — проверьте, что я всё ещё в нём.")
-    lines.append("Напомню молчащим за сутки и за 2 часа до срока. Статус — /status")
-    await send(uid, "\n".join(lines))
     poll = await polls.get_poll(poll.id)
+    user = await chats.get_user(uid)
+    lines.append(polls.plan_text(poll, user.tz if user else None) + " Статус — /status")
+    await send(uid, "\n".join(lines))
     text, buttons = await polls.status_card(poll)
     await send(uid, text, buttons)
 

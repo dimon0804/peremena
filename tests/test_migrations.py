@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from app import db
 
-HEAD = "0002"  # последняя миграция в app/migrations/versions
+HEAD = "0003"  # последняя миграция в app/migrations/versions
 
 
 def _url(tmp_path, name):
