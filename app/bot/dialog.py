@@ -76,7 +76,7 @@ async def run_command(uid: int, cmd: str, rest: str) -> None:
         "start": show_start, "help": show_start, "poll": start_poll, "status": show_status_list,
         "faq": show_faq, "add": start_faq_add, "quiet": show_quiet, "morning": send_morning,
         "stats": show_stats, "chats": show_chats, "app": show_app, "my": show_my_polls,
-        "cancel": cancel, "absent": absence.show_list, "board": staff.show_board, "invite": staff.start_invite, "school": staff.show_school,
+        "cancel": cancel, "forget": ask_forget, "absent": absence.show_list, "board": staff.show_board, "invite": staff.start_invite, "school": staff.show_school,
     }
     if cmd == "start" and rest and await staff.handle_start_payload(uid, rest):
         return
@@ -120,6 +120,21 @@ async def show_start(uid: int) -> None:
         await send(uid, PARENT_HELP, parent_menu())
     else:
         await send(uid, ONBOARD_HELP, parent_menu())
+
+
+async def ask_forget(uid: int) -> None:
+    await send(uid, "🗑 <b>Удалить мои данные?</b>\n\nУдалю ваши вопросы, отметки «ребёнок не придёт», имя ребёнка "
+                    "и ваши сообщения во «входящих» учителя. Ответы на закрытых сборах обезличу — учитель увидит, "
+                    "что ответ был, но не чей. Ответы на открытых сборах останутся до их закрытия.",
+               [[kb.cb("🗑 Да, удалить", "fg:yes"), kb.cb("Нет", "fg:no")]])
+
+
+async def do_forget(uid: int) -> None:
+    from ..services import retention
+
+    res = await retention.forget(uid)
+    await send(uid, f"✅ Готово. Удалено вопросов: {res['questions']}, отметок отсутствия: {res['absences']}, "
+                    f"сообщений учителю: {res['inbox']}; обезличено ответов: {res['answers']}.")
 
 
 async def cancel(uid: int) -> None:

@@ -31,6 +31,7 @@ COMMANDS = [
     ("school", "Школа и сводка для завуча"),
     ("app", "Открыть приложение"),
     ("cancel", "Отменить текущее действие"),
+    ("forget", "Удалить мои данные"),
     ("help", "Помощь"),
 ]
 
@@ -48,6 +49,7 @@ ALIASES = {
     "chats": "chats", "классы": "chats",
     "app": "app", "приложение": "app",
     "cancel": "cancel", "отмена": "cancel",
+    "forget": "forget", "забыть": "forget", "удалить_данные": "forget",
     "my": "my", "мои": "my",
     "absent": "absent", "пропуски": "absent", "отсутствуют": "absent", "непридет": "absent",
     "заболел": "absent", "болеет": "absent",

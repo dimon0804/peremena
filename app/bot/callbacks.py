@@ -86,6 +86,13 @@ async def on_callback(update: dict) -> None:
         if head == "lg":
             await staff.on_login_cb(cid, uid, tail)
             return
+        if head == "fg":  # «удалить мои данные» — только после подтверждения кнопкой
+            await ack(cid)
+            if tail == "yes":
+                await dialog.do_forget(uid)
+            else:
+                await send(uid, "Хорошо, ничего не удаляю.")
+            return
         if head == "prp":
             await on_repeat_poll(cid, uid, tail)
             return
