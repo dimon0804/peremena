@@ -135,8 +135,9 @@ def test_open_questions_key_belongs_to_teacher(env):
 
     async def seed():
         async with session() as s:
-            for text in ("Во сколько собрание в пятницу?", "собрание в пятницу во сколько?"):
-                s.add(OpenQuestion(teacher_id=TEACHER["user_id"], chat_id=CHAT_ID, user_id=PARENTS[0]["user_id"],
+            # подсказка появляется, когда спросили разные люди
+            for parent, text in zip(PARENTS, ("Во сколько собрание в пятницу?", "собрание в пятницу во сколько?")):
+                s.add(OpenQuestion(teacher_id=TEACHER["user_id"], chat_id=CHAT_ID, user_id=parent["user_id"],
                                    text=text, stems=" ".join(faq_learning._stems(text))))
     run(loop, seed())
     key = run(loop, api.faq_open(teacher))[0]["key"]
