@@ -24,8 +24,8 @@ Built for the «Идея фикс» hackathon (“Teacher's Arsenal” track) by
 
 | Module | What it does |
 |---|---|
-| 📋 **Roll call** | `/poll`: pick a template (consent, medical note, acknowledgement, choice, money collection), write the text and a deadline. The bot takes the chat member list and sends each parent buttons in a private message; answers are tied to a person. It reminds silent parents 24 h and 2 h before the deadline, closes the poll and reports “25 of 27 answered, missing: …”, with CSV export. |
-| 📖 **Class FAQ** | The bot answers only with what the teacher saved — it never makes things up. When the teacher replies to a question in the chat, the bot offers “Save this answer”. Unanswered questions go to the teacher; when three different parents ask the same thing, the bot suggests answering once for everyone. |
+| 📋 **Roll call** | `/poll`: pick a template (consent, medical note, acknowledgement, event sign-up, choice, money collection), write the text and a deadline. The bot takes the chat member list and sends each parent buttons in a private message; answers are tied to a person. It reminds silent parents 24 h and 2 h before the deadline, closes the poll and reports “25 of 27 answered, missing: …”, with CSV export. |
+| 📖 **Class FAQ** | The bot answers only with what the teacher saved — it never makes things up. Parents ask in a private chat or right in the class chat by mentioning the bot. When the teacher replies to a question in the chat, the bot offers “Save this answer”. Unanswered questions go to the teacher; when three different parents ask the same thing, the bot suggests answering once for everyone. |
 | 🗂 **Shelf** | Files forwarded with a caption and `#tags` are stored and searchable; any file can be sent to any class in one tap. |
 | 🌙 **Quiet hours** | Outside the working window the bot keeps answering what it knows and brings everything new in one morning digest. Messages marked “срочно” (urgent) go through immediately. |
 | 📚 **Class board** | Homework and announcements; “What's the algebra homework for tomorrow?” is answered by subject dictionary and date, with deferred morning publishing. |

@@ -54,7 +54,7 @@ def test_rollcall_end_to_end(env):
     assert any("Нужно уточнить" in t for t in api.texts_to(user_id=TEACHER["user_id"]))
 
     text, _ = run(loop, polls.status_card(poll))
-    assert "2/3" in text and "Козлова И." in text
+    assert "Ответили <b>2 из 3</b>" in text and "Козлова И." in text
 
     # напоминание — только тем, кто молчит
     before = len(api.texts_to(user_id=203))

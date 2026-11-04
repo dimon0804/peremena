@@ -151,7 +151,14 @@ async def on_message(update: dict) -> None:
         )
         return
 
-    if not search.looks_like_question(text):
+    # к боту обратились прямо в чате (@бот или ответом на его сообщение) — отвечаем и без автоответа:
+    # «родитель или ученик спрашивает бота напрямую — в личке или упоминанием в чате»
+    question = addressed_question(msg, text)
+    if question is not None:
+        if await answer_mention(chat, uid, question, body.get("mid")):
+            return
+        text = question
+    elif not search.looks_like_question(text):
         return
 
     # 1) автоответ — только если учитель его включил: сначала доска («что задали?»), потом справочник
@@ -194,6 +201,68 @@ async def on_message(update: dict) -> None:
     hits = faq.rank(text, await faq.candidates_for_chats([chat_id]), limit=1)
     if not hits or hits[0].score < faq.ANSWER_SCORE:
         await faq_learning.record([chat_id], uid, text)
+
+
+def addressed_question(msg: dict, text: str) -> str | None:
+    """Если сообщение обращено к боту (@имя_бота, упоминание в разметке или ответ на сообщение бота) —
+    текст вопроса без упоминания; иначе None."""
+    c = ctx()
+    body = msg.get("body") or {}
+    addressed = False
+    q = text
+    if c.bot_username:
+        tag = "@" + c.bot_username.lower()
+        low = q.lower()
+        if tag in low:
+            i = low.index(tag)
+            q = q[:i] + q[i + len(tag):]
+            addressed = True
+    for m in body.get("markup") or []:
+        if m.get("type") == "user_mention" and m.get("user_id") == c.bot_user_id:
+            start, length = m.get("from", 0), m.get("length", 0)
+            if not addressed and 0 <= start < len(q):
+                q = q[:start] + q[start + length:]
+            addressed = True
+    link = msg.get("link") or {}
+    if link.get("type") == "reply" and (link.get("sender") or {}).get("user_id") == c.bot_user_id:
+        addressed = True
+    if not addressed:
+        return None
+    return q.strip(" ,:;—-\n\t")
+
+
+async def answer_mention(chat, uid: int, question: str, mid: str | None) -> bool:
+    """Ответ на прямое обращение к боту в чате: доска, затем справочник (тот же порог, что в личке —
+    человек спросил именно бота). True — ответили; False — ответа нет, вопрос идёт дальше (учителю/в подсказки)."""
+    c = ctx()
+    chat_id = chat.chat_id
+    if not question:
+        await c.safe_send(chat_id=chat_id, reply_to=mid,
+                          text="Слушаю! Спросите, например: «во сколько собрание?» или «что задали по алгебре?»")
+        return True
+    teacher = await chats.get_user(chat.teacher_id) if chat.teacher_id else None
+    tz = teacher.tz if teacher else c.settings.default_tz
+    if board.is_homework_question(question):
+        items = await board.find_homework(question, [chat_id], tz)
+        if items and await c.safe_send(chat_id=chat_id, text=await board.render_answer(items, question, tz),
+                                       reply_to=mid):
+            await stats.add(chat.teacher_id, "faq_answer")
+            return True
+    hits = faq.rank(question, await faq.candidates_for_chats([chat_id]), limit=1)
+    if hits and hits[0].score >= faq.ANSWER_SCORE:
+        e = hits[0].item
+        if await c.safe_send(chat_id=chat_id, text=await faq.render_answer(e), reply_to=mid,
+                             attachments=kb.kb_list([[kb.cb("Это не то", f"fq:no:{e.id}")]])):
+            await faq.mark_hit(e.id)
+            await stats.add(e.teacher_id, "faq_answer")
+            return True
+    if not await c.kv.add_once(f"mnx:{chat_id}:{uid}", ttl=10 * 60):
+        return False  # «ответа нет» одному человеку — не чаще раза в 10 минут, чтобы не засорять чат
+    buttons = [[kb.link("Написать боту", c.start_link())]] if c.bot_username else []
+    await c.safe_send(chat_id=chat_id, reply_to=mid, attachments=kb.kb_list(buttons),
+                      text="В справочнике класса пока нет готового ответа. Напишите мне в личку — "
+                           "передам вопрос учителю, а ответ придёт вам лично.")
+    return False
 
 
 async def on_teacher_message(chat_id: int, uid: int, msg: dict, text: str) -> None:

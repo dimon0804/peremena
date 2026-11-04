@@ -41,7 +41,7 @@ async def on_callback(update: dict) -> None:
         if head == "f":
             await on_poll_flow(cid, uid, tail)
             return
-        if head in ("ps", "pr", "pl", "pc", "st", "pm", "pp"):
+        if head in ("ps", "pr", "pl", "pc", "st", "pm", "pp", "pd"):
             await on_poll_teacher(cid, uid, head, tail)
             return
         if head == "fq":
@@ -61,7 +61,7 @@ async def on_callback(update: dict) -> None:
                 await send(uid, "Вопрос устарел — ответьте родителю напрямую.")
                 return
             await set_state(uid, "faq_reply", "a", {"qid": tail})
-            await send(uid, "✍️ Напишите ответ — отправлю родителю и сохраню в справочник.")
+            await send(uid, "✍️ Напишите ответ — отправлю его родителю, а сохранить в справочник предложу кнопкой.")
             return
         if head == "sh":
             await on_shelf(cid, uid, tail)
@@ -248,6 +248,20 @@ async def on_poll_teacher(cid: str, uid: int, head: str, tail: str) -> None:
             return
         await ack(cid)
         await send(uid, text, polls.pay_buttons(poll))
+        return
+    if head == "pd":  # удалить закрытый сбор вместе с ответами — только после подтверждения
+        if target != "ok":
+            await ack(cid)
+            await send(uid, f"🗑 Удалить сбор «{html.escape(poll.title)}» вместе со всеми ответами? "
+                            "Вернуть его будет нельзя.",
+                       [[kb.cb("🗑 Да, удалить", f"pd:{poll.id}:ok"), kb.cb("Нет", f"ps:{poll.id}")]])
+            return
+        res = await polls.delete_poll(poll.id, uid)
+        if res == "open":
+            await ack(cid, "Сначала закройте сбор")
+            return
+        await ack(cid, "Сбор удалён")
+        await send(uid, f"🗑 Сбор «{html.escape(poll.title)}» и ответы на него удалены.")
         return
     if head == "ps":
         await ack(cid)

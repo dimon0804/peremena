@@ -46,6 +46,12 @@ TEMPLATES: dict[str, dict] = {
         "options": ["Ознакомлен(а)", "Есть вопрос"],
         "clarify": 1,
     },
+    "signup": {
+        "label": "Запись на мероприятие",
+        "hint": "Например: «Субботник в школьном саду, суббота 10:00. Кто сможет прийти с ребёнком?»",
+        "options": ["Записываюсь", "Не смогу", "Нужно уточнить"],
+        "clarify": 2,
+    },
     "money": {
         "label": "Сбор денег",
         "hint": "Например: «Экскурсия в музей в субботу, оплата до пятницы.» Сумму спрошу следующим шагом.",
@@ -451,7 +457,7 @@ async def status_card(poll: Poll) -> tuple[str, list[list[dict]]]:
         f"📋 <b>{html.escape(poll.title)}</b>",
         f"{html.escape(chat.title if chat else '')} · {state}",
         "",
-        f"<b>{answered}/{total}</b> ответили  {progress_bar(answered, total)}",
+        f"Ответили <b>{answered} из {total}</b>  {progress_bar(answered, total)}",
         " · ".join(f"{html.escape(o)} — {n}" for o, n in zip(poll.options, per)),
     ]
     m = money(poll)
@@ -480,6 +486,7 @@ async def status_card(poll: Poll) -> tuple[str, list[list[dict]]]:
             buttons.insert(0, [kb.cb("💰 Отметить сдавших", f"pm:{poll.id}")])
     else:
         buttons.append([kb.cb("Список", f"pl:{poll.id}"), kb.cb("🔁 Повторить", f"prp:{poll.id}")])
+        buttons.append([kb.cb("🗑 Удалить сбор", f"pd:{poll.id}")])
     if c.bot_username:
         buttons.append([kb.app("Открыть в приложении", c.bot_username, f"poll_{poll.id}")])
     return "\n".join(lines), buttons
@@ -603,6 +610,20 @@ async def close_poll(poll_id: int, by_deadline: bool = False) -> Poll | None:
                          raw_text=f"«{poll.title}»: ответили {counts(poll)[0]} из {len(poll.targets)}",
                          buttons=buttons)
     return poll
+
+
+async def delete_poll(poll_id: int, teacher_id: int) -> str:
+    """Учитель удаляет закрытый сбор вместе с ответами: «учитель видит и удаляет всё, что знает бот».
+    Открытый сбор сначала нужно закрыть — у родителей под ним ещё живые кнопки.
+    Возвращает: deleted | open | missing."""
+    async with session() as s:
+        poll = await s.get(Poll, poll_id)
+        if poll is None or poll.teacher_id != teacher_id:
+            return "missing"
+        if not poll.closed:
+            return "open"
+        await s.delete(poll)  # ответы (poll_targets) удаляются каскадом
+    return "deleted"
 
 
 async def list_polls(teacher_id: int, include_closed: bool = False, limit: int = 30) -> list[Poll]:

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import html
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from sqlalchemy import select, update
 
@@ -18,7 +18,7 @@ from ..core import ctx
 from ..db import session
 from ..demo_ids import DEMO_BASE, DEMO_SPAN
 from ..models import ClassChat, InboxItem, Poll, User
-from ..timeutil import fmt_dt, local_now, to_local, utcnow
+from ..timeutil import fmt_dt, fmt_minutes, local_now, to_local, to_utc, utcnow
 from . import stats
 
 log = logging.getLogger(__name__)
@@ -43,6 +43,36 @@ def in_work_window(user: User) -> bool:
         return False
     minutes = now.hour * 60 + now.minute
     return user.work_start <= minutes < user.work_end
+
+
+# «в понедельник», «во вторник» — когда учитель увидит вопрос
+WEEKDAYS_ACC = ("в понедельник", "во вторник", "в среду", "в четверг", "в пятницу", "в субботу", "в воскресенье")
+
+
+def next_work_start(user: User, now: datetime | None = None) -> datetime:
+    """Ближайшее начало рабочего окна учителя (местное время) — с учётом выходных."""
+    now = now or local_now(user.tz)
+    for d in range(8):
+        day = (now + timedelta(days=d)).date()
+        if user.weekends_off and day.weekday() >= 5:
+            continue
+        start = datetime(day.year, day.month, day.day, tzinfo=now.tzinfo) + timedelta(minutes=user.work_start)
+        if start > now:
+            return start
+    return now
+
+
+def when_back_text(user: User, now: datetime | None = None) -> str:
+    """«завтра с 8:00», «в понедельник с 8:00» — честно, когда учитель увидит вопрос (сценарий «Вечер пятницы»)."""
+    now = now or local_now(user.tz)
+    start = next_work_start(user, now)
+    at = fmt_minutes(user.work_start)
+    days = (start.date() - now.date()).days
+    if days <= 0:
+        return f"сегодня с {at}"
+    if days == 1:
+        return f"завтра с {at}"
+    return f"{WEEKDAYS_ACC[start.weekday()]} с {at}"
 
 
 def is_urgent(user: User, text: str) -> bool:
@@ -71,6 +101,9 @@ async def notify_teacher(
     Ничего не теряется: всё, что не ушло сразу, сохраняется."""
     async with session() as s:
         teacher = await s.get(User, teacher_id)
+    if kind in ("question", "chat_question") and not urgent:
+        # вопрос, который бот не закрыл сам, — для метрики пилота «закрыто ботом без учителя»
+        await stats.add(teacher_id, "question_forwarded")
     status = "queued"
     if teacher is not None:
         if urgent or in_work_window(teacher) or is_urgent(teacher, raw_text):
@@ -108,10 +141,11 @@ async def build_digest(teacher: User, include_empty: bool = False) -> tuple[str,
         polls = (await s.scalars(
             select(Poll).where(Poll.teacher_id == teacher.user_id, Poll.closed.is_(False)).order_by(Poll.deadline)
         )).all()
+        since = digest_since(teacher)
         closed_recent = (await s.scalars(
             select(Poll).where(
                 Poll.teacher_id == teacher.user_id, Poll.closed.is_(True),
-                Poll.closed_at >= utcnow() - timedelta(hours=18),
+                Poll.closed_at >= min(since, utcnow() - timedelta(hours=18)),
             )
         )).all()
 
@@ -142,6 +176,12 @@ async def build_digest(teacher: User, include_empty: bool = False) -> tuple[str,
         for p in closed_recent[:5]:
             answered = sum(1 for t in p.targets if t.answer is not None)
             lines.append(f"{html.escape(p.title)} — ответили {answered}/{len(p.targets)}")
+        lines.append("")
+
+    # «4 закрыты автоматически»: сколько вопросов бот закрыл сам, пока учителя не было
+    auto_n = await stats.count_since(teacher.user_id, "faq_answer", since)
+    if auto_n:
+        lines.append(f"🤖 Пока вас не было, бот сам ответил на вопросы: <b>{auto_n}</b>.")
         lines.append("")
 
     shown = list(items[:DIGEST_ITEMS])
@@ -196,13 +236,30 @@ async def build_digest(teacher: User, include_empty: bool = False) -> tuple[str,
                     lines.append(f"   {label}: {v['count']}")
             lines.append("")
 
-    if not items and not polls and not closed_recent and not weekly and not absent_n and not include_empty:
+    if not items and not polls and not closed_recent and not weekly and not absent_n and not auto_n \
+            and not include_empty:
         return None
     if not items and not polls and not closed_recent:
         lines.append("Ничего срочного. Хорошего дня!")
     if c.bot_username:
         buttons.append([kb.app("Открыть «Перемену»", c.bot_username, "home")])
     return "\n".join(lines).strip(), buttons, [it.id for it in shown]
+
+
+def digest_since(teacher: User, now: datetime | None = None):
+    """«Пока вас не было» — с конца последнего рабочего дня учителя (UTC): в понедельник это вечер пятницы,
+    во вторник — вечер понедельника. Не дальше 96 часов назад."""
+    now = now or local_now(teacher.tz)
+    end = now - timedelta(hours=18)
+    for d in range(8):
+        day = (now - timedelta(days=d)).date()
+        if teacher.weekends_off and day.weekday() >= 5:
+            continue
+        cand = datetime(day.year, day.month, day.day, tzinfo=now.tzinfo) + timedelta(minutes=teacher.work_end)
+        if cand <= now:
+            end = cand
+            break
+    return to_utc(max(end, now - timedelta(hours=96)))
 
 
 async def deliver_digest(teacher: User, include_empty: bool = False) -> str:

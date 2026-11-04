@@ -245,6 +245,18 @@ async def close(pid: int, user: User = Depends(teacher_user)):
     return poll_out(p, user.tz, with_targets=True, chat_titles=await _titles())
 
 
+@router.delete("/polls/{pid}")
+async def delete_poll(pid: int, user: User = Depends(teacher_user)):
+    """Удалить закрытый сбор вместе с ответами (учитель распоряжается тем, что знает бот)."""
+    await _own(pid, user)
+    res = await polls.delete_poll(pid, user.user_id)
+    if res == "open":
+        raise HTTPException(409, "Сначала закройте сбор")
+    if res != "deleted":
+        raise HTTPException(404, "Сбор не найден")
+    return {"ok": True}
+
+
 EXPORT_TTL = 24 * 3600
 
 
@@ -636,7 +648,8 @@ async def import_history(chat_id: int, user: User = Depends(teacher_user)):
 async def get_stats(user: User = Depends(teacher_user)):
     week = await stats.summary(user.user_id, days=7)
     total = await stats.summary(user.user_id)
-    return {"week": week, "total": total, "labels": stats.LABELS, "minutes_per": stats.MINUTES}
+    return {"week": week, "total": total, "labels": stats.LABELS, "minutes_per": stats.MINUTES,
+            "pilot": await stats.pilot(user.user_id)}
 
 
 @router.get("/inbox")
