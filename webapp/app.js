@@ -238,17 +238,42 @@
 
   const pollCard = (p) => {
     const pct = p.total ? Math.round((100 * p.answered) / p.total) : 0;
-    const status = p.missing.length ? `не ответили: <b>${p.missing.length}</b>` : (p.total ? '<span class="ok">ответили все</span>' : "в списке пока никого");
+    const status = !p.total ? "в списке пока никого"
+      : p.missing.length ? `Ответили <b>${p.answered}</b> из ${p.total}` : '<span class="ok">Ответили все</span>';
     return `<button type="button" class="card tap poll-card" data-act="openPoll" data-id="${p.id}">
       <span class="card-head"><span class="card-title">${esc(p.title)}</span>${deadlineChip(p)}</span>
       <span class="muted small">${esc(p.chat_title)}</span>
       <span class="row spread poll-nums"><span class="big sm">${p.answered}<small>/${p.total}</small></span>
       <span class="muted small poll-meta">${p.money ? `<span class="money-line">${rub(p.money.collected)} из ${rub(p.money.expected)}</span>` : ""}<span>${status}</span></span></span>
-      <span class="bar" role="img" aria-label="Ответили ${pct}%"><i style="width:${pct}%"></i></span>
+      <span class="bar" role="img" aria-label="Ответили ${p.answered} из ${p.total}"><i style="width:${pct}%"></i></span>
     </button>`;
   };
 
   // одна кнопка главного действия раздела: на телефоне — плавающая внизу, на широком экране — в шапке раздела
+  // «Метрики пилота» из анкеты проекта: считаются по данным самого бота, цель отмечена на полосе
+  function pilotCard(pl) {
+    if (!pl || typeof pl !== "object") return "";
+    const num = (v) => (typeof v === "number" && isFinite(v) ? Math.max(0, Math.min(100, Math.round(v))) : null);
+    const row = (label, pct, goal, note) => {
+      if (pct === null) return "";
+      const g = num(goal);
+      const reached = g !== null && pct >= g;
+      return `<div class="pilot-row">
+        <div class="row spread"><span>${label}</span><b class="${reached ? "ok" : ""}">${pct}%</b></div>
+        <span class="bar pilot-bar" role="img" aria-label="${label}: ${pct}%${g !== null ? `, цель ${g}%` : ""}"><i style="width:${pct}%"></i>${g !== null ? `<s style="left:${g}%"></s>` : ""}</span>
+        <div class="muted small">${g !== null ? `Цель пилота не меньше ${g}%. ${reached ? "Цель достигнута." : "Пока ниже цели."}` : ""}${note ? ` ${note}` : ""}</div>
+      </div>`;
+    };
+    const asked = (pl.answered_by_bot || 0) + (pl.forwarded || 0);
+    const rows = row("Ответили до срока", num(pl.on_time_pct), pl.on_time_goal,
+      pl.polls_closed ? `По ${pl.polls_closed} ${plural(pl.polls_closed, "закрытому сбору", "закрытым сборам", "закрытым сборам")}.` : "")
+      + row("Вопросы, закрытые без вас", num(pl.self_pct), pl.self_goal,
+        asked ? `Бот ответил сам на ${pl.answered_by_bot || 0} из ${asked}.` : "");
+    if (!rows) return "";
+    return `<div class="card pilot"><div class="card-title">Метрики пилота</div>
+      <p class="muted small">Считаются по тому, что видит сам бот: ответам на сборы и вопросам родителей. Опросов и ручного подсчёта здесь нет.</p>${rows}</div>`;
+  }
+
   const pageHead = (title, action, tag = "h1") => `<div class="page-head ${tag}"><${tag}>${title}</${tag}>${action || ""}</div>`;
 
   // кнопка-сегмент («Согласие», «Пятница 18:00»): состояние озвучивается экранным чтецам через aria-pressed
@@ -301,14 +326,14 @@
           return `<li><span>${esc(o)}</span><b>${names.length}</b></li>`;
         }).join("");
         const answeredLine = p.answered
-          ? `<div class="ok small">${p.answered} ${plural(p.answered, "человек ответил", "человека ответили", "человек ответили")} из ${p.total}</div>`
+          ? `<div class="ok small">Ответили ${p.answered} из ${p.total}</div>`
           : `<div class="muted small">Пока никто не ответил${p.closed ? "" : " — бот напомнит сам за сутки и за 2 часа до срока"}</div>`;
         render(`
           <div class="card">
             <div class="card-head"><h1 class="card-title lg">${esc(p.title)}</h1>${deadlineChip(p)}</div>
             <div class="muted small">${esc(p.chat_title)}</div>
             <div class="big" style="margin-top:18px">${p.answered}<small>/${p.total}</small></div>
-            <div class="bar" role="img" aria-label="Ответили ${pct}%"><i style="width:${pct}%"></i></div>
+            <div class="bar" role="img" aria-label="Ответили ${p.answered} из ${p.total}"><i style="width:${pct}%"></i></div>
             ${answeredLine}
             ${p.missing.length ? `<h2>Не ответили · ${p.missing.length}</h2><div class="names">${p.missing.map((n) => `<span>${esc(n)}</span>`).join("")}</div>`
               : p.total ? '<h2 class="ok">Ответили все</h2>' : '<p class="muted small">В списке класса пока никого. Назначьте бота администратором чата класса — тогда он увидит родителей и разошлёт им сбор.</p>'}
@@ -334,7 +359,8 @@
           <div class="card"><div class="card-title">Текст сбора</div><div class="bubble" style="margin-top:8px">${esc(p.text)}</div></div>
           <div class="row actions-row">
             <button type="button" class="btn ghost" data-act="export" data-url="${esc(p.export_url)}" data-id="${p.id}"><svg class="i" aria-hidden="true"><use href="#i-download"/></svg>Скачать таблицу</button>
-            ${p.closed ? "" : `<button type="button" class="btn danger" data-act="closePoll" data-id="${p.id}">Закрыть сбор</button>`}
+            ${p.closed ? `<button type="button" class="btn danger" data-act="deletePoll" data-id="${p.id}"><svg class="i" aria-hidden="true"><use href="#i-trash"/></svg>Удалить сбор</button>`
+              : `<button type="button" class="btn danger" data-act="closePoll" data-id="${p.id}">Закрыть сбор</button>`}
           </div>`);
       } catch (e) { fail(e); }
     },
@@ -410,7 +436,7 @@
         S.openQ = openQ;
         const openCard = openQ.length ? `<div class="card faq open-q">
             <div class="card-title">Спрашивают, а ответа в справочнике нет</div>
-            <p class="muted small">Ответьте один раз — дальше бот будет отвечать на такие вопросы сам.</p>
+            <p class="muted small">Ответьте один раз, и дальше бот будет отвечать на такие вопросы сам.</p>
             <ul class="list">${openQ.map((q) => `<li><span>${esc(q.question)} <span class="chip" title="Сколько раз спросили">${q.count} ${plural(q.count, "раз", "раза", "раз")}</span></span><button type="button" class="btn sm" data-act="openAnswer" data-key="${esc(q.key)}">Ответить</button></li>`).join("")}</ul></div>` : "";
         render(`${pageHead("Справочник", '<button type="button" class="btn head-action" data-act="editFaq"><svg class="i" aria-hidden="true"><use href="#i-plus"/></svg>Добавить ответ</button>')}
           <p class="muted lead-in">Здесь ответы на частые вопросы родителей. Бот отвечает ими сам, в любое время, и подписывает, что ответ сохранили вы.</p>
@@ -456,6 +482,7 @@
           return v ? `<li><span>${esc(label)}: <b>${v.count}</b></span><span class="muted">≈ ${fmtMinutes(v.minutes)}</span></li>` : "";
         }).join("");
         const pending = inbox.filter((i) => !i.delivered);
+        const pilotHtml = pilotCard(st.pilot);
         render(`<h1>Польза и настройки</h1>
           <button type="button" class="btn ghost block link-card" data-act="goSchool"><svg class="i" aria-hidden="true"><use href="#i-school"/></svg><span>${S.me.school ? esc(S.me.school.name) : "Школа: общая база ответов и сводка"}</span><svg class="i chev" aria-hidden="true"><use href="#i-chev"/></svg></button>
           <div class="card">
@@ -464,6 +491,7 @@
             <div class="muted">за всё время — <b>${fmtMinutes(st.total.minutes)}</b></div>
             ${kinds ? `<ul class="list" style="margin-top:12px">${kinds}</ul>` : '<p class="muted small">Счётчик начнёт расти после первого сбора и первых ответов из справочника.</p>'}
           </div>
+          ${pilotHtml}
 
           <div class="card quiet">
             <div class="card-title tag-quiet">Тихий режим</div>
@@ -923,6 +951,14 @@
   ACTIONS.closePoll = (el) => modal(`<h2 class="modal-title">Закрыть сбор?</h2><p class="muted">Ответы больше не будут приниматься. ${say("Итог бот пришлёт вам в личку.", "В настоящем боте итог пришёл бы вам в личку.")}</p>
       <div class="btns"><button class="btn ghost" value="cancel" formnovalidate>Отмена</button><button class="btn danger" value="ok">Закрыть сбор</button></div>`,
     async () => { await api(`/api/polls/${el.dataset.id}/close`, { method: "POST" }); toast("Сбор закрыт"); VIEWS.pollDetail({ id: el.dataset.id }); });
+  ACTIONS.deletePoll = (el) => modal(`<h2 class="modal-title">Удалить сбор?</h2><p class="muted">Сбор пропадёт из списка вместе с ответами родителей, вернуть его не получится. Если итоги нужны для отчёта, сначала скачайте таблицу.</p>
+      <div class="btns"><button class="btn ghost" value="cancel" formnovalidate>Отмена</button><button class="btn danger" value="ok">Удалить</button></div>`,
+    async () => {
+      await api(`/api/polls/${el.dataset.id}`, { method: "DELETE" });
+      toast("Сбор удалён");
+      S.stack = [];
+      go("polls", {}, false);
+    });
   // таблица с итогами: в MAX — штатное скачивание мессенджера, в браузере — обычная ссылка на файл
   ACTIONS.export = (el) => {
     const url = location.origin + el.dataset.url;
