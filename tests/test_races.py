@@ -60,8 +60,10 @@ def test_double_tap_paid_keeps_mark(env):
     assert polls.money(run(loop, polls.get_poll(pid)))["paid"] == 1
 
 
-def test_close_twice_reports_once(env):
+def test_close_twice_reports_once(env, monkeypatch):
     loop, api, c = env
+    # итог уходит учителю сразу только в рабочее окно (по умолчанию 8–19); тест не должен зависеть от часов
+    monkeypatch.setattr("app.services.quiet.in_work_window", lambda user: True)
     added(loop)
     pid = make_poll(loop)
 
@@ -72,8 +74,10 @@ def test_close_twice_reports_once(env):
     assert len(reports) == 1
 
 
-def test_all_answered_reported_once(env):
+def test_all_answered_reported_once(env, monkeypatch):
     loop, api, c = env
+    # итог уходит учителю сразу только в рабочее окно (по умолчанию 8–19); тест не должен зависеть от часов
+    monkeypatch.setattr("app.services.quiet.in_work_window", lambda user: True)
     added(loop)
     pid = make_poll(loop)
     for i, p in enumerate(PARENTS):

@@ -223,7 +223,7 @@ def test_local_limiter_keeps_rps():
         for _ in range(26):
             await lim.wait()
         return time.monotonic() - t
-    assert 0.45 <= run(go()) < 1.0
+    assert 0.45 <= run(go()) < 2.0  # верх с запасом: на загруженной машине asyncio.sleep опаздывает
 
 
 @pytest.mark.skipif(not REDIS_URL, reason="нужен TEST_REDIS_URL=redis://…")

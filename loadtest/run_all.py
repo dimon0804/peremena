@@ -162,7 +162,7 @@ def log_errors(logdir: Path, tag: str) -> dict:
     for f in sorted(logdir.glob(f"bot*-{tag}.log")):
         text = f.read_text(encoding="utf-8", errors="replace")
         out[f.stem] = {"errors": text.count(" ERROR "), "tracebacks": text.count("Traceback"),
-                       "pool_timeouts": text.count("QueuePool limit"), "leader": text.count("лидер (")}
+                       "pool_timeouts": text.count("QueuePool limit"), "queue_errors": text.count("Очередь событий недоступна")}
     return out
 
 

@@ -151,10 +151,11 @@ def test_open_questions_key_belongs_to_teacher(env):
     assert not run(loop, faq_learning.clusters(TEACHER["user_id"]))
 
 
-def test_not_that_requires_access_and_is_limited(env):
+def test_not_that_requires_access_and_is_limited(env, monkeypatch):
     from app.services import faq
 
     loop, fake, c = env
+    monkeypatch.setattr("app.services.quiet.in_work_window", lambda user: True)  # не зависеть от часов
     teacher, teacher2 = _two_classes(loop)
     # участник чата 9Б (класс TEACHER) с «разметкой» в имени
     parent = run(loop, chats.upsert_user({"user_id": PARENTS[0]["user_id"], "first_name": "<b>Анна</b>"}))
