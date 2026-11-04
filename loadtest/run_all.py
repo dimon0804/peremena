@@ -297,7 +297,7 @@ async def scenario_b(a, stack: Stack, tag: str, rate: float) -> dict:
     rnd = random.Random(int(rate))
     # родители, ещё не отвечавшие на сбор (кнопку жмут один раз; повторы — это повторная доставка)
     fresh = [(i, j) for i in range(n_classes) for j in range(roster.PARENTS)]
-    rnd.shuffle(fresh)
+    random.Random(42).shuffle(fresh)  # один порядок на все прогоны: used_parents не пересекаются
     fresh = iter(fresh[a.used_parents:])
     events, uniq_cb, uniq_q = [], 0, 0
     for k in range(total):

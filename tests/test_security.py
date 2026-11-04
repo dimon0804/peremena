@@ -282,6 +282,21 @@ def test_webhook_non_ascii_secret_is_403_not_500(web):
         assert r.status_code == 403
 
 
+def test_webhook_fast_path_codes_and_headers(web):
+    """Вебхук идёт в обход стека middleware — коды и заголовки ответа те же, что у остального сервиса."""
+    import hashlib
+
+    with web(MAX_BOT_TOKEN="test-token") as client:
+        secret = {"X-Max-Bot-Api-Secret": hashlib.sha256(b"wh:test-token").hexdigest()[:40]}
+        ok = client.post("/webhook", json={"update_type": "bot_started", "user": {"user_id": 5}}, headers=secret)
+        assert ok.status_code == 200 and ok.json() == {"ok": True}
+        assert ok.headers["x-content-type-options"] == "nosniff" and "frame-ancestors" in ok.headers["content-security-policy"]
+        assert client.post("/webhook", content=b"{not json", headers=secret).status_code == 400
+        assert client.post("/webhook", content=b"x" * (1024 * 1024 + 1), headers=secret).status_code == 413
+        assert client.post("/webhook", json={}, headers={"X-Max-Bot-Api-Secret": "wrong"}).status_code == 403
+        assert client.get("/webhook").status_code in (404, 405)  # не POST — обычный путь FastAPI
+
+
 def test_dev_auth_ignored_on_public_deploy(web):
     with web(PUBLIC_URL="https://peremena.example") as client:
         assert client.get("/api/me?dev_user=100").status_code == 401

@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import json
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.exception_handlers import http_exception_handler
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
@@ -155,26 +156,6 @@ BODY_LIMIT = 1024 * 1024  # JSON-запросы и вебхук; загрузк�
 DEV_ONLY = ("/api/docs", "/openapi.json")
 
 
-@app.middleware("http")
-async def security_headers(request: Request, call_next):
-    path = request.url.path
-    try:
-        length = int(request.headers.get("content-length") or 0)
-    except ValueError:
-        length = 0
-    if length > BODY_LIMIT and path != "/api/materials/upload":
-        return JSONResponse({"detail": "Слишком большой запрос"}, status_code=413)
-    response = await call_next(request)
-    response.headers.setdefault("X-Content-Type-Options", "nosniff")
-    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
-    if path not in DEV_ONLY:  # Swagger грузит скрипты с CDN — ему CSP не ставим, он есть только в разработке
-        # Мини-приложение MAX открывает во фрейме/вебвью — ему frame-ancestors не ограничиваем;
-        # сайт (вход, главная) во фрейм чужого сайта не встраивается.
-        csp = CSP if path == "/app" or path.startswith("/app/") else CSP + "; frame-ancestors 'self'"
-        response.headers.setdefault("Content-Security-Policy", csp)
-    return response
-
-
 @app.get("/openapi.json", include_in_schema=False)
 async def openapi_schema():
     if not get_settings().dev_mode:
@@ -189,29 +170,75 @@ async def api_docs():
     return get_swagger_ui_html(openapi_url="/openapi.json", title="Перемена — API")
 
 
-@app.middleware("http")
-async def revalidate_static(request: Request, call_next):
-    """Страницы, скрипты и стили сайта и мини-приложения браузер должен сверять с сервером (по ETag),
-    иначе после обновления у пользователей остаётся старый код — особенно во встроенном браузере MAX."""
-    response = await call_next(request)
-    path = request.url.path
-    if not path.startswith("/api/") and (path.endswith((".html", ".js", ".css")) or path.endswith("/")
-                                         or path in ("/login", "/app")):
-        response.headers["Cache-Control"] = "no-cache"
-    return response
-
-
 def _is_api(path: str) -> bool:
     return path.startswith(("/api/", "/webhook", "/health"))
 
 
-@app.middleware("http")
-async def api_404_json(request: Request, call_next):
-    """Неизвестный адрес /api/... попадает в статику сайта и получил бы HTML-страницу 404 — API отвечает JSON."""
-    response = await call_next(request)
-    if response.status_code == 404 and _is_api(request.url.path)             and response.headers.get("content-type", "").startswith("text/html"):
-        return JSONResponse({"detail": "Не найдено"}, status_code=404)
-    return response
+def _revalidate(path: str) -> bool:
+    """Страницы, скрипты и стили сайта и мини-приложения браузер должен сверять с сервером (по ETag),
+    иначе после обновления у пользователей остаётся старый код — особенно во встроенном браузере MAX."""
+    return not path.startswith("/api/") and (path.endswith((".html", ".js", ".css")) or path.endswith("/")
+                                             or path in ("/login", "/app"))
+
+
+class HttpPolicy:
+    """Общие правила HTTP одним ASGI-слоем (раньше — три @app.middleware("http"); каждый такой слой — отдельная
+    задача и поток тела ответа, на сотнях запросов в секунду это заметная доля процессора):
+    * запрос больше BODY_LIMIT — 413 (загрузка файлов проверяет свой лимит сама);
+    * заголовки безопасности: nosniff, Referrer-Policy, CSP (мини-приложению MAX без frame-ancestors —
+      его открывают во фрейме/вебвью; Swagger в разработке грузит скрипты с CDN — ему CSP не ставим);
+    * Cache-Control: no-cache для страниц, скриптов и стилей;
+    * неизвестный /api/... попадает в статику сайта и получил бы HTML-страницу 404 — отвечаем JSON."""
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        path = scope["path"]
+        length = 0
+        for k, v in scope["headers"]:
+            if k == b"content-length":
+                try:
+                    length = int(v)
+                except ValueError:
+                    length = 0
+                break
+        if length > BODY_LIMIT and path != "/api/materials/upload":
+            return await JSONResponse({"detail": "Слишком большой запрос"}, status_code=413)(scope, receive, send)
+        extra = [(b"x-content-type-options", b"nosniff"), (b"referrer-policy", b"strict-origin-when-cross-origin")]
+        if path not in DEV_ONLY:
+            csp = CSP if path == "/app" or path.startswith("/app/") else CSP + "; frame-ancestors 'self'"
+            extra.append((b"content-security-policy", csp.encode()))
+        revalidate = _revalidate(path)
+        api = _is_api(path)
+        swallow = False
+
+        async def wrapped(message):
+            nonlocal swallow
+            if swallow:
+                return
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers") or [])
+                if api and message["status"] == 404 and any(
+                        k.lower() == b"content-type" and v.startswith(b"text/html") for k, v in headers):
+                    swallow = True
+                    body = json.dumps({"detail": "Не найдено"}, ensure_ascii=False).encode()
+                    await send({"type": "http.response.start", "status": 404, "headers": [
+                        (b"content-type", b"application/json"), (b"content-length", str(len(body)).encode()),
+                        *extra]})
+                    await send({"type": "http.response.body", "body": body})
+                    return
+                present = {k.lower() for k, _ in headers}
+                headers += [(k, v) for k, v in extra if k not in present]  # как setdefault
+                if revalidate:
+                    headers = [(k, v) for k, v in headers if k.lower() != b"cache-control"]
+                    headers.append((b"cache-control", b"no-cache"))
+                message = {**message, "headers": headers}
+            await send(message)
+
+        await self.app(scope, receive, wrapped)
 
 
 @app.exception_handler(StarletteHTTPException)
@@ -222,24 +249,70 @@ async def not_found_page(request: Request, exc: StarletteHTTPException):
     return await http_exception_handler(request, exc)
 
 
-@app.post("/webhook")
-async def webhook(request: Request, x_max_bot_api_secret: str | None = Header(default=None)):
+async def accept_webhook(secret: bytes | None, raw: bytes) -> tuple[int, dict]:
+    """Приём вебхука MAX: проверка секрета, разбор, в очередь (или в обработку). Возвращает (статус, тело)."""
     settings = get_settings()
     expected = settings.effective_webhook_secret
     if not expected:  # без токена бота вебхук не принимаем: секрет был бы выведен из пустой строки
-        raise HTTPException(503, "bot is not configured")
+        return 503, {"detail": "bot is not configured"}
     # сравниваем байты: строка с не-ASCII символами в compare_digest даёт TypeError (и 500)
-    if not x_max_bot_api_secret or not hmac.compare_digest(x_max_bot_api_secret.encode(), expected.encode()):
-        raise HTTPException(403, "bad secret")
+    if not secret or not hmac.compare_digest(secret, expected.encode()):
+        return 403, {"detail": "bad secret"}
     try:
-        update = await request.json()
+        update = json.loads(raw)
     except ValueError:
-        raise HTTPException(400, "bad json")
+        return 400, {"detail": "bad json"}
     if isinstance(update, dict) and update.get("update_type"):
         # с очередью — только XADD в Redis: 200 уходит сразу, а событие уже не потеряется при падении процесса
         if not await updates.enqueue(update):
             spawn(handle_update(update))
-    return {"ok": True}
+    return 200, {"ok": True}
+
+
+class WebhookFastPath:
+    """POST /webhook — в обход стека middleware FastAPI (каждый @app.middleware("http") — отдельная задача
+    и поток тела ответа). На пике это половина процессора приёма: так один процесс принимает в разы больше
+    вебхуков в секунду. Заголовки ответа — те же, что ставит security_headers."""
+
+    HEADERS = [(b"content-type", b"application/json"), (b"x-content-type-options", b"nosniff"),
+               (b"referrer-policy", b"strict-origin-when-cross-origin"),
+               (b"content-security-policy", (CSP + "; frame-ancestors 'self'").encode())]
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or scope["path"] != "/webhook" or scope["method"] != "POST":
+            return await self.app(scope, receive, send)
+        secret = None
+        length = 0
+        for k, v in scope["headers"]:
+            if k == b"x-max-bot-api-secret":
+                secret = v
+            elif k == b"content-length":
+                try:
+                    length = int(v)
+                except ValueError:
+                    length = 0
+        status, body = 413, {"detail": "Слишком большой запрос"}
+        if length <= BODY_LIMIT:
+            chunks, size, more = [], 0, True
+            while more:
+                msg = await receive()
+                if msg["type"] == "http.disconnect":
+                    return
+                chunk = msg.get("body", b"")
+                size += len(chunk)
+                if size > BODY_LIMIT:
+                    break
+                chunks.append(chunk)
+                more = msg.get("more_body", False)
+            if size <= BODY_LIMIT:
+                status, body = await accept_webhook(secret, b"".join(chunks))
+        raw = json.dumps(body, ensure_ascii=False).encode()
+        await send({"type": "http.response.start", "status": status,
+                    "headers": self.HEADERS + [(b"content-length", str(len(raw)).encode())]})
+        await send({"type": "http.response.body", "body": raw})
 
 
 async def _db_ok() -> bool:
@@ -305,3 +378,7 @@ async def cabinet():
 app.mount("/app", StaticFiles(directory=BASE_DIR / "webapp", html=True), name="webapp")
 # Сайт: главная страница, стили, картинки
 app.mount("/", StaticFiles(directory=SITE_DIR, html=True), name="site")
+
+app.add_middleware(HttpPolicy)
+# последним — значит, снаружи всех: вебхук не проходит общий стек
+app.add_middleware(WebhookFastPath)
