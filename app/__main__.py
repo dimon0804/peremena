@@ -180,7 +180,8 @@ def main(argv: list[str] | None = None) -> int:
 
         s = get_settings()
         uvicorn.run("app.main:app", host=getattr(args, "host", None) or s.host,
-                    port=getattr(args, "port", None) or s.port, proxy_headers=True, forwarded_allow_ips="*")
+                    port=getattr(args, "port", None) or s.port, proxy_headers=True,
+                    forwarded_allow_ips=s.forwarded_allow_ips)
         return 0
     if args.cmd == "check":
         return asyncio.run(_check())

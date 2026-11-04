@@ -22,5 +22,5 @@ def test_service_boots_without_token(tmp_path, monkeypatch):
         assert me["is_teacher"] is False and me["user"]["id"] == 7
         assert client.get("/api/me").status_code == 401
         assert client.get("/api/polls?dev_user=7").status_code == 403
-        assert client.post("/webhook", json={}).status_code == 403
+        assert client.post("/webhook", json={}).status_code == 503  # без токена вебхук выключен
     get_settings.cache_clear()

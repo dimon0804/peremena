@@ -6,6 +6,7 @@ import io
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from sqlalchemy import func, select
 
+from .. import ratelimit
 from ..core import ctx
 from ..db import session, utcnow
 from ..demo_ids import is_demo
@@ -26,12 +27,28 @@ def _qr_svg(data: str) -> str:
     return svg[svg.index("<svg"):]  # без XML-пролога — вставляется прямо в страницу
 
 
+def _need_header(request: Request) -> None:
+    """Защита от CSRF: чужой сайт не может добавить свой заголовок к запросу без CORS."""
+    if request.headers.get("x-peremena") != "1":
+        raise HTTPException(403, "Запрос без заголовка X-Peremena")
+
+
+AUTH_STARTS_PER_HOUR = 60
+
+
 @router.post("/auth/start")
-async def auth_start(request: Request):
+async def auth_start(request: Request, response: Response):
     c = ctx()
-    if not c.bot_username:
+    _need_header(request)
+    # без токена бот не получит подтверждение входа — код выдавать незачем
+    if not c.bot_username or not c.settings.max_bot_token:
         raise HTTPException(503, "Бот не подключён — вход через MAX временно недоступен")
-    code = await websession.start_login(request.headers.get("user-agent", ""))
+    if not await ratelimit.hit("authstart", _client_ip(request), AUTH_STARTS_PER_HOUR, 3600):
+        raise HTTPException(429, "Слишком много попыток входа — попробуйте позже")
+    nonce = websession.new_nonce(request.cookies.get(websession.LOGIN_COOKIE))
+    response.set_cookie(websession.LOGIN_COOKIE, nonce, max_age=websession.CODE_TTL, httponly=True, samesite="strict",
+                        secure=request.url.scheme == "https", path="/api/auth")
+    code = await websession.start_login(request.headers.get("user-agent", ""), nonce)
     pin = await websession.make_pin(code)
     link = c.start_link(f"login_{code}")
     return {"code": code, "pin": f"{pin[:3]} {pin[3:]}", "link": link, "qr_svg": _qr_svg(link),
@@ -40,7 +57,7 @@ async def auth_start(request: Request):
 
 @router.get("/auth/status")
 async def auth_status(request: Request, response: Response, code: str = Query(max_length=64)):
-    status, token = await websession.finish_login(code)
+    status, token = await websession.finish_login(code, request.cookies.get(websession.LOGIN_COOKIE))
     if token:
         secure = request.url.scheme == "https"
         response.set_cookie(websession.COOKIE, token, max_age=websession.SESSION_DAYS * 86400,
@@ -62,8 +79,9 @@ def _set_session(request: Request, response: Response, token: str, max_age: int)
 
 
 def _client_ip(request: Request) -> str:
-    fwd = request.headers.get("x-forwarded-for", "")
-    return fwd.split(",")[0].strip() or (request.client.host if request.client else "?")
+    # X-Forwarded-For сам не читаем: его подделает кто угодно. Uvicorn уже подставил адрес клиента
+    # из заголовка, если запрос пришёл от доверенного прокси (FORWARDED_ALLOW_IPS).
+    return request.client.host if request.client else "?"
 
 
 @router.post("/demo/start")
@@ -78,6 +96,10 @@ async def demo_start(request: Request, response: Response):
     used = int(await c.kv.get(key) or 0)
     if used >= c.settings.demo_per_ip_hour:
         raise HTTPException(429, "Слишком много демо-песочниц с одного адреса — попробуйте через час")
+    if await demo.live_count() >= c.settings.demo_max_sandboxes:
+        await demo.cleanup()  # сначала убираем просроченные
+        if await demo.live_count() >= c.settings.demo_max_sandboxes:
+            raise HTTPException(503, "Демо сейчас переполнено — попробуйте чуть позже")
     await c.kv.set(key, used + 1, 3600)
     await websession.logout(request.cookies.get(websession.COOKIE))
     sb = await demo.create_sandbox()
@@ -104,6 +126,7 @@ async def demo_role(request: Request, response: Response, role: str = Query(patt
 
 @router.post("/auth/logout")
 async def auth_logout(request: Request, response: Response):
+    _need_header(request)
     await websession.logout(request.cookies.get(websession.COOKIE))
     response.delete_cookie(websession.COOKIE, path="/")
     return {"ok": True}

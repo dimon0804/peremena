@@ -20,6 +20,9 @@ class KV:
     async def add_once(self, key: str, ttl: int = 3600) -> bool:
         """True, если ключа не было (и он создан)."""
         ...
+    async def pop(self, key: str) -> Any:
+        """Атомарно забирает значение и удаляет ключ: из параллельных вызовов значение получит только один."""
+        ...
     async def ping(self) -> bool: return True
     async def close(self) -> None: ...
 
@@ -55,6 +58,12 @@ class MemoryKV(KV):
         await self.set(key, 1, ttl)
         return True
 
+    async def pop(self, key: str) -> Any:
+        item = self._d.pop(key, None)  # без await между чтением и удалением — атомарно для asyncio
+        if not item or item[0] < time.time():
+            return None
+        return item[1]
+
 
 class RedisKV(KV):
     def __init__(self, url: str) -> None:
@@ -74,6 +83,10 @@ class RedisKV(KV):
 
     async def add_once(self, key: str, ttl: int = 3600) -> bool:
         return bool(await self._r.set("pm:" + key, "1", ex=ttl, nx=True))
+
+    async def pop(self, key: str) -> Any:
+        raw = await self._r.getdel("pm:" + key)  # Redis ≥ 6.2
+        return json.loads(raw) if raw is not None else None
 
     async def ping(self) -> bool:
         try:
@@ -142,6 +155,24 @@ class DbKV(KV):
             return True
         except IntegrityError:  # параллельная вставка того же ключа
             return False
+
+    async def pop(self, key: str) -> Any:
+        from sqlalchemy import delete as sa_delete
+
+        from .db import session, utcnow
+        from .models import KVEntry
+
+        async with session() as s:
+            row = await s.get(KVEntry, key)
+            if row is None:
+                return None
+            raw, alive = row.value, row.expires_at > utcnow()
+            # удаляем именно прочитанное значение: из параллельных удалений строку получит только одно
+            res = await s.execute(sa_delete(KVEntry).where(KVEntry.key == key, KVEntry.value == raw)
+                                  .execution_options(synchronize_session=False))
+            if res.rowcount != 1 or not alive:
+                return None
+            return json.loads(raw)
 
     async def cleanup(self) -> None:
         from sqlalchemy import delete as sa_delete

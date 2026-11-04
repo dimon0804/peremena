@@ -7,7 +7,8 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__, db
@@ -24,6 +25,21 @@ from .webapp.site_api import router as site_api_router
 log = logging.getLogger("peremena")
 
 
+def maintenance_scheduler(c: Ctx):
+    """Уборка без бота: просроченные демо-песочницы, сессии сайта и записи состояния в базе."""
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+    from .services import demo, websession
+
+    sched = AsyncIOScheduler(timezone="UTC")
+    opts = {"max_instances": 1, "coalesce": True, "misfire_grace_time": 120}
+    sched.add_job(demo.cleanup, "interval", hours=1, id="demo", **opts)
+    sched.add_job(websession.cleanup, "interval", hours=1, id="sessions", **opts)
+    if hasattr(c.kv, "cleanup"):
+        sched.add_job(c.kv.cleanup, "interval", hours=1, id="kv", **opts)
+    return sched
+
+
 async def startup() -> tuple[Ctx, list]:
     settings = get_settings()
     await db.init_db(settings.database_url)
@@ -32,8 +48,14 @@ async def startup() -> tuple[Ctx, list]:
     c = Ctx(settings=settings, api=api, kv=kv, bot_username=settings.bot_username)
     set_ctx(c)
     background: list = []
+    if settings.dev_auth and settings.is_public:
+        log.error("!!! DEV_AUTH=true при заданном PUBLIC_URL/WEBHOOK_URL — это вход под любым пользователем. "
+                  "Режим разработки ИГНОРИРУЕТСЯ; уберите DEV_AUTH из настроек прода.")
     if not settings.max_bot_token:
         log.warning("MAX_BOT_TOKEN не задан — работает только веб-часть (API и мини-приложение)")
+        sched = maintenance_scheduler(c)  # демо и сессии убираем и без бота
+        sched.start()
+        background.append(sched)
         return c, background
     try:
         me = await api.get_me()
@@ -67,6 +89,7 @@ async def lifespan(app: FastAPI):
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     c, background = await startup()
     app.state.ctx = c
+    app.state.background = background
     try:
         yield
     finally:
@@ -80,9 +103,53 @@ async def lifespan(app: FastAPI):
         await db.close_db()
 
 
-app = FastAPI(title="Перемена", version=__version__, lifespan=lifespan, docs_url="/api/docs", redoc_url=None)
+# Документация API открыта только в режиме разработки (DEV_AUTH без публичного адреса) — см. ниже
+app = FastAPI(title="Перемена", version=__version__, lifespan=lifespan, docs_url=None, redoc_url=None,
+              openapi_url=None)
 app.include_router(api_router)
 app.include_router(site_api_router)
+
+# Что разрешено грузить страницам сайта и мини-приложения: свои файлы и мост MAX (st.max.ru).
+# Инлайновые стили нужны интерфейсу (style="…" в разметке), инлайновых скриптов нет.
+CSP = ("default-src 'self'; script-src 'self' https://st.max.ru; style-src 'self' 'unsafe-inline'; "
+       "img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self'; "
+       "object-src 'none'; base-uri 'self'; form-action 'self'")
+BODY_LIMIT = 1024 * 1024  # JSON-запросы и вебхук; загрузка файлов проверяет свой лимит сама
+DEV_ONLY = ("/api/docs", "/openapi.json")
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    path = request.url.path
+    try:
+        length = int(request.headers.get("content-length") or 0)
+    except ValueError:
+        length = 0
+    if length > BODY_LIMIT and path != "/api/materials/upload":
+        return JSONResponse({"detail": "Слишком большой запрос"}, status_code=413)
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    if path not in DEV_ONLY:  # Swagger грузит скрипты с CDN — ему CSP не ставим, он есть только в разработке
+        # Мини-приложение MAX открывает во фрейме/вебвью — ему frame-ancestors не ограничиваем;
+        # сайт (вход, главная) во фрейм чужого сайта не встраивается.
+        csp = CSP if path == "/app" or path.startswith("/app/") else CSP + "; frame-ancestors 'self'"
+        response.headers.setdefault("Content-Security-Policy", csp)
+    return response
+
+
+@app.get("/openapi.json", include_in_schema=False)
+async def openapi_schema():
+    if not get_settings().dev_mode:
+        raise HTTPException(404, "Not Found")
+    return JSONResponse(app.openapi())
+
+
+@app.get("/api/docs", include_in_schema=False)
+async def api_docs():
+    if not get_settings().dev_mode:
+        raise HTTPException(404, "Not Found")
+    return get_swagger_ui_html(openapi_url="/openapi.json", title="Перемена — API")
 
 
 @app.middleware("http")
@@ -101,7 +168,10 @@ async def revalidate_static(request: Request, call_next):
 async def webhook(request: Request, x_max_bot_api_secret: str | None = Header(default=None)):
     settings = get_settings()
     expected = settings.effective_webhook_secret
-    if not x_max_bot_api_secret or not hmac.compare_digest(x_max_bot_api_secret, expected):
+    if not expected:  # без токена бота вебхук не принимаем: секрет был бы выведен из пустой строки
+        raise HTTPException(503, "bot is not configured")
+    # сравниваем байты: строка с не-ASCII символами в compare_digest даёт TypeError (и 500)
+    if not x_max_bot_api_secret or not hmac.compare_digest(x_max_bot_api_secret.encode(), expected.encode()):
         raise HTTPException(403, "bad secret")
     try:
         update = await request.json()
@@ -112,18 +182,40 @@ async def webhook(request: Request, x_max_bot_api_secret: str | None = Header(de
     return {"ok": True}
 
 
+async def _db_ok() -> bool:
+    from sqlalchemy import text
+
+    try:
+        async with db.session() as s:
+            await asyncio.wait_for(s.execute(text("SELECT 1")), timeout=3)
+        return True
+    except Exception:
+        log.exception("health: база недоступна")
+        return False
+
+
+async def _kv_ok(c: Ctx) -> bool:
+    try:
+        return bool(await asyncio.wait_for(c.kv.ping(), timeout=3))
+    except Exception:
+        return False
+
+
 @app.get("/health")
 async def health():
+    """200 — всё работает, 503 — что-то сломалось (на это смотрит HEALTHCHECK в Docker).
+    Подробности — только в режиме разработки: снаружи незачем знать версию и устройство сервиса."""
     c = app.state.ctx
-    return {
-        "status": "ok",
-        "version": __version__,
-        "mode": c.settings.mode,
-        "bot": c.bot_username,
-        "db": db.dialect(),
-        "kv": type(c.kv).__name__,
-        "bot_ready": c.started,
-    }
+    checks = {"db": await _db_ok(), "kv": await _kv_ok(c)}
+    polling = [b for b in getattr(app.state, "background", []) if isinstance(b, asyncio.Task)]
+    if polling:  # long polling упал — бот перестал получать сообщения
+        checks["polling"] = not any(t.done() for t in polling)
+    ok = all(checks.values())
+    body: dict = {"status": "ok" if ok else "degraded"}
+    if c.settings.dev_mode:
+        body |= {"checks": checks, "version": __version__, "mode": c.settings.mode, "bot": c.bot_username,
+                 "db": db.dialect(), "kv": type(c.kv).__name__, "bot_ready": c.started}
+    return JSONResponse(body, status_code=200 if ok else 503)
 
 
 SITE_DIR = BASE_DIR / "site"

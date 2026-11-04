@@ -4,14 +4,18 @@ from __future__ import annotations
 import csv
 import hashlib
 import hmac
+import html
 import io
+import time
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from starlette.datastructures import UploadFile
 
+from .. import ratelimit
 from ..core import ctx
 from ..db import session
 from ..max_api import MaxApiError
@@ -53,7 +57,7 @@ async def current_user(
             "last_name": u.get("last_name"), "username": u.get("username"),
         })
         return user
-    if c.settings.dev_auth and dev_user:
+    if c.settings.dev_mode and dev_user:
         user = await chats.get_user(dev_user)
         if user is None:
             user = await chats.upsert_user({"user_id": dev_user, "first_name": f"Dev {dev_user}"})
@@ -109,7 +113,7 @@ def poll_out(p, tz: str, with_targets: bool = False, chat_titles: dict | None = 
              "answered_at": t.answered_at.isoformat() + "Z" if t.answered_at else None, "reminders": t.reminders}
             for t in p.targets
         ]
-        out["export_url"] = f"/api/polls/{p.id}/export.csv?sig={_sign('poll', p.id, p.teacher_id)}"
+        out["export_url"] = export_url(p)
     return out
 
 
@@ -241,11 +245,28 @@ async def close(pid: int, user: User = Depends(teacher_user)):
     return poll_out(p, user.tz, with_targets=True, chat_titles=await _titles())
 
 
+EXPORT_TTL = 24 * 3600
+
+
+def export_url(p) -> str:
+    """Ссылка на выгрузку открывается без входа (в браузере телефона), поэтому подписана и живёт сутки."""
+    exp = int(time.time()) + EXPORT_TTL
+    return f"/api/polls/{p.id}/export.csv?exp={exp}&sig={_sign('poll', p.id, p.teacher_id, exp)}"
+
+
+def _csv_cell(value):
+    """Защита от CSV-инъекции: ячейку, которую Excel принял бы за формулу, начинаем с апострофа."""
+    if isinstance(value, str) and value and value[0] in "=+-@\t\r":
+        return "'" + value
+    return value
+
+
 @router.get("/polls/{pid}/export.csv")
-async def export_csv(pid: int, sig: str):
+async def export_csv(pid: int, sig: str = Query(max_length=64), exp: int = 0):
     p = await polls.get_poll(pid)
-    if p is None or not hmac.compare_digest(sig, _sign("poll", p.id, p.teacher_id)):
-        raise HTTPException(404, "Не найдено")
+    if p is None or exp < time.time() or \
+            not hmac.compare_digest(sig.encode(), _sign("poll", p.id, p.teacher_id, exp).encode()):
+        raise HTTPException(404, "Ссылка устарела — откройте сбор и выгрузите заново")
     teacher = await chats.get_user(p.teacher_id)
     tz = teacher.tz if teacher else None
     buf = io.StringIO()
@@ -255,7 +276,8 @@ async def export_csv(pid: int, sig: str):
     for t in p.targets:
         ans = p.options[t.answer] if t.answer is not None and t.answer < len(p.options) else "не ответил"
         when = f"{to_local(t.answered_at, tz):%d.%m.%Y %H:%M}" if t.answered_at else ""
-        w.writerow([t.name, ans, when, t.reminders] + ([p.amount if t.paid else 0] if p.amount else []))
+        w.writerow([_csv_cell(x) for x in [t.name, ans, when, t.reminders]
+                    + ([p.amount if t.paid else 0] if p.amount else [])])
     data = buf.getvalue().encode("utf-8")
     fname = f"sbor_{p.id}.csv"
     return StreamingResponse(io.BytesIO(data), media_type="text/csv; charset=utf-8",
@@ -272,6 +294,9 @@ async def my_polls(user: User = Depends(current_user)):
         tz = teacher.tz if teacher else user.tz
         d = poll_out(p, tz, chat_titles=titles)
         d.pop("missing", None)
+        if p.amount:  # родителю — только сумма и его собственный статус, без чужих имён
+            mine = next((t for t in p.targets if t.user_id == user.user_id), None)
+            d["money"] = {"amount": p.amount, "paid": bool(mine and mine.paid)}
         d["my_answer"] = await polls.user_answer(p, user.user_id)
         d["teacher"] = teacher.display_name if teacher else ""
         out.append(d)
@@ -344,12 +369,26 @@ async def ask_forward(body: ForwardIn, user: User = Depends(current_user)):
 
 @router.post("/faq/{fid}/not-that")
 async def not_that(fid: int, user: User = Depends(current_user)):
-    e = await faq.mark_miss(fid)
-    if e:
+    e = await faq.get_entry(fid)
+    if e is None:
+        raise HTTPException(404, "Карточка не найдена")
+    # отметить можно только карточку, которую справочник мог показать этому человеку
+    if e.teacher_id != user.user_id:
+        visible = await faq.candidates_for_chats([c.chat_id for c in await chats.member_chats(user.user_id)])
+        if e.id not in {x.id for x in visible}:
+            raise HTTPException(404, "Карточка не найдена")
+    # одна отметка на карточку в сутки и не больше 20 в час — иначе это рассылка учителю, а не отзыв
+    if not await ratelimit.hit("notthat", user.user_id, 20, 3600) \
+            or not await ctx().kv.add_once(f"notthat:{user.user_id}:{fid}", ttl=24 * 3600):
+        return {"ok": True}
+    await faq.mark_miss(fid)
+    if e.teacher_id != user.user_id:
         name = await chats.member_name(e.chat_id, user.user_id)
-        await quiet.notify_teacher(e.teacher_id, f"🙅 Ответ из справочника не подошёл: «{e.question[:150]}» ({name})",
+        q = e.question[:150]
+        await quiet.notify_teacher(e.teacher_id,
+                                   f"🙅 Ответ из справочника не подошёл: «{html.escape(q)}» ({html.escape(name)})",
                                    kind="not_that", from_user_id=user.user_id, from_name=name,
-                                   raw_text=f"Не подошло: «{e.question[:150]}»")
+                                   raw_text=f"Не подошло: «{q}»")
     return {"ok": True}
 
 
@@ -475,22 +514,45 @@ async def send_material(mid: int, body: SendIn, user: User = Depends(current_use
 
 
 UPLOAD_KIND = {"image": ("image/",), "video": ("video/",), "audio": ("audio/",)}
+UPLOAD_MAX = 100 * 1024 * 1024
+UPLOAD_BODY_MAX = UPLOAD_MAX + 1024 * 1024  # запас на заголовки частей multipart
+TOO_BIG = "Файл больше 100 МБ — отправьте его боту в личку"
+
+
+async def _read_limited(file: UploadFile, limit: int) -> bytes:
+    """Читает файл частями и останавливается, как только он превысил лимит."""
+    buf = bytearray()
+    while chunk := await file.read(1024 * 1024):
+        buf += chunk
+        if len(buf) > limit:
+            raise HTTPException(413, TOO_BIG)
+    return bytes(buf)
 
 
 @router.post("/materials/upload")
-async def upload_material(
-    file: UploadFile = File(...),
-    title: str = Form(""),
-    tags: str = Form(""),
-    user: User = Depends(staff_user),
-):
+async def upload_material(request: Request, user: User = Depends(staff_user)):
+    # Тело разбираем вручную и только после проверки входа: параметры File/Form заставили бы FastAPI
+    # прочитать всю форму ещё до авторизации.
     if is_demo(user.user_id):
         raise HTTPException(403, "В демо-режиме файлы не загружаются — посмотрите полку на готовых примерах")
-    content = await file.read()
+    try:
+        length = int(request.headers.get("content-length", ""))
+    except ValueError:
+        raise HTTPException(411, "Нужен заголовок Content-Length")
+    if length > UPLOAD_BODY_MAX:
+        raise HTTPException(413, TOO_BIG)
+    try:
+        form = await request.form(max_files=1, max_fields=10)
+    except Exception:  # битый multipart, лишние файлы или поля
+        raise HTTPException(400, "Не удалось разобрать форму")
+    file = form.get("file")
+    if not isinstance(file, UploadFile):
+        raise HTTPException(400, "Нет файла")
+    title = form.get("title") if isinstance(form.get("title"), str) else ""
+    tags = form.get("tags") if isinstance(form.get("tags"), str) else ""
+    content = await _read_limited(file, UPLOAD_MAX)
     if not content:
         raise HTTPException(400, "Пустой файл")
-    if len(content) > 100 * 1024 * 1024:
-        raise HTTPException(413, "Файл больше 100 МБ — отправьте его боту в личку")
     ctype = file.content_type or ""
     kind = next((k for k, prefixes in UPLOAD_KIND.items() if ctype.startswith(prefixes)), "file")
     try:
@@ -700,6 +762,8 @@ async def create_school(body: SchoolIn, user: User = Depends(current_user)):
 @router.post("/school/join")
 async def join_school(body: JoinIn, user: User = Depends(current_user)):
     sch, role = await school.join_by_code(user.user_id, body.code)
+    if role == "limit":
+        raise HTTPException(429, "Слишком много попыток — попробуйте через час")
     if not sch:
         raise HTTPException(404, "Код не найден")
     return {"id": sch.id, "name": sch.name, "role": role}
@@ -879,12 +943,12 @@ class OpenAnswerIn(BaseModel):
 
 @router.post("/faq/open")
 async def faq_open_answer(body: OpenAnswerIn, user: User = Depends(teacher_user)):
-    item = await ctx().kv.get(f"oqc:{body.key}")
+    item = await faq_learning.get_cluster(user.user_id, body.key)
     if not item:
         raise HTTPException(404, "Список устарел — обновите страницу")
     sid = await _school_for_share(user, body.shared)
     e = await faq.add_entry(user.user_id, body.question or item["q"], body.answer, None, None, sid)
-    await faq_learning.resolve(item["ids"])
+    await faq_learning.resolve(item["ids"], user.user_id)
     return faq_out(e, user.user_id) | {"resolved": len(item["ids"])}
 
 

@@ -11,6 +11,9 @@ import json
 import time
 from urllib.parse import parse_qsl, unquote
 
+# Часы телефона могут спешить — небольшой запас для auth_date «из будущего»
+CLOCK_SKEW_S = 5 * 60
+
 
 class InitDataError(Exception):
     pass
@@ -26,7 +29,16 @@ def _check(pairs: list[tuple[str, str]], token: str) -> bool:
     data_check = "\n".join(f"{k}={v}" for k, v in sorted((k, v) for k, v in pairs if k != "hash"))
     secret = hmac.new(b"WebAppData", token.encode(), hashlib.sha256).digest()
     calc = hmac.new(secret, data_check.encode(), hashlib.sha256).hexdigest()
-    return hmac.compare_digest(calc, hashes[0].lower())
+    # сравниваем байты: строка с не-ASCII символами в compare_digest даёт TypeError (и 500)
+    return hmac.compare_digest(calc.encode(), hashes[0].lower().encode("utf-8", "replace"))
+
+
+def _no_duplicates(pairs: list[tuple[str, object]]) -> dict:
+    """object_pairs_hook для json.loads: два одинаковых ключа (например, второй «id») — подделка."""
+    keys = [k for k, _ in pairs]
+    if len(keys) != len(set(keys)):
+        raise InitDataError("повторяющиеся поля в данных запуска")
+    return dict(pairs)
 
 
 def validate_init_data(init_data: str, token: str, max_age_s: int = 24 * 3600) -> dict:
@@ -41,30 +53,46 @@ def validate_init_data(init_data: str, token: str, max_age_s: int = 24 * 3600) -
         frag = dict(parse_qsl(raw, keep_blank_values=True))
         raw = frag.get("WebAppData", "")
 
-    decoded = parse_qsl(raw, keep_blank_values=True)
-    ok = _check(decoded, token)
-    if not ok:
-        # вариант, когда платформа уже декодировала значения один раз, а мы — второй
-        raw_pairs = [tuple(p.split("=", 1)) if "=" in p else (p, "") for p in raw.split("&") if p]
-        ok = _check([(k, v) for k, v in raw_pairs], token) or _check([(k, unquote(v)) for k, v in raw_pairs], token)
-    if not ok:
+    # Данные берём ровно из того представления пар, на котором сошлась подпись. Иначе подписанное
+    # значение (например, имя с «%22,%22id%22:…») после повторного декодирования превращается в другие поля.
+    raw_pairs = [tuple(p.split("=", 1)) if "=" in p else (p, "") for p in raw.split("&") if p]
+    variants = (
+        lambda: parse_qsl(raw, keep_blank_values=True),
+        # платформа уже декодировала значения один раз — берём их как есть
+        lambda: [(k, v) for k, v in raw_pairs],
+        lambda: [(k, unquote(v)) for k, v in raw_pairs],
+    )
+    pairs = None
+    for make in variants:
+        candidate = make()
+        if _check(candidate, token):
+            pairs = candidate
+            break
+    if pairs is None:
         raise InitDataError("подпись не сошлась")
 
-    data = dict(decoded)
+    data: dict = dict(pairs)
     try:
-        auth_date = int(data.get("auth_date", "0"))
+        auth_date = int(data.get("auth_date", ""))
     except ValueError:
-        auth_date = 0
+        raise InitDataError("нет даты запуска")
     if auth_date > 10 ** 11:  # на случай миллисекунд
         auth_date //= 1000
-    if max_age_s and auth_date and time.time() - auth_date > max_age_s:
+    now = time.time()
+    if auth_date <= 0 or auth_date > now + CLOCK_SKEW_S:
+        raise InitDataError("неверная дата запуска")
+    if max_age_s and now - auth_date > max_age_s:
         raise InitDataError("данные запуска устарели — откройте приложение заново")
     for key in ("user", "chat"):
         if key in data:
             try:
-                data[key] = json.loads(data[key])
+                data[key] = json.loads(data[key], object_pairs_hook=_no_duplicates)
             except ValueError:
-                pass
-    if not isinstance(data.get("user"), dict) or not data["user"].get("id"):
+                if key == "user":
+                    raise InitDataError("нет пользователя")
+    user = data.get("user")
+    uid = user.get("id") if isinstance(user, dict) else None
+    if isinstance(uid, bool) or not (isinstance(uid, int) or (isinstance(uid, str) and uid.isdecimal())) \
+            or int(uid) <= 0:
         raise InitDataError("нет пользователя")
     return data

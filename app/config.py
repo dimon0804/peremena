@@ -4,12 +4,14 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+import secrets
 from functools import lru_cache
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+_PROCESS_KEY = secrets.token_bytes(32)  # ключ подписей, если нет ни SECRET_KEY, ни токена
 
 
 class Settings(BaseSettings):
@@ -46,12 +48,17 @@ class Settings(BaseSettings):
     # Демо-режим «попробовать без регистрации»: песочница с вымышленным классом, ничего не уходит в MAX
     demo_enabled: bool = True
     demo_per_ip_hour: int = 10
+    demo_max_sandboxes: int = 1000  # живых песочниц одновременно (каждая — около 150 строк в базе)
 
     # --- Прочее ---
     default_tz: str = "Europe/Moscow"
     host: str = "0.0.0.0"
     port: int = 8080
+    # Чьим заголовкам X-Forwarded-For/-Proto верить (адреса и сети через запятую): локальный прокси
+    # и внутренние сети Docker, где живёт Caddy. «*» — верить всем, тогда любой подделает свой IP.
+    forwarded_allow_ips: str = "127.0.0.1,::1,172.16.0.0/12"
     log_level: str = "INFO"
+    # Ключ подписей сервиса. Пусто — выводится из MAX_BOT_TOKEN (а без токена — случайный при каждом запуске)
     secret_key: str = ""
 
     @property
@@ -67,12 +74,32 @@ class Settings(BaseSettings):
         return bool(self.public_url or self.webhook_url)
 
     @property
+    def is_public(self) -> bool:
+        """Сервис смотрит в интернет (задан публичный адрес или вебхук)."""
+        return bool(self.public_url or self.webhook_url)
+
+    @property
+    def dev_mode(self) -> bool:
+        """DEV_AUTH действует только без публичного адреса: в проде вход по ?dev_user=<id> — это вход под любым."""
+        return self.dev_auth and not self.is_public
+
+    @property
     def signing_key(self) -> bytes:
-        raw = self.secret_key or ("peremena:" + self.max_bot_token)
+        """Ключ подписей (ссылки на выгрузку): SECRET_KEY, иначе выводится из токена. Без токена и SECRET_KEY —
+        случайный на время работы процесса: из пустой строки вывели бы ключ, известный всем."""
+        if self.secret_key:
+            raw = self.secret_key
+        elif self.max_bot_token:
+            raw = "peremena:" + self.max_bot_token
+        else:
+            return _PROCESS_KEY
         return hashlib.sha256(raw.encode()).digest()
 
     @property
     def effective_webhook_secret(self) -> str:
+        """Секрет вебхука. Пустая строка — вебхук выключен (нет токена: секрет из пустого токена публичен)."""
+        if not self.max_bot_token:
+            return ""
         if self.webhook_secret and re.fullmatch(r"[\w-]{5,256}", self.webhook_secret, re.ASCII):
             return self.webhook_secret
         if self.webhook_secret:
