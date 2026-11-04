@@ -20,7 +20,7 @@ from sqlalchemy import select
 from .. import __version__, ratelimit
 from ..db import session
 from ..models import IntegrationToken, Member, Poll
-from ..services import attendance, board, chats, polls
+from ..services import attendance, board, chats, library, polls
 from ..timeutil import local_now, preset_deadline, to_utc, utcnow, zone
 from . import tokens, webhooks
 
@@ -156,6 +156,32 @@ async def get_board(days: int = Query(14, ge=1, le=60), kind: str | None = Query
     return [{"id": a.id, "class": _class(key, a.chat_id), "kind": a.kind, "subject": a.subject or None,
              "text": a.text, "for_date": a.for_date, "created_at": a.created_at.isoformat() + "Z"}
             for a in items if board.is_visible(a) and (kind is None or a.kind == kind)]
+
+
+def _lib(it) -> dict:
+    d = library.out(it)
+    return {k: d[k] for k in ("id", "kind", "title", "text", "template", "options", "keywords", "topic", "topic_label",
+                              "grades", "official", "uses", "created_at")}
+
+
+@router.get("/library", summary="Открытая библиотека шаблонов сборов и ответов справочника")
+async def get_library(q: str = Query("", max_length=200), kind: str | None = Query(None, pattern="^(poll|faq)$"),
+                      topic: str | None = Query(None, description="trips | health | money | meetings | food | clubs | "
+                                                                       "school | safety"),
+                      grades: str | None = Query(None, pattern="^(1-4|5-9|10-11)$"),
+                      sort: str = Query("popular", pattern="^(popular|new)$"),
+                      limit: int = Query(30, ge=1, le=100), key: Key = Depends(api_key)):
+    items = await library.search_items(key.owner_id, q=q, kind=kind, topic=topic, grades=grades, sort=sort,
+                                       limit=limit)
+    return [_lib(it) for it in items]
+
+
+@router.get("/library/{item_id}", summary="Шаблон из библиотеки")
+async def get_library_item(item_id: int, key: Key = Depends(api_key)):
+    it = await library.get(item_id)
+    if not library.visible_to(it, key.owner_id):
+        raise HTTPException(404, "Шаблон не найден")
+    return _lib(it)
 
 
 # ------------------------------------------------------------------ запись

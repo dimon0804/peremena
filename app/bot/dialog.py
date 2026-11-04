@@ -86,6 +86,16 @@ async def run_command(uid: int, cmd: str, rest: str) -> None:
     if cmd == "shelf":
         await (shelf_search(uid, rest) if rest else ask_shelf(uid))
         return
+    if cmd == "library":
+        from . import platform
+
+        await platform.show_library(uid, rest)
+        return
+    if cmd == "region":
+        from . import platform
+
+        await platform.show_region(uid)
+        return
     if cmd in ("week", "calendar"):
         from . import integrations
 
@@ -106,6 +116,11 @@ async def menu_for(uid: int) -> list[list[dict]]:
         return subject_menu()
     if r.is_admin:
         return admin_menu()
+    from ..services import region
+    from . import platform
+
+    if (await region.membership(uid))[0]:
+        return platform.region_menu()
     return parent_menu()
 
 
@@ -121,10 +136,20 @@ async def show_start(uid: int) -> None:
         await send(uid, SUBJECT_HELP, subject_menu())
     elif r.is_admin:
         await send(uid, ADMIN_HELP, admin_menu())
+    elif await _is_methodist(uid):
+        from . import platform
+
+        await send(uid, platform.REGION_HELP, platform.region_menu())
     elif await chats.member_chats(uid):
         await send(uid, PARENT_HELP, parent_menu())
     else:
         await send(uid, ONBOARD_HELP, parent_menu())
+
+
+async def _is_methodist(uid: int) -> bool:
+    from ..services import region
+
+    return (await region.membership(uid))[0] is not None
 
 
 async def ask_forget(uid: int) -> None:
@@ -180,6 +205,10 @@ async def handle_state(uid: int, state: dict, text: str, msg: dict) -> bool:
         return await staff.subj_name_step(uid, data, text) if text else False
     if flow == "school_name":
         return await staff.school_name_step(uid, text) if text else False
+    if flow.startswith(("rg_", "lb_")):
+        from . import platform
+
+        return await platform.on_state(uid, flow, step, data, text)
     if flow == "shelf_search":
         await clear_state(uid)
         if text:
@@ -249,6 +278,7 @@ async def start_poll(uid: int) -> None:
 
 async def ask_template(uid: int) -> None:
     rows = [[kb.cb(t["label"], f"f:tpl:{key}")] for key, t in polls.TEMPLATES.items()]
+    rows.append([kb.cb("📚 Взять из библиотеки", "lb:list")])
     rows.append([kb.cb("Отмена", "f:cancel")])
     await send(uid, "Что собираем?", rows)
 

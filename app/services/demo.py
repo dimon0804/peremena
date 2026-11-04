@@ -18,8 +18,8 @@ from ..db import session, utcnow
 from ..demo_ids import DEMO_BASE, DEMO_SPAN, SANDBOX_SIZE, SLOTS, is_demo, sandbox_base, sandbox_id_of
 from ..models import (
     Absence, Announcement, Campaign, ClassChat, DemoSandbox, FaqEntry, InboxItem, IntegrationToken, Material,
-    Member, Metric, OpenQuestion, Poll, PollTarget, School, SchoolMember, SubjectTeacher, User, Webhook,
-    WebhookDelivery, WebSession,
+    LibraryItem, LibraryReport, Member, Metric, OpenQuestion, Poll, PollTarget, Region, RegionCampaign, RegionMember,
+    School, SchoolMember, SubjectTeacher, User, Webhook, WebhookDelivery, WebSession,
 )
 from ..timeutil import local_now, to_utc
 from . import search
@@ -276,6 +276,7 @@ async def delete_sandbox(sid: int, keep_row: bool = False) -> None:
         chats = lambda col: col.between(c_lo, c_hi)  # noqa: E731
         poll_ids = select(Poll.id).where(chats(Poll.chat_id))
         school_ids = select(School.id).where(users(School.created_by))
+        region_ids = select(Region.id).where(users(Region.created_by))
         await s.execute(delete(PollTarget).where(or_(PollTarget.poll_id.in_(poll_ids), users(PollTarget.user_id))))
         for model, cond in (
             (Poll, chats(Poll.chat_id)), (Absence, chats(Absence.chat_id)), (Announcement, chats(Announcement.chat_id)),
@@ -287,6 +288,9 @@ async def delete_sandbox(sid: int, keep_row: bool = False) -> None:
             (Webhook, users(Webhook.owner_id)), (IntegrationToken, users(IntegrationToken.owner_id)),
             (Campaign, Campaign.school_id.in_(school_ids)), (SchoolMember, SchoolMember.school_id.in_(school_ids)),
             (School, users(School.created_by)), (WebSession, users(WebSession.user_id)), (User, users(User.user_id)),
+            (RegionCampaign, RegionCampaign.region_id.in_(region_ids)), (RegionMember, users(RegionMember.user_id)),
+            (Region, users(Region.created_by)), (LibraryReport, users(LibraryReport.user_id)),
+            (LibraryItem, users(LibraryItem.author_id)),
             (DemoSandbox, DemoSandbox.id == sid),
         ):
             if model is DemoSandbox and keep_row:

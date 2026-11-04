@@ -89,6 +89,17 @@ class Settings(BaseSettings):
     access_log: bool = True
     # Ключ подписей сервиса. Пусто — выводится из MAX_BOT_TOKEN (а без токена — случайный при каждом запуске)
     secret_key: str = ""
+    # Администраторы платформы (id пользователей MAX через запятую): создают регионы, назначают методистов,
+    # разбирают жалобы на шаблоны в библиотеке. Пусто — таких прав нет ни у кого.
+    admin_max_ids: str = ""
+
+    @property
+    def platform_admins(self) -> set[int]:
+        out = set()
+        for part in re.split(r"[,\s;]+", self.admin_max_ids or ""):
+            if part.strip().lstrip("-").isdigit():
+                out.add(int(part))
+        return out
 
     @property
     def mode(self) -> str:

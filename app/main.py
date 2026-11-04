@@ -27,6 +27,7 @@ from .leader import Leader, make_backend
 from .updates import JOB_OPTS, Background, drain, leader_only, make_scheduler, spawn
 from .webapp.api import router as api_router
 from .webapp.site_api import router as site_api_router
+from .webapp.platform_api import router as platform_api_router
 from .integrations.api_v1 import router as api_v1_router
 from .integrations.routes import router as integrations_router
 
@@ -149,6 +150,7 @@ app = FastAPI(title="Перемена", version=__version__, lifespan=lifespan, 
               openapi_url=None)
 app.include_router(api_router)
 app.include_router(site_api_router)
+app.include_router(platform_api_router)  # регион (сбор сверху) и библиотека шаблонов
 app.include_router(integrations_router)  # календарь, ключи, вебхуки, печать
 app.include_router(api_v1_router)        # открытый API для школьных систем
 
