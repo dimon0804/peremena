@@ -486,7 +486,7 @@ async def faq_add_step(uid: int, step: str, data: dict, text: str) -> bool:
         if data.get("oq"):  # отвечали на частый вопрос без ответа — снимаем всю группу
             await faq_learning.resolve(data["oq"])
             closed = len(data["oq"])
-        note = f"\n\nСнял {closed} вопрос(ов) родителей из списка «без ответа»." if closed else ""
+        note = f"\n\nСнял из списка «без ответа» вопросов родителей: {closed}." if closed else ""
         await send(uid, f"✅ Сохранил.\n\n<b>{html.escape(e.question)}</b>\n→ {html.escape(e.answer)}\n\n"
                         f"<i>Ключевые слова: {html.escape(e.keywords or '—')}</i>{note}",
                    [[kb.cb("➕ Ещё", "fq:add"), kb.cb("📖 Весь справочник", "m:faq")]])
