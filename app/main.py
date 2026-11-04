@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import logging
+import mimetypes
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Header, HTTPException, Request
@@ -247,6 +248,8 @@ async def health():
 
 
 SITE_DIR = BASE_DIR / "site"
+# шрифты сайта лежат рядом (site/fonts); в Windows и slim-образах .woff2 может не быть в таблице типов
+mimetypes.add_type("font/woff2", ".woff2")
 
 
 @app.get("/login", include_in_schema=False)

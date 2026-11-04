@@ -32,6 +32,12 @@ def test_site_pages_and_login_flow(tmp_path, monkeypatch):
         assert client.get("/login").status_code == 200
         assert client.get("/site.css").status_code == 200
         assert client.get("/app/").status_code == 200  # кабинет и мини-приложение по-прежнему на месте
+        # шрифты свои, с сервера (CSP: font-src 'self'), и с правильным типом
+        font = client.get("/fonts/OpenSans-Regular.woff2")
+        assert font.status_code == 200 and font.headers["content-type"] == "font/woff2"
+        # CSP запрещает встроенные скрипты — на страницах только <script src=…>
+        for page in (home.text, client.get("/login").text, client.get("/nope").text):
+            assert "<script>" not in page
         # на главной нет выдуманных цифр опроса — только расчётная модель
         assert "Опрос 25" not in home.text and "расчётная модель" in home.text.lower()
         # человеку на несуществующем адресе — страница в стиле сайта, программе — JSON
