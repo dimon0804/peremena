@@ -156,8 +156,10 @@ button.card > span { display: block; }
 button.card > .card-head, button.card > .row { display: flex; }
 .card-title { display: block; font-weight: 700; font-size: 17px; line-height: 1.3; margin: 0 0 2px; overflow-wrap: anywhere; }
 .card-title.lg { font-size: 20px; margin: 0; }
-.card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
-.card-head > :first-child { min-width: 0; }
+.card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+/* заголовок не рвёт слова, чтобы ужаться рядом с длинным бейджем: не влезает самое длинное слово — бейдж уходит строкой ниже.
+   min-width по содержимому ограничен шириной карточки, так что длинная ссылка всё равно переносится внутри строки */
+.card-head > :first-child { flex: 1 1 0; min-width: auto; max-width: 100%; overflow-wrap: break-word; }
 .card-head > .chip, .card-head > .nums { flex: none; margin-top: 1px; }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .row.spread { justify-content: space-between; }
@@ -189,6 +191,9 @@ p.warn { color: var(--warn-ink); }
 .chip.accent { background: var(--accent-soft); color: var(--accent); }
 .chip.done { background: var(--ok-soft); color: var(--ok-ink); }
 .chip.warn { background: var(--warn-soft); color: var(--warn-ink); }
+/* бейдж с именем человека (время встречи · кто записался) — переносится, а не вылезает за карточку */
+.chip.wrap { white-space: normal; overflow-wrap: anywhere; max-width: 100%; }
+.nowrap { white-space: nowrap; }
 
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 8px; text-align: center;
@@ -244,7 +249,7 @@ p.warn { color: var(--warn-ink); }
 /* поля формы */
 .field { display: block; margin: 0 0 16px; padding: 0; border: 0; min-width: 0; }
 label.field > span, .field > legend { display: block; font-size: 14px; color: var(--muted); margin-bottom: 6px; font-weight: 600; padding: 0; }
-input[type=text], input[type=search], input[type=number], input[type=datetime-local], input[type=date], input[type=time], select, textarea {
+input[type=text], input[type=password], input[type=search], input[type=number], input[type=datetime-local], input[type=date], input[type=time], select, textarea {
   width: 100%; min-height: 48px; padding: 10px 12px; border-radius: 4px; font-size: 16px;
   border: 1.5px solid var(--line-strong); background: var(--surface); outline: none;
   transition: border-color .15s ease, box-shadow .15s ease;
@@ -279,6 +284,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 .list { list-style: none; padding: 0; margin: 0; }
 .list li { padding: 10px 0; border-top: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 10px; }
 .list li > :last-child { text-align: right; }
+.list li > .btn { flex: none; }
 .list li > :only-child { text-align: left; }
 .list li > .name:first-child { min-width: 7em; overflow-wrap: break-word; }
 .list li:first-child { border-top: 0; }

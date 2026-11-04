@@ -234,6 +234,9 @@
       } catch (err) { toast(err.message, true); }
     };
     if (!$modal.open) $modal.showModal();
+    // без полей ввода фокус браузер ставит на кнопку внизу и прокручивает к ней длинное окно — начинаем с заголовка
+    const title = $modalBody.querySelector(".modal-title");
+    if (title && !$modalBody.querySelector("input, select, textarea")) { title.tabIndex = -1; title.focus(); $modal.scrollTop = 0; }
   }
 
   // ================================================================== УЧИТЕЛЬ
@@ -1439,7 +1442,7 @@
         const d = await api("/api/journals");
         S.jr = { data: d, preview: null, chat: S.jr?.chat || d.classes[0]?.chat_id };
         const classOpts = d.classes.map((c) => `<option value="${c.chat_id}"${c.chat_id === S.jr.chat ? " selected" : ""}>${esc(c.title || c.chat_id)}</option>`).join("");
-        const rows = d.classes.map((c) => `<li><span><b>${esc(c.title)}</b><br><span class="muted small">${c.roster ? `в чате ${c.in_chat} из ${c.roster} учеников` : "списка класса нет"} · ${c.has_schedule ? "расписание есть" : "расписания нет"}</span></span>
+        const rows = d.classes.map((c) => `<li><span><b>${esc(c.title)}</b><br><span class="muted small">${c.roster ? `в чате ${c.in_chat} из ${c.roster} ${plural(c.roster, "ученика", "учеников", "учеников")}` : "списка класса нет"} · ${c.has_schedule ? "расписание есть" : "расписания нет"}</span></span>
           ${c.roster ? `<button type="button" class="btn sm ghost" data-act="jrRoster" data-id="${c.chat_id}">Кого нет</button>` : ""}</li>`).join("");
         const dn = d.dnevnik_enabled ? d.classes.map((c) => `<div class="class-row">
             <div class="card-head"><b class="name">${esc(c.title)}</b><span class="chip ${c.dnevnik ? "done" : ""}">${c.dnevnik ? "подключён" : "не подключён"}</span></div>
@@ -1586,8 +1589,9 @@
       const mine = m.slots.find((s) => s.mine);
       const free = m.slots.filter((s) => !s.busy && !s.past);
       return `<div class="card">
-        <div class="card-head"><span class="muted small">${esc(m.chat_title)}${m.teacher ? " · " + esc(m.teacher) : ""}</span><span class="chip">${esc(m.format_text)}</span></div>
+        <div class="card-head"><span class="muted small">${esc(m.chat_title)}${m.teacher ? " · " + esc(m.teacher) : ""}</span><span class="chip">${esc(m.format_text.split(", ")[0])}</span></div>
         <div class="card-title">Запись на встречу: ${esc(m.title)}</div>
+        ${m.place ? `<p class="muted small" style="margin:2px 0 8px">${esc(m.place)}</p>` : ""}
         ${mine ? `<p>Вы записаны: <b>${esc(mine.label)}</b>. ${say("За 2 часа бот напомнит в личке.", "")}</p>
           <div class="row tools"><button type="button" class="btn sm ghost" data-act="meetCancel" data-id="${m.id}">Отменить запись</button></div>
           ${free.length ? `<p class="muted small" style="margin-top:8px">Перенести на другое время:</p>` : ""}` : `<p class="muted small">Выберите удобное время — оно закрепится за вами.</p>`}
@@ -1609,7 +1613,7 @@
         const cards = list.map((m) => `<div class="card">
           <div class="card-head"><b class="name">${esc(m.title)}</b><span class="chip ${m.closed ? "done" : "accent"}">${m.closed ? "закрыта" : `записались ${m.busy} из ${m.total}`}</span></div>
           <div class="muted small">${esc(m.chat_title)} · ${esc(m.format_text)}</div>
-          ${slotGroups(m.slots, (s) => `<span class="chip ${s.busy ? "done" : ""}" title="${esc(s.label)}">${esc(slotTime(s))}${s.busy ? " · " + esc(s.name) : ""}</span>`)}
+          ${slotGroups(m.slots, (s) => `<span class="chip wrap ${s.busy ? "done" : ""}" title="${esc(s.label)}">${esc(slotTime(s))}${s.busy ? " · " + esc(s.name) : ""}</span>`)}
           ${m.closed ? "" : `<div class="row tools" style="margin-top:10px"><button type="button" class="btn sm ghost" data-act="meetClose" data-id="${m.id}">Закрыть запись</button></div>`}
         </div>`).join("");
         render(`<h1>Запись на встречу</h1>
@@ -1829,10 +1833,10 @@
           ${pageHead("Сборы управления", d.schools.length ? '<button type="button" class="btn head-action" data-act="newRegionCampaign"><svg class="i" aria-hidden="true"><use href="#i-plus"/></svg>Сбор на регион</button>' : "", "h2")}
           ${d.campaigns.length ? d.campaigns.map(rcCard).join("") : '<p class="muted">Сборов пока не было.</p>'}
           <h2>Школы · ${d.schools.length}</h2>
-          ${d.schools.length ? `<div class="card"><ul class="list">${d.schools.map((s) => `<li><span class="name">${esc(s.name)}</span><span class="muted small">${s.classes} ${plural(s.classes, "класс", "класса", "классов")}</span></li>`).join("")}</ul></div>`
+          ${d.schools.length ? `<div class="card"><ul class="list">${d.schools.map((s) => `<li><span class="name">${esc(s.name)}</span><span class="muted small nowrap">${s.classes} ${plural(s.classes, "класс", "класса", "классов")}</span></li>`).join("")}</ul></div>`
             : '<p class="muted">Пока ни одна школа не подключилась. Отправьте завучам код для школ.</p>'}
           ${d.region.kind === "region" ? `<h2>Округа</h2>
-            ${d.districts.length ? `<div class="card"><ul class="list">${d.districts.map((x) => `<li><span class="name">${esc(x.name)}</span><span class="muted small">код для школ <b class="code">${esc(x.code)}</b></span></li>`).join("")}</ul></div>` : ""}
+            ${d.districts.length ? `<div class="card"><ul class="list">${d.districts.map((x) => `<li><span class="name">${esc(x.name)}</span><span class="muted small">код для школ <b class="code nowrap">${esc(x.code)}</b></span></li>`).join("")}</ul></div>` : ""}
             <div class="card"><label class="card-title" for="rg-district">Новый округ (муниципалитет)</label>
               <form class="row search-row" data-form="rgDistrict"><input type="text" id="rg-district" maxlength="300" placeholder="Октябрьский район"><button type="submit" class="btn sm">Создать</button></form></div>` : ""}`);
       } catch (e) { fail(e); }
@@ -1860,7 +1864,7 @@
               : `<p class="muted small buttons-preview">Родители увидят кнопки: ${tpl.options.map((o) => `<span class="chip">${esc(o)}</span>`).join(" ")}</p>`}
             <fieldset class="field"><legend>Параллели <em class="hint">ничего не выбрано — все классы</em></legend><div class="seg">${grades.map((g) => segBtn("rcGrade", g, String(g), draft.grades.has(g))).join("")}</div></fieldset>
             <div class="card"><div class="card-title">Школы</div>
-              ${d.schools.map((s) => `<label class="switch"><span>${esc(s.name)} <span class="muted small">${s.classes} ${plural(s.classes, "класс", "класса", "классов")}</span></span><input type="checkbox" data-rc-school="${s.id}" ${draft.schools.has(s.id) ? "checked" : ""}></label>`).join("")}</div>
+              ${d.schools.map((s) => `<label class="switch"><span>${esc(s.name)} <span class="muted small nowrap">${s.classes} ${plural(s.classes, "класс", "класса", "классов")}</span></span><input type="checkbox" data-rc-school="${s.id}" ${draft.schools.has(s.id) ? "checked" : ""}></label>`).join("")}</div>
             <fieldset class="field"><legend>Срок ответа</legend><div class="seg">${[["tomorrow", "Завтра 18:00"], ["friday", "Пятница 18:00"], ["week", "Через неделю"], ["", "Без срока"]].map(([k, l]) => segBtn("rcDl", k, l, draft.deadline === k)).join("")}</div></fieldset>
             <button type="button" class="btn block" data-act="rcSend" ${draft.schools.size ? "" : "disabled"}>${draft.schools.size ? `Запустить в ${draft.schools.size} ${plural(draft.schools.size, "школе", "школах", "школах")}` : "Выберите хотя бы одну школу"}</button>`);
           $view.querySelectorAll("[data-rc-school]").forEach((el) => el.addEventListener("change", () => {
