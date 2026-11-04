@@ -111,7 +111,8 @@ async def on_bot_started(update: dict) -> None:
         return
     if payload.startswith("poll_") and payload[5:].isdigit():
         poll = await polls.get_poll(int(payload[5:]))
-        if poll and not poll.closed:
+        # ссылку могли переслать постороннему — сбор показываем только тем, кому он адресован
+        if poll and not poll.closed and await polls.is_addressee(poll, uid):
             chat = await chats.get_chat(poll.chat_id)
             teacher = await chats.get_user(poll.teacher_id)
             tz = teacher.tz if teacher else ctx().settings.default_tz

@@ -108,9 +108,15 @@ async def on_poll_answer(cid: str, uid: int, user: dict, tail: str, in_group: bo
         # учитель нажал кнопку своего сбора — его ответ не считаем, иначе «25/27» превратится в «26/28»
         await ack(cid, "Это ваш сбор — статус в личке: /status")
         return
-    poll, status = await polls.record_answer(pid, user, opt)
+    group_chat = (message.get("recipient") or {}).get("chat_id") if in_group else None
+    if group_chat and existing is not None and group_chat == existing.chat_id:
+        await chats.touch_member(group_chat, user)  # нажал под сообщением в чате класса — значит, он в классе
+    poll, status = await polls.record_answer(pid, user, opt, chat_id_hint=group_chat)
     if status == "bad" or poll is None:
         await ack(cid, "Сбор не найден")
+        return
+    if status == "forbidden":
+        await ack(cid, "Этот сбор для другого класса — ответ не засчитан")
         return
     if status == "closed":
         await ack(cid, "Сбор уже закрыт — напишите учителю, если ответ ещё нужен")

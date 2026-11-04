@@ -262,7 +262,8 @@ async def resume_dispatch() -> int:
 
 
 async def record_answer(poll_id: int, user: dict, option: int, chat_id_hint: int | None = None) -> tuple[Poll | None, str]:
-    """Записывает ответ. Возвращает (poll, статус): ok | changed | closed | bad."""
+    """Записывает ответ. Возвращает (poll, статус): ok | changed | same | closed | bad | forbidden.
+    chat_id_hint — чат, где нажата кнопка: нажатие под сообщением в чате класса доказывает, что человек в нём."""
     uid = user.get("user_id")
     async with session() as s:
         poll = await s.get(Poll, poll_id)
@@ -271,6 +272,12 @@ async def record_answer(poll_id: int, user: dict, option: int, chat_id_hint: int
         if poll.closed:
             return poll, "closed"
         t = await s.scalar(select(PollTarget).where(PollTarget.poll_id == poll_id, PollTarget.user_id == uid))
+        if t is None and uid == poll.teacher_id:
+            return poll, "forbidden"
+        if t is None and chat_id_hint != poll.chat_id and not await chats.is_present(poll.chat_id, uid):
+            # чужой сбор (ссылка ?start=poll_N переслана постороннему): ответ не принимаем,
+            # иначе итог «1/4» вместо «1/3» и в списке класса чужой человек
+            return poll, "forbidden"
         status = "ok"
         if t is None:
             # человек пришёл в чат позже рассылки — добавляем его в список
@@ -559,6 +566,13 @@ async def pending_for_user(user_id: int) -> list[Poll]:
                 if p.id not in known and not any(t.user_id == user_id for t in p.targets) and p.teacher_id != user_id:
                     rows = list(rows) + [p]
     return list(rows)
+
+
+async def is_addressee(poll: Poll, user_id: int) -> bool:
+    """Сбор адресован человеку: он в списке рассылки или сейчас участник чата класса (не учитель)."""
+    if user_id == poll.teacher_id:
+        return False
+    return any(t.user_id == user_id for t in poll.targets) or await chats.is_present(poll.chat_id, user_id)
 
 
 async def user_answer(poll: Poll, user_id: int) -> int | None:

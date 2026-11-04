@@ -144,6 +144,13 @@ async def touch_member(chat_id: int, user: dict, present: bool = True) -> None:
         m.present = present
 
 
+async def is_present(chat_id: int, user_id: int) -> bool:
+    """Человек сейчас участник чата (по нашему списку)."""
+    async with session() as s:
+        return bool(await s.scalar(select(Member.id).where(
+            Member.chat_id == chat_id, Member.user_id == user_id, Member.present.is_(True))))
+
+
 async def class_list(chat_id: int, exclude: set[int] | None = None) -> list[Member]:
     """Те, от кого ждём ответа: присутствующие люди, кроме учителя и владельца чата."""
     exclude = exclude or set()
