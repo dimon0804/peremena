@@ -216,20 +216,30 @@ async def on_poll_teacher(cid: str, uid: int, head: str, tail: str) -> None:
         if not poll.amount:
             await ack(cid, "Это не сбор денег")
             return
-        if head == "pp" and target.isdigit():
-            t = await polls.set_paid(poll.id, int(target))
+        # pp:<сбор>:<цель>[:<1|0>:<страница>] — значение в кнопке явное: двойное нажатие не снимает отметку;
+        # старые кнопки без значения работают как переключатель
+        parts = target.split(":")
+        if head == "pp" and parts[0].isdigit():
+            value = None if len(parts) < 2 else parts[1] == "1"
+            page = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+            t = await polls.set_paid(poll.id, int(parts[0]), value)
             poll = await polls.get_poll(poll.id)
             m = polls.money(poll)
             body = {"text": f"💰 <b>{html.escape(poll.title)}</b>\nСобрано {polls.rub(m['collected'])} из "
                             f"{polls.rub(m['expected'])}. Нажмите на имя, чтобы отметить сдавшего.",
-                    "format": "html", "attachments": kb.kb_list(polls.pay_buttons(poll))}
+                    "format": "html", "attachments": kb.kb_list(polls.pay_buttons(poll, page))}
             await ack(cid, ("✅ Отмечено: " if t and t.paid else "Снято: ") + (t.name if t else ""), message=body)
             return
-        await ack(cid)
+        page = int(parts[0]) if parts[0].isdigit() else None
         m = polls.money(poll)
-        await send(uid, f"💰 <b>{html.escape(poll.title)}</b>\nСобрано {polls.rub(m['collected'])} из "
-                        f"{polls.rub(m['expected'])}. Нажмите на имя, чтобы отметить сдавшего.",
-                   polls.pay_buttons(poll))
+        text = (f"💰 <b>{html.escape(poll.title)}</b>\nСобрано {polls.rub(m['collected'])} из "
+                f"{polls.rub(m['expected'])}. Нажмите на имя, чтобы отметить сдавшего.")
+        if page is not None:  # листание списка — меняем то же сообщение
+            await ack(cid, message={"text": text, "format": "html",
+                                    "attachments": kb.kb_list(polls.pay_buttons(poll, page))})
+            return
+        await ack(cid)
+        await send(uid, text, polls.pay_buttons(poll))
         return
     if head == "ps":
         await ack(cid)
@@ -241,6 +251,8 @@ async def on_poll_teacher(cid: str, uid: int, head: str, tail: str) -> None:
     elif head == "pr":
         await ack(cid, "Напоминаю")
         res = await polls.remind(poll.id)
+        if res.get("dup"):
+            return  # двойное нажатие: напоминание уже ушло, отчёт пришёл на первое
         msg = f"⏰ Напомнил в личку: {res['sent']}."
         if res["group"]:
             msg += f" Ещё {res['group']} упомянул в чате класса."
@@ -352,8 +364,13 @@ async def on_shelf(cid: str, uid: int, tail: str) -> None:
         if not chat or chat.teacher_id != uid:
             await ack(cid, "Чат не найден")
             return
+        if not await ctx().kv.add_once(f"shto:{m.id}:{chat_id}", ttl=60):
+            await ack(cid, "Уже отправлено")  # двойное нажатие — второй раз в чат класса не шлём
+            return
         ok = await shelf.send_material(m, chat_id=chat_id, caption=html.escape(m.title) if m.title else None)
         await ack(cid, f"Отправлено в {chat.title}" if ok else "Не получилось отправить")
+        if not ok:
+            await ctx().kv.delete(f"shto:{m.id}:{chat_id}")  # можно сразу попробовать ещё раз
         if ok:
             async with session() as s:
                 row = await s.get(type(m), m.id)

@@ -100,6 +100,11 @@ async def sync_members(chat_id: int) -> int:
     except MaxApiError as e:
         log.warning("Не удалось получить участников %s: %s", chat_id, e)
         return -1
+    if not any(r.get("user_id") for r in raw):
+        # в чате как минимум сам бот — пустой ответ при 200 значит «список недоступен», а не «все ушли»;
+        # иначе весь класс пометился бы ушедшим и выпал из сборов
+        log.warning("MAX вернул пустой список участников %s — список класса не меняем", chat_id)
+        return -1
     async with session() as s:
         existing = {m.user_id: m for m in (await s.scalars(select(Member).where(Member.chat_id == chat_id))).all()}
         seen = set()

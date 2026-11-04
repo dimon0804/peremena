@@ -87,6 +87,8 @@ async def on_user_added(update: dict) -> None:
 async def on_user_removed(update: dict) -> None:
     if update.get("chat_id") and update.get("user"):
         await chats.touch_member(update["chat_id"], update["user"], present=False)
+        # ушёл из чата — из открытых сборов, где он молчал, убираем: напоминания ему больше не нужны
+        await polls.drop_member(update["chat_id"], update["user"].get("user_id"))
 
 
 async def on_title_changed(update: dict) -> None:

@@ -14,6 +14,7 @@ import time
 from datetime import timedelta
 
 from sqlalchemy import select
+from sqlalchemy import update as sa_update
 
 from .. import keyboards as kb
 from ..core import ctx
@@ -315,7 +316,8 @@ async def after_answer(poll: Poll, uid: int, opt: int, status: str) -> None:
     await backfill_targets(poll.chat_id)
     poll = await get_poll(poll.id)
     answered, total, _ = counts(poll)
-    if total and answered == total:
+    # два последних ответа почти одновременно — оба видят «все ответили»; сообщаем учителю один раз
+    if total and answered == total and await ctx().kv.add_once(f"allans:{poll.id}:{total}", ttl=30 * 24 * 3600):
         text, buttons = await status_card(poll)
         await notify_teacher(poll.teacher_id, "🎉 Ответили все!\n\n" + text, kind="report",
                              chat_id=poll.chat_id, raw_text=f"«{poll.title}»: ответили все {total}",
@@ -341,6 +343,21 @@ async def backfill_targets(chat_id: int) -> int:
     return added
 
 
+async def drop_member(chat_id: int, user_id: int) -> int:
+    """Человек ушёл из чата класса: убираем его из открытых сборов, где он ещё не ответил, —
+    иначе ему продолжают приходить напоминания, а «25/27» никогда не станет «все ответили».
+    Уже данные ответы остаются: они были, учителю их видеть нужно."""
+    async with session() as s:
+        rows = (await s.scalars(
+            select(PollTarget).join(Poll, Poll.id == PollTarget.poll_id).where(
+                Poll.chat_id == chat_id, Poll.closed.is_(False), PollTarget.user_id == user_id,
+                PollTarget.answer.is_(None), PollTarget.paid.is_(False))
+        )).all()
+        for t in rows:
+            await s.delete(t)
+    return len(rows)
+
+
 def counts(poll: Poll) -> tuple[int, int, list[int]]:
     per = [0] * len(poll.options)
     answered = 0
@@ -355,8 +372,9 @@ def money(poll: Poll) -> dict | None:
     """Сбор денег: сколько ждём, сколько учитель подтвердил, кто отметил «перевёл», но ещё не подтверждён."""
     if not poll.amount:
         return None
-    participants = [t for t in poll.targets if t.answer != PAY_SKIP]
-    paid = [t for t in participants if t.paid]
+    # сдал деньги — участник, даже если потом нажал «Не участвуем»: деньги у учителя, их надо учесть
+    participants = [t for t in poll.targets if t.answer != PAY_SKIP or t.paid]
+    paid = [t for t in poll.targets if t.paid]
     waiting = [t for t in participants if not t.paid and t.answer in (PAY_TRANSFER, PAY_CASH)]
     return {
         "amount": poll.amount,
@@ -367,14 +385,29 @@ def money(poll: Poll) -> dict | None:
     }
 
 
-def pay_buttons(poll: Poll) -> list[list[dict]]:
-    """Кнопки «отметить сдавших»: ✅/⬜ у каждого участника (кроме «не участвуем»)."""
+PAY_PAGE = 25  # MAX принимает не больше 30 рядов кнопок — оставляем место под листание и «Готово»
+
+
+def pay_buttons(poll: Poll, page: int = 0) -> list[list[dict]]:
+    """Кнопки «отметить сдавших»: ✅/⬜ у каждого участника (кроме «не участвуем», если он не сдавал).
+    В кнопке — значение, которое она поставит (а не «переключить»): двойное нажатие не снимет отметку."""
+    people = [t for t in poll.targets if t.answer != PAY_SKIP or t.paid]
+    pages = max(1, -(-len(people) // PAY_PAGE))
+    page = min(max(page, 0), pages - 1)
     rows = []
-    for t in poll.targets:
-        if t.answer == PAY_SKIP:
-            continue
-        hint = " · перевёл" if t.answer == PAY_TRANSFER else " · наличные" if t.answer == PAY_CASH else ""
-        rows.append([kb.cb(f"{'✅' if t.paid else '⬜'} {t.name}{hint}"[:64], f"pp:{poll.id}:{t.id}")])
+    for t in people[page * PAY_PAGE:(page + 1) * PAY_PAGE]:
+        hint = " · перевёл" if t.answer == PAY_TRANSFER else " · наличные" if t.answer == PAY_CASH else \
+            " · не участвует" if t.answer == PAY_SKIP else ""
+        rows.append([kb.cb(f"{'✅' if t.paid else '⬜'} {t.name}{hint}"[:64],
+                           f"pp:{poll.id}:{t.id}:{0 if t.paid else 1}:{page}")])
+    if pages > 1:
+        nav = []
+        if page > 0:
+            nav.append(kb.cb("◀️ Назад", f"pm:{poll.id}:{page - 1}"))
+        nav.append(kb.cb(f"{page + 1}/{pages}", f"pm:{poll.id}:{page}"))
+        if page < pages - 1:
+            nav.append(kb.cb("Дальше ▶️", f"pm:{poll.id}:{page + 1}"))
+        rows.append(nav)
     rows.append([kb.cb("Готово", f"ps:{poll.id}")])
     return rows
 
@@ -512,13 +545,14 @@ async def remind(poll_id: int, auto: bool = False) -> dict:
 
 async def close_poll(poll_id: int, by_deadline: bool = False) -> Poll | None:
     c = ctx()
+    # атомарно: кнопка «Закрыть» и закрытие по сроку одновременно — итог уходит один раз
     async with session() as s:
-        poll = await s.get(Poll, poll_id)
-        if poll is None or poll.closed:
-            return poll
-        poll.closed = True
-        poll.closed_at = utcnow()
+        res = await s.execute(sa_update(Poll).where(Poll.id == poll_id, Poll.closed.is_(False))
+                              .values(closed=True, closed_at=utcnow()))
+        won = res.rowcount == 1
     poll = await get_poll(poll_id)
+    if not won or poll is None:
+        return poll
     await stats.add(poll.teacher_id, "poll_done")
     if poll.group_message_id:
         try:
