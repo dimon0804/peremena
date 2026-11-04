@@ -10,11 +10,17 @@ from .conftest import TEACHER, cb_update
 
 
 def test_site_pages_and_login_flow(tmp_path, monkeypatch):
-    monkeypatch.setenv("MAX_BOT_TOKEN", "")
+    from .conftest import FakeApi
+
+    # вход через бота работает только с токеном — MAX API подменяем заглушкой
+    monkeypatch.setenv("MAX_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("UPDATES_MODE", "webhook")
+    monkeypatch.setenv("WEBHOOK_URL", "")
     monkeypatch.setenv("BOT_USERNAME", "peremena_test_bot")
     monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{tmp_path / 's.db'}")
     monkeypatch.setenv("DEV_AUTH", "true")
     monkeypatch.setenv("REDIS_URL", "")
+    monkeypatch.setattr("app.main.MaxClient", lambda *a, **k: FakeApi())
     from app.config import get_settings
 
     get_settings.cache_clear()

@@ -4,12 +4,14 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+import secrets
 from functools import lru_cache
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+_PROCESS_KEY = secrets.token_bytes(32)  # ключ подписей, если нет ни SECRET_KEY, ни токена
 
 
 class Settings(BaseSettings):
@@ -55,6 +57,7 @@ class Settings(BaseSettings):
     # и внутренние сети Docker, где живёт Caddy. «*» — верить всем, тогда любой подделает свой IP.
     forwarded_allow_ips: str = "127.0.0.1,::1,172.16.0.0/12"
     log_level: str = "INFO"
+    # Ключ подписей сервиса. Пусто — выводится из MAX_BOT_TOKEN (а без токена — случайный при каждом запуске)
     secret_key: str = ""
 
     @property
@@ -71,11 +74,21 @@ class Settings(BaseSettings):
 
     @property
     def signing_key(self) -> bytes:
-        raw = self.secret_key or ("peremena:" + self.max_bot_token)
+        """Ключ подписей (ссылки на выгрузку): SECRET_KEY, иначе выводится из токена. Без токена и SECRET_KEY —
+        случайный на время работы процесса: из пустой строки вывели бы ключ, известный всем."""
+        if self.secret_key:
+            raw = self.secret_key
+        elif self.max_bot_token:
+            raw = "peremena:" + self.max_bot_token
+        else:
+            return _PROCESS_KEY
         return hashlib.sha256(raw.encode()).digest()
 
     @property
     def effective_webhook_secret(self) -> str:
+        """Секрет вебхука. Пустая строка — вебхук выключен (нет токена: секрет из пустого токена публичен)."""
+        if not self.max_bot_token:
+            return ""
         if self.webhook_secret and re.fullmatch(r"[\w-]{5,256}", self.webhook_secret, re.ASCII):
             return self.webhook_secret
         if self.webhook_secret:

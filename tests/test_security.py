@@ -222,6 +222,29 @@ def test_demo_and_real_schools_do_not_mix_and_join_is_limited(env):
     assert err.value.status_code == 429
 
 
+# ---------------------------------------------------------------- секреты без токена
+def test_no_token_disables_webhook_and_bot_login(web):
+    import hashlib
+
+    from app.config import Settings
+
+    s = Settings(max_bot_token="", secret_key="")
+    assert s.effective_webhook_secret == ""
+    assert s.signing_key != hashlib.sha256(b"peremena:").digest()  # не из пустой строки
+    assert Settings(max_bot_token="", secret_key="k").signing_key == hashlib.sha256(b"k").digest()
+    with web() as client:
+        public = hashlib.sha256(b"wh:").hexdigest()[:40]  # прежний «секрет» без токена
+        assert client.post("/webhook", json={"update_type": "x"},
+                           headers={"X-Max-Bot-Api-Secret": public}).status_code == 503
+        assert client.post("/api/auth/start", headers=H).status_code == 503
+
+
+def test_webhook_non_ascii_secret_is_403_not_500(web):
+    with web(MAX_BOT_TOKEN="test-token") as client:
+        r = client.post("/webhook", json={}, headers={"X-Max-Bot-Api-Secret": "секрет".encode()})
+        assert r.status_code == 403
+
+
 # ---------------------------------------------------------------- адрес клиента и прокси
 def test_demo_limit_ignores_spoofed_forwarded_for(web):
     with web(DEMO_PER_IP_HOUR="1") as client:

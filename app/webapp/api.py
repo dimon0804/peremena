@@ -247,7 +247,7 @@ async def close(pid: int, user: User = Depends(teacher_user)):
 @router.get("/polls/{pid}/export.csv")
 async def export_csv(pid: int, sig: str):
     p = await polls.get_poll(pid)
-    if p is None or not hmac.compare_digest(sig, _sign("poll", p.id, p.teacher_id)):
+    if p is None or not hmac.compare_digest(sig.encode(), _sign("poll", p.id, p.teacher_id).encode()):
         raise HTTPException(404, "Не найдено")
     teacher = await chats.get_user(p.teacher_id)
     tz = teacher.tz if teacher else None

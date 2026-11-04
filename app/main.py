@@ -101,7 +101,10 @@ async def revalidate_static(request: Request, call_next):
 async def webhook(request: Request, x_max_bot_api_secret: str | None = Header(default=None)):
     settings = get_settings()
     expected = settings.effective_webhook_secret
-    if not x_max_bot_api_secret or not hmac.compare_digest(x_max_bot_api_secret, expected):
+    if not expected:  # без токена бота вебхук не принимаем: секрет был бы выведен из пустой строки
+        raise HTTPException(503, "bot is not configured")
+    # сравниваем байты: строка с не-ASCII символами в compare_digest даёт TypeError (и 500)
+    if not x_max_bot_api_secret or not hmac.compare_digest(x_max_bot_api_secret.encode(), expected.encode()):
         raise HTTPException(403, "bad secret")
     try:
         update = await request.json()

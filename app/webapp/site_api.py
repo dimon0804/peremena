@@ -29,7 +29,8 @@ def _qr_svg(data: str) -> str:
 @router.post("/auth/start")
 async def auth_start(request: Request):
     c = ctx()
-    if not c.bot_username:
+    # без токена бот не получит подтверждение входа — код выдавать незачем
+    if not c.bot_username or not c.settings.max_bot_token:
         raise HTTPException(503, "Бот не подключён — вход через MAX временно недоступен")
     code = await websession.start_login(request.headers.get("user-agent", ""))
     pin = await websession.make_pin(code)
