@@ -38,7 +38,15 @@ def _actor_key(update: dict) -> str:
 
 async def handle_update(update: dict) -> None:
     c = ctx()
-    if not await c.kv.add_once("dd:" + _dedup_key(update), ttl=24 * 3600):
+    key_dd = "dd:" + _dedup_key(update)
+    try:
+        fresh = await c.kv.add_once(key_dd, ttl=24 * 3600)
+    except Exception:
+        # хранилище состояния недоступно: лучше обработать событие без дедупликации, чем молча потерять
+        # (и оставить кнопку у пользователя «нажатой» без ответа)
+        log.exception("Дедупликация недоступна — обрабатываем событие без неё")
+        fresh, key_dd = True, None
+    if not fresh:
         return  # MAX повторяет доставку, пока не получит 200 — дубликаты пропускаем
     # События одного человека обрабатываем по очереди: иначе двойное нажатие «Разослать»
     # создаёт два сбора, а первое сообщение нового пользователя дублирует запись в базе.
@@ -47,6 +55,15 @@ async def handle_update(update: dict) -> None:
     try:
         async with lock:
             await _dispatch(update)
+    except asyncio.CancelledError:
+        # остановка сервиса посреди обработки: снимаем отметку «обработано», чтобы повторная доставка
+        # после перезапуска не была отброшена как дубликат
+        if key_dd:
+            try:
+                await c.kv.delete(key_dd)
+            except Exception:
+                pass
+        raise
     finally:
         if not lock.locked() and len(_locks) > 5000:
             _locks.pop(key, None)

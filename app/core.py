@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from .config import Settings
 from .max_api import MaxApiError, MaxClient
@@ -20,6 +21,9 @@ class Ctx:
     bot_username: str = ""
     bot_name: str = "Перемена"
     started: bool = field(default=False)
+    # время последнего успешного шага long polling (UTC, без tzinfo); None — цикл не запущен или ещё не отработал.
+    # /health сверяет его с текущим временем: «процесс жив, а события не приходят» видно снаружи
+    polling_alive_at: datetime | None = None
 
     def start_link(self, payload: str | None = None) -> str:
         base = f"https://max.ru/{self.bot_username}" if self.bot_username else "https://max.ru"
