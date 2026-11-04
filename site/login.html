@@ -4,45 +4,60 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <title>Вход — Перемена</title>
+  <meta name="theme-color" content="#f6f1fe" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#110d18" media="(prefers-color-scheme: dark)">
+  <title>Вход в кабинет — Перемена</title>
+  <meta name="description" content="Вход в веб-кабинет «Перемены» без пароля: подтвердите вход в боте в MAX.">
   <meta name="robots" content="noindex">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
   <link rel="stylesheet" href="/site.css">
 </head>
 <body data-page="login">
 <header class="top">
   <div class="wrap">
-    <a class="logo" href="/">ПЕРЕМЕНА</a>
+    <a class="logo" href="/" aria-label="Перемена — на главную">ПЕРЕМЕНА</a>
     <div class="top-actions"><a class="btn sm outline" href="/">На главную</a></div>
   </div>
 </header>
-<main class="login">
+<main class="login" id="main">
   <div class="login-card">
     <h1>Вход в кабинет</h1>
-    <p class="muted">Без паролей — вход подтверждается в боте «Перемена» в MAX. Выберите удобный способ:</p>
+    <p class="muted" id="login-lead">Пароль не нужен: вход подтверждается в боте «Перемена» в MAX. Выберите удобный способ.</p>
 
-    <div class="way">
-      <div class="way-title">1. Отправьте боту код</div>
-      <div class="pin" id="pin" aria-live="polite">··· ···</div>
-      <p class="muted small-note">Откройте чат с <a id="bot-name" href="#" target="_blank" rel="noopener">ботом «Перемена»</a> в MAX на любом устройстве и отправьте эти цифры сообщением.</p>
+    <div id="login-ways">
+      <div class="way">
+        <div class="way-title">Отправьте боту код</div>
+        <div class="pin wait" id="pin" aria-live="polite">Готовлю код…</div>
+        <p class="muted small-note">Откройте чат с <a id="bot-name" href="https://max.ru/ideya_fiks_35_bot" target="_blank" rel="noopener">ботом «Перемена»</a> в MAX на любом устройстве и отправьте эти цифры сообщением.</p>
+      </div>
+
+      <div class="way">
+        <div class="way-title">Или откройте ссылку</div>
+        <a class="btn" id="login-link" href="#" target="_blank" rel="noopener" hidden>Открыть бота и подтвердить вход</a>
+        <p class="muted small-note">Удобно, если вы на телефоне или MAX установлен на этом компьютере.</p>
+      </div>
+
+      <div class="way">
+        <div class="way-title">Или наведите камеру телефона</div>
+        <div class="qr wait" id="qr" role="img" aria-label="QR-код для входа"></div>
+        <p class="muted small-note">Обычной камерой телефона, не из бота: она предложит открыть MAX.</p>
+      </div>
+
+      <p class="muted small-note">Затем в боте нажмите «Войти» — кабинет откроется на этой странице сам.</p>
     </div>
 
-    <div class="way">
-      <div class="way-title">2. Или откройте ссылку</div>
-      <a class="btn" id="login-link" href="#" target="_blank" rel="noopener" hidden>Открыть бота и подтвердить</a>
-      <p class="muted small-note">Удобно, если вы на телефоне или MAX установлен на этом компьютере.</p>
+    <div class="login-off" id="login-off" hidden>
+      <div class="off-ico" aria-hidden="true">!</div>
+      <h2 class="way-title">Вход через бота временно недоступен</h2>
+      <p class="muted">Бот сейчас не на связи. Попробуйте зайти чуть позже, а пока посмотрите кабинет на демо-классе — там всё то же самое.</p>
+      <button type="button" class="btn" data-demo>Попробовать демо</button>
+      <button type="button" class="btn outline" id="retry" style="margin-top:10px">Попробовать войти ещё раз</button>
     </div>
 
-    <div class="way">
-      <div class="way-title">3. Или наведите камеру телефона</div>
-      <div class="qr" id="qr" aria-label="QR-код для входа"></div>
-      <p class="muted small-note">Обычной камерой телефона (не в боте) — она предложит открыть MAX.</p>
-    </div>
-
-    <p class="muted small-note">Затем в боте нажмите «✅ Войти» — кабинет откроется на этой странице сам.</p>
     <div class="status" id="status" role="status" aria-live="polite"></div>
-    <button class="btn outline" id="again" hidden>Получить новый код</button>
-    <p class="muted small-note demo-note">Нет MAX под рукой? <button type="button" class="linkish" data-demo>Посмотреть демо-класс</button> — без входа, ничего никому не отправляется.</p>
+    <button type="button" class="btn outline" id="again" hidden>Получить новый код</button>
+    <p class="muted small-note demo-note" id="demo-note">Нет MAX под рукой? <button type="button" class="linkish" data-demo>Посмотреть демо-класс</button> — без входа, никому ничего не отправляется.</p>
   </div>
 </main>
 <script src="/site.js"></script>

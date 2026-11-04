@@ -7,8 +7,10 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.exception_handlers import http_exception_handler
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import __version__, db
 from .bot.common import COMMANDS
@@ -95,6 +97,27 @@ async def revalidate_static(request: Request, call_next):
                                          or path in ("/login", "/app")):
         response.headers["Cache-Control"] = "no-cache"
     return response
+
+
+def _is_api(path: str) -> bool:
+    return path.startswith(("/api/", "/webhook", "/health"))
+
+
+@app.middleware("http")
+async def api_404_json(request: Request, call_next):
+    """Неизвестный адрес /api/... попадает в статику сайта и получил бы HTML-страницу 404 — API отвечает JSON."""
+    response = await call_next(request)
+    if response.status_code == 404 and _is_api(request.url.path)             and response.headers.get("content-type", "").startswith("text/html"):
+        return JSONResponse({"detail": "Не найдено"}, status_code=404)
+    return response
+
+
+@app.exception_handler(StarletteHTTPException)
+async def not_found_page(request: Request, exc: StarletteHTTPException):
+    """Человеку, а не программе, на несуществующем адресе показываем страницу в стиле сайта, а не голый JSON."""
+    if exc.status_code == 404 and not _is_api(request.url.path):
+        return FileResponse(SITE_DIR / "404.html", status_code=404, headers={"Cache-Control": "no-cache"})
+    return await http_exception_handler(request, exc)
 
 
 @app.post("/webhook")
