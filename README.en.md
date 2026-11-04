@@ -100,7 +100,7 @@ curl http://localhost:8080/health
 ```
 
 Each [release](https://github.com/dimon0804/peremena/releases) also carries the image as an archive:
-`gunzip -c peremena-image-v1.1.0.tar.gz | docker load`.
+`gunzip -c peremena-image-v1.2.0.tar.gz | docker load`.
 
 ### Build from source
 

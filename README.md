@@ -235,8 +235,8 @@ docker run -d --name peremena -p 8080:8080 -e MAX_BOT_TOKEN=<токен>   -v pe
 Архив образа приложен к каждому [релизу](https://github.com/dimon0804/peremena/releases) — запуск без доступа к реестру:
 
 ```bash
-gunzip -c peremena-image-v1.1.0.tar.gz | docker load    # → образ peremena:1.1.0
-docker run -d --name peremena -p 8080:8080 -e MAX_BOT_TOKEN=<токен> -v peremena-data:/srv/data peremena:1.1.0
+gunzip -c peremena-image-v1.2.0.tar.gz | docker load    # → образ peremena:1.2.0
+docker run -d --name peremena -p 8080:8080 -e MAX_BOT_TOKEN=<токен> -v peremena-data:/srv/data peremena:1.2.0
 ```
 
 ### 1. Токен
