@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import (
-    JSON, BigInteger, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, false, true,
+    JSON, BigInteger, Boolean, DateTime, Float, ForeignKey, Index, Integer, LargeBinary, String, Text, UniqueConstraint, false, true,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -160,6 +160,23 @@ class FaqEntry(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     hits: Mapped[int] = mapped_column(Integer, default=0)
     misses: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class FaqEmbedding(Base):
+    """Вектор карточки справочника для семантического поиска (EMBEDDINGS=on, app/services/semantic.py).
+
+    Хранится только числовой «отпечаток» вопроса карточки — сам ответ бот всё так же берёт из faq.
+    На PostgreSQL с расширением pgvector миграция 0010 добавляет сюда ещё столбец embedding vector(312)
+    с индексом HNSW; в моделях его нет намеренно — без расширения такого типа в базе просто не существует."""
+    __tablename__ = "faq_embeddings"
+
+    faq_id: Mapped[int] = mapped_column(ForeignKey("faq.id", ondelete="CASCADE"), primary_key=True,
+                                        autoincrement=False)
+    model: Mapped[str] = mapped_column(String(100))        # чем посчитан вектор — другая модель = пересчёт
+    text_hash: Mapped[str] = mapped_column(String(40))     # sha1 текста, по которому считали
+    dim: Mapped[int] = mapped_column(Integer)
+    vec: Mapped[bytes] = mapped_column(LargeBinary)        # float32 подряд, вектор нормирован
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 # ---------------------------------------------------------------- «Полка»

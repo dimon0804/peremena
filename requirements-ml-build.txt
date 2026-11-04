@@ -1,0 +1,9 @@
+# Только для перевода rubert-tiny2 в ONNX при сборке (scripts/export_rubert_onnx.py, стадия model в Dockerfile).
+# В итоговый образ не попадает.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.5.1+cpu
+transformers==4.47.1
+huggingface_hub==0.27.0
+onnx==1.17.0
+snowballstemmer==2.2.0
+-r requirements-ml.txt

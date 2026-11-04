@@ -175,7 +175,16 @@ def make_scheduler(c: Ctx) -> AsyncIOScheduler:
         sched.add_job(leader_only(c.kv.cleanup), "interval", hours=1, id="kv", **opts)
     if c.settings.mode == "webhook":
         sched.add_job(leader_only(ensure_webhook), "interval", minutes=30, args=[c], id="webhook", **opts)
+    add_embeddings_job(sched)
     return sched
+
+
+def add_embeddings_job(sched: AsyncIOScheduler) -> None:
+    """EMBEDDINGS=on: лидер раз в 5 минут досчитывает векторы карточек, пропущенные фоновой индексацией."""
+    from .services import semantic
+
+    if semantic.enabled():
+        sched.add_job(leader_only(semantic.catch_up), "interval", minutes=5, id="embeddings", **JOB_OPTS)
 
 
 class Background:

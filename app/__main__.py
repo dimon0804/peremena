@@ -10,6 +10,8 @@
     python -m app init-db          — создать таблицы в базе
     python -m app digest <user_id> — отправить учителю утреннюю сводку прямо сейчас
     python -m app copy-data <url>  — перенести данные из другой базы (SQLite → PostgreSQL)
+    python -m app embeddings reindex [--all] — посчитать векторы карточек (нужно EMBEDDINGS=on)
+    python -m app embeddings status — сколько карточек с векторами, есть ли pgvector
 """
 from __future__ import annotations
 
@@ -157,6 +159,37 @@ async def _digest(user_id: int) -> int:
         await db.close_db()
 
 
+async def _embeddings(action: str, all_: bool) -> int:
+    """Семантический поиск: пересчёт векторов карточек и состояние. Модель грузится по тем же настройкам,
+    что и у сервиса (EMBEDDINGS=on, EMBEDDINGS_MODEL_DIR)."""
+    from . import db
+    from .services import semantic
+
+    s = get_settings()
+    await db.init_db(s.database_url)
+    try:
+        if action == "status":
+            if s.embeddings_on:
+                await semantic.init(s)
+            print(json.dumps(await semantic.status(), ensure_ascii=False, indent=2))
+            return 0
+        if not s.embeddings_on:
+            print("EMBEDDINGS=off — включите EMBEDDINGS=on (и соберите образ с WITH_EMBEDDINGS=1)", file=sys.stderr)
+            return 1
+        if not await semantic.init(s):
+            print("Модель не загрузилась — подробности выше в журнале", file=sys.stderr)
+            return 1
+
+        def progress(done: int, total: int) -> None:
+            print(f"\r  посчитано {done} из {total}", end="", flush=True)
+
+        n = await semantic.reindex(all_=all_, progress=progress)
+        print(f"\nГотово: пересчитано карточек — {n}")
+        return 0
+    finally:
+        await db.close_db()
+
+
 def _workers(n: int, s) -> int:
     """Несколько процессов uvicorn — только с общим хранилищем: им нужны общий замок лидера,
     общий лимит MAX API и общая дедупликация событий. На SQLite без Redis — один процесс."""
@@ -189,6 +222,9 @@ def main(argv: list[str] | None = None) -> int:
     cp.add_argument("source", help="адрес исходной базы, например sqlite:////srv/data/peremena.db")
     d = sub.add_parser("digest", help="утренняя сводка учителю сейчас")
     d.add_argument("user_id", type=int)
+    em = sub.add_parser("embeddings", help="семантический поиск: пересчёт векторов и состояние")
+    em.add_argument("action", choices=("reindex", "status"))
+    em.add_argument("--all", action="store_true", help="пересчитать все карточки, а не только новые и изменённые")
     args = p.parse_args(argv)
 
     if args.cmd in (None, "run"):
@@ -220,6 +256,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_init_db())
     if args.cmd == "copy-data":
         return asyncio.run(_copy_data(args.source))
+    if args.cmd == "embeddings":
+        return asyncio.run(_embeddings(args.action, args.all))
     if args.cmd == "digest":
         return asyncio.run(_digest(args.user_id))
     p.print_help()

@@ -17,9 +17,9 @@ from sqlalchemy.exc import IntegrityError
 from ..db import session, utcnow
 from ..demo_ids import DEMO_BASE, DEMO_SPAN, SANDBOX_SIZE, SLOTS, is_demo, sandbox_base, sandbox_id_of
 from ..models import (
-    Absence, Announcement, Campaign, ClassChat, DemoSandbox, FaqEntry, InboxItem, IntegrationToken, JournalLink,
-    Lesson, Material, Member, Metric, OpenQuestion, Poll, PollTarget, RosterEntry, School, SchoolMember, SubjectTeacher, User,
-    Webhook, WebhookDelivery, WebSession,
+    Absence, Announcement, Campaign, ClassChat, DemoSandbox, FaqEmbedding, FaqEntry, InboxItem, IntegrationToken,
+    JournalLink, Lesson, Material, Member, Metric, OpenQuestion, Poll, PollTarget, RosterEntry, School, SchoolMember,
+    SubjectTeacher, User, Webhook, WebhookDelivery, WebSession,
 )
 from ..timeutil import local_now, to_utc
 from . import search
@@ -282,7 +282,9 @@ async def delete_sandbox(sid: int, keep_row: bool = False) -> None:
             (Lesson, chats(Lesson.chat_id)), (RosterEntry, chats(RosterEntry.chat_id)),
             (JournalLink, chats(JournalLink.chat_id)),
             (Member, chats(Member.chat_id)), (SubjectTeacher, chats(SubjectTeacher.chat_id)),
-            (ClassChat, chats(ClassChat.chat_id)), (FaqEntry, users(FaqEntry.teacher_id)),
+            (ClassChat, chats(ClassChat.chat_id)),
+            (FaqEmbedding, FaqEmbedding.faq_id.in_(select(FaqEntry.id).where(users(FaqEntry.teacher_id)))),
+            (FaqEntry, users(FaqEntry.teacher_id)),
             (Material, users(Material.teacher_id)), (InboxItem, users(InboxItem.teacher_id)),
             (Metric, users(Metric.teacher_id)), (OpenQuestion, users(OpenQuestion.teacher_id)),
             (WebhookDelivery, WebhookDelivery.webhook_id.in_(select(Webhook.id).where(users(Webhook.owner_id)))),

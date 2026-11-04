@@ -465,9 +465,9 @@ async def del_faq(fid: int, user: User = Depends(current_user)):
 
 @router.get("/faq/test")
 async def test_faq(q: str, user: User = Depends(teacher_user)):
-    hits = faq.rank(q, await faq.list_entries(user.user_id), limit=3)
+    hits = await faq.rank_smart(q, await faq.list_entries(user.user_id), limit=3)  # как ответит бот в личке
     return [{"entry": faq_out(h.item), "score": h.score, "auto": h.score >= faq.ANSWER_SCORE,
-             "group_auto": h.score >= faq.GROUP_SCORE} for h in hits]
+             "group_auto": h.score >= faq.GROUP_SCORE, "cos": h.cos} for h in hits]
 
 
 # ====================================================================== «Полка»

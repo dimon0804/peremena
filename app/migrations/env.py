@@ -12,7 +12,7 @@ import asyncio
 from alembic import context
 
 from app import models  # noqa: F401  регистрирует таблицы в Base.metadata
-from app.db import Base, _normalize_url
+from app.db import Base, _normalize_url, include_object
 
 target_metadata = Base.metadata
 
@@ -23,6 +23,7 @@ def _configure_and_run(connection) -> None:
         target_metadata=target_metadata,
         render_as_batch=connection.dialect.name == "sqlite",  # ALTER TABLE в SQLite — через пересоздание
         compare_type=True,
+        include_object=include_object,  # столбец vector и индекс HNSW pgvector — не в моделях намеренно
     )
     with context.begin_transaction():
         context.run_migrations()

@@ -46,6 +46,7 @@ def maintenance_scheduler(c: Ctx):
     sched.add_job(leader_only(websession.cleanup), "interval", hours=1, id="sessions", **opts)
     if hasattr(c.kv, "cleanup"):
         sched.add_job(leader_only(c.kv.cleanup), "interval", hours=1, id="kv", **opts)
+    updates.add_embeddings_job(sched)
     return sched
 
 
@@ -66,6 +67,10 @@ LEADER_TTL = 30.0
 async def startup() -> tuple[Ctx, list]:
     settings = get_settings()
     await db.init_db(settings.database_url)
+    # EMBEDDINGS=on — загрузить модель (в каждом процессе: ею же ищем в личке); ошибка — работаем без неё
+    from .services import semantic
+
+    await semantic.init(settings)
     kv = await make_kv(settings.redis_url)
     api = MaxClient(settings.max_bot_token, settings.max_api_url, settings.extra_ca_file, rps=settings.max_rps)
     if kv.redis is not None:

@@ -133,6 +133,65 @@ docker compose -f docker-compose.yml -f docker-compose.scale.yml up -d --scale b
 Variables: `ROLE` (all/web/worker), `WEB_CONCURRENCY`, `EVENT_QUEUE`, `HANDLER_CONCURRENCY`, `MAX_RPS`,
 `DB_POOL_SIZE`, `DB_MAX_OVERFLOW`. Load test results: [docs/НАГРУЗКА.md](docs/НАГРУЗКА.md), scripts: [loadtest/](loadtest/).
 
+### Semantic search (optional)
+
+The FAQ core is word-based search: Russian stemming, trigrams and a dictionary of school slang. It is predictable
+but misses paraphrases: "when do I pick my kid up from after-school care?" and a card "Until what time is the
+extended-day group open?" share no words, so the question goes to the teacher. For that case there is an option:
+[cointegrated/rubert-tiny2](https://huggingface.co/cointegrated/rubert-tiny2) embeddings (312 numbers per
+phrase) stored in pgvector. **It is off by default** (`EMBEDDINGS=off`), and then the bot behaves exactly as
+without it.
+
+What stays the same when it is on:
+
+- the bot answers only with the text the teacher saved. Nothing is generated; the model only helps find the card;
+- semantics can raise a card in the ranking but never lower it: whatever was found by words is still found;
+- a confident answer "by meaning" needs a high cosine and a clear gap to the second card. With two similar cards
+  ("PE uniform" vs "field trip clothes") the bot offers "did you mean…" instead of guessing; when unsure, the
+  question goes to the teacher as before;
+- in the class group chat the bot never answers by meaning — an almost verbatim question is still required;
+- only cards of the asker's classes and their school's shared base are searched;
+- if the model or the database fails, the bot silently falls back to word search.
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.embeddings.yml up -d --build
+docker compose -f docker-compose.yml -f docker-compose.embeddings.yml exec bot python -m app embeddings reindex
+docker compose -f docker-compose.yml -f docker-compose.embeddings.yml exec bot python -m app embeddings status
+```
+
+The override builds the image with `--build-arg WITH_EMBEDDINGS=1`, sets `EMBEDDINGS=on` and switches the
+database to `pgvector/pgvector:pg16` (if the volume already holds a database from `postgres:16-alpine`, run
+`REINDEX DATABASE` afterwards — see the file's comments). At build time the model is downloaded from Hugging Face
+at a pinned commit and converted to ONNX (`scripts/export_rubert_onnx.py`, which also checks the ONNX output
+against the original model). torch is used only in that build stage; the image gets onnxruntime, tokenizers,
+numpy (`requirements-ml.txt`) and the ~120 MB model. The default image (`WITH_EMBEDDINGS=0`) is unchanged.
+`EMBEDDINGS_BACKEND=st` uses sentence-transformers instead (pulls in torch).
+
+How it works (`app/services/semantic.py`): a card's vector is computed in the background, in batches, right after
+it is saved or edited; the leader catches up on anything missed every 5 minutes (`python -m app embeddings
+reindex [--all]` does it by hand). With pgvector the vector lives in a `vector(312)` column with an HNSW
+(cosine) index and the database computes the cosine; without the extension (plain PostgreSQL or SQLite) it is
+stored as bytes and the bot computes the cosine over the class's cards. Migration `0010` adds the vector column
+only if the extension is available. The final score is the maximum of the word score and the cosine score on
+the same scale, with the same FAQ thresholds; the cosine score always stays below the group-chat threshold.
+
+Settings: `EMBEDDINGS` (`off`), `EMBEDDINGS_BACKEND` (`auto`/`onnx`/`st`), `EMBEDDINGS_MODEL_DIR`
+(`/srv/models/rubert-tiny2`), `EMBEDDINGS_THREADS` (`1`), `EMBEDDINGS_ANSWER_COS` (`0.80`),
+`EMBEDDINGS_SUGGEST_COS` (`0.65`), `EMBEDDINGS_MARGIN` (`0.05`).
+
+**Quality has not been measured on the real model yet.** The thresholds are cautious starting values.
+`loadtest/eval_semantic.py` has 15 FAQ cards and 54 hand-written parent questions (46 answerable, many of them
+paraphrased; 8 not covered by the FAQ); it compares off vs on and sweeps the thresholds. Without embeddings the bot
+gives a correct confident answer to 6 of the 46 and no wrong confident answers; numbers with the model will be added
+after a server run (the script needs only the model, not the database; `loadtest` is not in the image, so it is
+mounted from the host):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.embeddings.yml run --rm --no-deps \
+  --entrypoint python -v "$PWD/loadtest:/srv/loadtest:ro" bot \
+  loadtest/eval_semantic.py --sweep --verbose > loadtest/results/semantic_eval.txt
+```
+
 ### Command line
 
 ```bash
@@ -141,6 +200,8 @@ python -m app check                  # verify the token (GET /me)
 python -m app subscribe              # subscribe the webhook to WEBHOOK_URL
 python -m app commands               # update the bot command menu
 python -m app copy-data <db url>     # copy data from another database (SQLite → PostgreSQL)
+python -m app embeddings reindex     # compute FAQ card vectors (EMBEDDINGS=on; --all recomputes everything)
+python -m app embeddings status      # how many cards have vectors, is pgvector available
 docker run --rm -e MAX_BOT_TOKEN=<token> ghcr.io/dimon0804/peremena check
 ```
 

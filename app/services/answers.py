@@ -131,7 +131,7 @@ async def answer(uid: int, text: str, tz: str | None = None, *, learn: bool = Tr
     if parent_chats:
         seen = {e.id for e in entries}
         entries += [e for e in await faq.candidates_for_chats(parent_chats) if e.id not in seen]
-    hits = faq.rank(text, entries)
+    hits = await faq.rank_smart(text, entries)  # при EMBEDDINGS=on — ещё и по смыслу
     if hits and hits[0].score >= faq.ANSWER_SCORE:
         e = hits[0].item
         own = e.teacher_id == uid

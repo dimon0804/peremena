@@ -6,13 +6,16 @@
 from __future__ import annotations
 
 import html
+import logging
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, delete, or_, select
 
 from ..db import session, utcnow
-from ..models import ClassChat, FaqEntry, SchoolMember, User
+from ..models import ClassChat, FaqEmbedding, FaqEntry, SchoolMember, User
 from ..timeutil import fmt_date
-from . import search
+from . import search, semantic
+
+log = logging.getLogger(__name__)
 
 # Пороги уверенности
 ANSWER_SCORE = 0.55   # отвечаем сами в личке
@@ -29,6 +32,7 @@ async def add_entry(teacher_id: int, question: str, answer: str, keywords: str |
         )
         s.add(e)
         await s.flush()
+    semantic.schedule([e.id])  # вектор для поиска по смыслу — в фоне (только при EMBEDDINGS=on)
     # новая карточка отвечает на накопившиеся вопросы — убираем их из списка «без ответа»
     from . import faq_learning
 
@@ -45,7 +49,8 @@ async def update_entry(entry_id: int, teacher_id: int, **fields) -> FaqEntry | N
             if k in fields and fields[k] is not None:
                 setattr(e, k, fields[k] if k not in ("chat_id", "school_id") else (fields[k] or None))
         e.updated_at = utcnow()
-        return e
+    semantic.schedule([e.id])
+    return e
 
 
 async def delete_entry(entry_id: int, teacher_id: int) -> bool:
@@ -53,6 +58,7 @@ async def delete_entry(entry_id: int, teacher_id: int) -> bool:
         e = await s.get(FaqEntry, entry_id)
         if e is None or e.teacher_id != teacher_id:
             return False
+        await s.execute(delete(FaqEmbedding).where(FaqEmbedding.faq_id == entry_id))
         await s.delete(e)
         return True
 
@@ -105,8 +111,25 @@ async def candidates_for_chats(chat_ids: list[int]) -> list[FaqEntry]:
 
 
 def rank(query: str, entries: list[FaqEntry], limit: int = 3) -> list[search.Hit[FaqEntry]]:
+    """Детерминированный поиск: только слова. Им же отвечаем в общем чате — там нужен почти дословный вопрос."""
     return search.rank(query, entries, lambda e: e.keywords, lambda e: e.question, limit=limit,
                        min_score=SUGGEST_SCORE)
+
+
+async def rank_smart(query: str, entries: list[FaqEntry], limit: int = 3) -> list[search.Hit[FaqEntry]]:
+    """Поиск для лички и мини-приложения. При EMBEDDINGS=off — ровно rank(). При on — rank() плюс косинус
+    эмбеддингов (semantic.hybrid_rank): помогает найти карточку, спрошенную другими словами. Ответ — всё
+    так же текст учителя; при любой ошибке модели или базы — молча как rank()."""
+    if not semantic.enabled() or not entries:
+        return rank(query, entries, limit)
+    try:
+        cos = await semantic.similarities(query, entries)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("семантический поиск недоступен, ищу по словам: %s", exc)
+        return rank(query, entries, limit)
+    return semantic.hybrid_rank(query, entries, cos, key_of=lambda e: e.id, keywords_of=lambda e: e.keywords,
+                                body_of=lambda e: e.question, limit=limit, min_score=SUGGEST_SCORE,
+                                answer=ANSWER_SCORE, ceiling=GROUP_SCORE - 0.01)
 
 
 async def mark_hit(entry_id: int) -> None:

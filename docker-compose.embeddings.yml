@@ -1,0 +1,22 @@
+# Семантический поиск по справочнику (опционально): образ с моделью rubert-tiny2 и PostgreSQL с pgvector.
+#   docker compose -f docker-compose.yml -f docker-compose.embeddings.yml up -d --build
+#   docker compose -f docker-compose.yml -f docker-compose.embeddings.yml exec bot python -m app embeddings reindex
+#
+# База на pgvector/pgvector:pg16 (Debian) вместо postgres:16-alpine. Новая база создаётся как обычно.
+# Если в томе pgdata уже есть данные от alpine-образа — это та же версия PostgreSQL 16, но правила сортировки
+# строк у alpine (musl) и Debian (glibc) разные: после первого запуска выполните
+#   docker compose -f docker-compose.yml -f docker-compose.embeddings.yml exec db \
+#     psql -U peremena -d peremena -c "REINDEX DATABASE peremena;"
+# Без pgvector (обычный образ базы) поиск тоже работает — косинус тогда считает сам бот.
+services:
+  bot:
+    build:
+      context: .
+      args:
+        WITH_EMBEDDINGS: "1"
+    image: peremena:${PEREMENA_TAG:-local}-ml
+    environment:
+      EMBEDDINGS: "on"
+
+  db:
+    image: pgvector/pgvector:pg16
