@@ -181,15 +181,15 @@ only if the extension is available. The final score is the maximum of the word s
 the same scale, with the same FAQ thresholds; the cosine score always stays below the group-chat threshold.
 
 Settings: `EMBEDDINGS` (`off`), `EMBEDDINGS_BACKEND` (`auto`/`onnx`/`st`), `EMBEDDINGS_MODEL_DIR`
-(`/srv/models/rubert-tiny2`), `EMBEDDINGS_THREADS` (`1`), `EMBEDDINGS_ANSWER_COS` (`0.80`),
-`EMBEDDINGS_SUGGEST_COS` (`0.65`), `EMBEDDINGS_MARGIN` (`0.05`).
+(`/srv/models/rubert-tiny2`), `EMBEDDINGS_THREADS` (`1`), `EMBEDDINGS_ANSWER_COS` (`0.76`),
+`EMBEDDINGS_SUGGEST_COS` (`0.61`), `EMBEDDINGS_MARGIN` (`0.08`).
 
-**Quality has not been measured on the real model yet.** The thresholds are cautious starting values.
-`loadtest/eval_semantic.py` has 15 FAQ cards and 54 hand-written parent questions (46 answerable, many of them
-paraphrased; 8 not covered by the FAQ); it compares off vs on and sweeps the thresholds. Without embeddings the bot
-gives a correct confident answer to 6 of the 46 and no wrong confident answers; numbers with the model will be added
-after a server run (the script needs only the model, not the database; `loadtest` is not in the image, so it is
-mounted from the host):
+**Quality on the real model.** `loadtest/eval_semantic.py` has 15 FAQ cards and 54 hand-written parent questions
+(46 answerable, many of them paraphrased; 8 not covered by the FAQ). Server run, raw output in
+`loadtest/results/semantic_eval.txt`: words only — 6 of 46 correct confident answers; words + rubert-tiny2 with the
+default thresholds (0.76 / 0.61 / 0.08) — **20 of 46**, still **0** wrong confident answers, and only 2 questions
+go to the teacher without suggestions (35 without embeddings). The model takes about 190 MiB per process and 2–3 ms
+per question; the image with the model is 844 MB vs 310 MB. Re-check the thresholds on your own FAQ:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.embeddings.yml run --rm --no-deps \

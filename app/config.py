@@ -109,10 +109,10 @@ class Settings(BaseSettings):
     embeddings_model: str = "cointegrated/rubert-tiny2"
     embeddings_model_dir: str = str(BASE_DIR / "models" / "rubert-tiny2")  # в образе: /srv/models/rubert-tiny2
     embeddings_threads: int = 1
-    # Пороги косинуса (подбираются loadtest/eval_semantic.py на настоящей модели)
-    embeddings_answer_cos: float = 0.80
-    embeddings_suggest_cos: float = 0.65
-    embeddings_margin: float = 0.05
+    # Пороги косинуса подобраны loadtest/eval_semantic.py на настоящей модели (loadtest/results/semantic_eval.txt)
+    embeddings_answer_cos: float = 0.76
+    embeddings_suggest_cos: float = 0.61
+    embeddings_margin: float = 0.08
 
     # --- Прочее ---
     default_tz: str = "Europe/Moscow"

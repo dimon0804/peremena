@@ -61,6 +61,12 @@ def main() -> int:
             return self.m(input_ids=input_ids, attention_mask=attention_mask,
                           token_type_ids=token_type_ids).last_hidden_state
 
+    # эталон считаем до экспорта: torch.onnx.export меняет состояние модели, и вывод после него уже не эталон
+    with torch.no_grad():
+        enc = tok(CHECK, padding=True, truncation=True, max_length=128, return_tensors="pt")
+        ref = model(**enc).last_hidden_state[:, 0, :]
+        ref = torch.nn.functional.normalize(ref).numpy()
+
     sample = tok(CHECK[:2], padding=True, return_tensors="pt")
     names = ["input_ids", "attention_mask", "token_type_ids"]
     axes = {n: {0: "batch", 1: "seq"} for n in names} | {"last_hidden_state": {0: "batch", 1: "seq"}}
@@ -77,10 +83,6 @@ def main() -> int:
                                         "свёртка CLS, векторы нормируются\n", encoding="utf-8")
 
     # сверка: исходная модель (torch) против ONNX — тем же кодом, что у сервиса
-    with torch.no_grad():
-        enc = tok(CHECK, padding=True, truncation=True, max_length=128, return_tensors="pt")
-        ref = model(**enc).last_hidden_state[:, 0, :]
-        ref = torch.nn.functional.normalize(ref).numpy()
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     try:
         from app.services.semantic import OnnxEmbedder

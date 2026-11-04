@@ -71,7 +71,7 @@ def _pooling_of(model_dir: Path, default: str = "cls") -> str:
 
 
 class OnnxEmbedder:
-    """rubert-tiny2 в ONNX: onnxruntime + tokenizers, около 30 МБ зависимостей вместо гигабайта torch.
+    """rubert-tiny2 в ONNX: onnxruntime + tokenizers, без гигабайта torch: в процессе модель занимает около 190 МиБ, вектор вопроса — 2–3 мс.
 
     В папке модели нужны model.onnx (выход — last_hidden_state) и tokenizer.json; 1_Pooling/config.json —
     по желанию (по нему выбирается CLS или среднее)."""
@@ -156,9 +156,9 @@ def load_embedder(settings) -> Embedder:
 class Thresholds:
     """Пороги косинуса. Значения по умолчанию — осторожные, подбираются замером
     (loadtest/eval_semantic.py) на настоящей модели: EMBEDDINGS_ANSWER_COS, _SUGGEST_COS, _MARGIN."""
-    answer_cos: float = 0.80   # от него карточку можно отдать как уверенный ответ
-    suggest_cos: float = 0.65  # от него карточку можно предложить «возможно, вы имели в виду»
-    margin: float = 0.05       # уверенный ответ по смыслу — только с таким отрывом от второй карточки
+    answer_cos: float = 0.76   # от него карточку можно отдать как уверенный ответ
+    suggest_cos: float = 0.61  # от него карточку можно предложить «возможно, вы имели в виду»
+    margin: float = 0.08       # уверенный ответ по смыслу — только с таким отрывом от второй карточки
 
 
 _embedder: Embedder | None = None
