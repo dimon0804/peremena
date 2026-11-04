@@ -113,26 +113,44 @@ class Hit(Generic[T]):
 UNSURE_CAP = 0.5  # потолок оценки, если половина значимых слов вопроса не нашлась (ниже порога «отвечаю сам»)
 
 
+@lru_cache(maxsize=20000)
+def _doc_features(keywords: str, body: str) -> tuple[frozenset, frozenset, tuple, frozenset]:
+    """Всё, что зависит только от карточки: основы слов текста и ключевых слов, ключевые фразы, триграммы.
+    Карточки одни и те же от вопроса к вопросу — считаем один раз (кэш по тексту: правка карточки
+    даёт новый ключ). Без кэша поиск по общей базе школы из 500 карточек занимал ~14 мс процессора
+    на вопрос — всё это время процесс не принимает другие события."""
+    doc_stems = frozenset(content_stems(body))
+    phrases = []
+    kw_stems: set[str] = set()
+    for kw in split_keywords(keywords):
+        ks = content_stems(kw)
+        kw_stems.update(ks)
+        if ks:
+            phrases.append((frozenset(ks), len(ks)))
+    return doc_stems, frozenset(kw_stems), tuple(phrases), frozenset(trigrams(body + " " + keywords))
+
+
+@lru_cache(maxsize=2000)
+def _query_features(query: str) -> tuple[tuple, frozenset]:
+    return tuple(content_stems(query)), frozenset(trigrams(query))
+
+
 def score_text(query: str, keywords: str, body: str) -> float:
     """Оценка 0..1 совпадения запроса с карточкой (ключевые слова + текст вопроса)."""
-    q = content_stems(query)
+    q, q_tri = _query_features(query)
     if not q:
         return 0.0
     qset = set(q)
-    doc_stems = set(content_stems(body))
-    kw_list = split_keywords(keywords)
-    kw_stems = set()
+    doc_stems, kw_stems, phrases, doc_tri = _doc_features(keywords or "", body or "")
     phrase_bonus = 0.0
-    for kw in kw_list:
-        ks = content_stems(kw)
-        kw_stems.update(ks)
-        if ks and set(ks) <= qset:
+    for ks, n in phrases:
+        if ks <= qset:
             # ключевая фраза целиком есть в вопросе — сильный сигнал
-            phrase_bonus = max(phrase_bonus, 0.35 if len(ks) > 1 else 0.25)
+            phrase_bonus = max(phrase_bonus, 0.35 if n > 1 else 0.25)
     all_stems = doc_stems | kw_stems
     overlap = len(qset & all_stems) / len(qset)
     kw_overlap = len(qset & kw_stems) / len(qset) if kw_stems else 0.0
-    tri = trigram_similarity(query, body + " " + keywords)
+    tri = len(q_tri & doc_tri) / len(q_tri | doc_tri) if q_tri and doc_tri else 0.0
     score = 0.55 * overlap + 0.25 * kw_overlap + 0.2 * tri + phrase_bonus
     # Штраф за значимые слова вопроса, которых нет в карточке: «форма на экскурсию» ≠ «форма на физкультуру».
     # Совпало одно слово из двух — это повод предложить вариант, но не отвечать уверенно.

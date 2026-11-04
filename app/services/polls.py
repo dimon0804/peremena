@@ -13,14 +13,16 @@ import logging
 import time
 from datetime import timedelta
 
-from sqlalchemy import select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy import update as sa_update
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import noload
 
 from .. import keyboards as kb
 from ..core import ctx
 from ..db import session
 from ..max_api import MaxApiError
-from ..models import ClassChat, Poll, PollTarget, User
+from ..models import ClassChat, Member, Poll, PollTarget, User
 from ..timeutil import fmt_dt, local_now, to_local, to_utc, utcnow
 from . import chats, stats
 from .quiet import notify_teacher
@@ -137,8 +139,10 @@ async def get_poll(poll_id: int) -> Poll | None:
         return await s.get(Poll, poll_id)
 
 
-# сборы, которые рассылаются в этом процессе прямо сейчас (возобновление их не трогает)
-_dispatching: set[int] = set()
+# Рассылка одного сбора идёт ровно в одном месте: отметка в общем хранилище (Redis) видна всем
+# экземплярам — досылка в планировщике не начнёт второй круг, пока первый не закончен.
+DISPATCH_KEY = "dispatching:{}"
+DISPATCH_TTL = 15 * 60  # если процесс упал посреди рассылки, через столько досылка подхватит сбор
 SEND_CONCURRENCY = 5  # одновременных отправок: общий лимит MAX держит ограничитель клиента
 
 
@@ -163,13 +167,17 @@ async def send_poll(poll_id: int) -> dict:
     """Рассылает сбор: каждому в личку + одно сообщение в чат класса (как запасной путь).
     Можно вызывать повторно: уже доставленным второй раз не пишем — так рассылка, прерванная
     перезапуском, продолжается с места остановки."""
-    if poll_id in _dispatching:
+    kv = ctx().kv
+    key = DISPATCH_KEY.format(poll_id)
+    if not await kv.add_once(key, ttl=DISPATCH_TTL):
         return {"total": 0, "delivered": 0, "failed": 0, "synced": 0, "group_posted": False, "busy": True}
-    _dispatching.add(poll_id)
     try:
         return await _send_poll(poll_id)
     finally:
-        _dispatching.discard(poll_id)
+        try:
+            await kv.delete(key)
+        except Exception:
+            log.warning("Не снята отметка рассылки сбора %s — истечёт сама", poll_id)
 
 
 async def _send_poll(poll_id: int) -> dict:
@@ -239,11 +247,15 @@ async def resume_dispatch() -> int:
     до утра и время пришло, — досылаем. Возвращает, сколько сборов обработано."""
     now = utcnow()
     async with session() as s:
-        rows = (await s.scalars(select(Poll).where(Poll.dispatched.is_(False), Poll.closed.is_(False)))).all()
+        # только то, что пора слать: отложенные на будущее не поднимаем; списки получателей не грузим
+        rows = (await s.scalars(
+            select(Poll).options(noload(Poll.targets))
+            .where(Poll.dispatched.is_(False), Poll.closed.is_(False),
+                   or_(Poll.send_at.is_(None), Poll.send_at <= now))
+            .order_by(Poll.id).limit(RESUME_BATCH)
+        )).all()
     done = 0
     for p in rows:
-        if p.id in _dispatching:
-            continue
         if p.send_at is not None:
             if p.send_at > now:
                 continue
@@ -310,36 +322,62 @@ async def after_answer(poll: Poll, uid: int, opt: int, status: str) -> None:
                              from_user_id=uid, from_name=name, raw_text=f"«{poll.title}»: {option}")
     if status != "ok" or poll.closed:
         return
+    # Почти каждый ответ — не последний: проверяем «все ли ответили» одним COUNT, без загрузки списка
+    # и сверки со списком класса. Сверка (backfill) нужна, только когда счётчик сошёлся: новые люди в списке
+    # могут лишь отменить «все ответили», но не создать его.
+    answered, total = await answer_counts(poll.id)
+    if not total or answered < total:
+        return
     chat = await chats.get_chat(poll.chat_id)
     if not chat or not chat.bot_is_admin:
         return  # без списка класса «все» — это только те, кто ответил; такое уведомление обманывает
     await backfill_targets(poll.chat_id)
-    poll = await get_poll(poll.id)
-    answered, total, _ = counts(poll)
+    answered, total = await answer_counts(poll.id)
     # два последних ответа почти одновременно — оба видят «все ответили»; сообщаем учителю один раз
     if total and answered == total and await ctx().kv.add_once(f"allans:{poll.id}:{total}", ttl=30 * 24 * 3600):
+        poll = await get_poll(poll.id)
         text, buttons = await status_card(poll)
         await notify_teacher(poll.teacher_id, "🎉 Ответили все!\n\n" + text, kind="report",
                              chat_id=poll.chat_id, raw_text=f"«{poll.title}»: ответили все {total}",
                              buttons=buttons)
 
 
+async def answer_counts(poll_id: int) -> tuple[int, int]:
+    """(ответили, всего) по сбору — одним запросом, без загрузки списка получателей."""
+    async with session() as s:
+        row = (await s.execute(
+            select(func.count(PollTarget.answer), func.count(PollTarget.id)).where(PollTarget.poll_id == poll_id)
+        )).one()
+    return int(row[0] or 0), int(row[1] or 0)
+
+
 async def backfill_targets(chat_id: int) -> int:
     """Добавляет в открытые сборы чата тех, кто есть в списке класса, но не попал в рассылку
-    (пришёл в чат позже или список был недоступен, пока бот не стал администратором)."""
+    (пришёл в чат позже или список был недоступен, пока бот не стал администратором).
+    Списки получателей не грузятся: база сама отдаёт только недостающих участников."""
     async with session() as s:
-        open_polls = (await s.scalars(select(Poll).where(Poll.chat_id == chat_id, Poll.closed.is_(False)))).all()
+        open_polls = (await s.execute(
+            select(Poll.id, Poll.teacher_id).where(Poll.chat_id == chat_id, Poll.closed.is_(False))
+        )).all()
     if not open_polls:
         return 0
+    me = ctx().bot_user_id
     added = 0
-    for p in open_polls:
-        members = await chats.class_list(chat_id, exclude={p.teacher_id})
-        known = {t.user_id for t in p.targets}
-        async with session() as s:
-            for m in members:
-                if m.user_id not in known:
-                    s.add(PollTarget(poll_id=p.id, user_id=m.user_id, name=m.name))
-                    added += 1
+    for pid, teacher_id in open_polls:
+        known = select(PollTarget.user_id).where(PollTarget.poll_id == pid)
+        try:
+            async with session() as s:
+                missing = (await s.scalars(select(Member).where(
+                    Member.chat_id == chat_id, Member.present.is_(True), Member.is_bot.is_(False),
+                    Member.is_owner.is_(False), Member.user_id != teacher_id, Member.user_id != me,
+                    Member.user_id.not_in(known),
+                ))).all()
+                for m in missing:
+                    s.add(PollTarget(poll_id=pid, user_id=m.user_id, name=m.name))
+                n = len(missing)
+        except IntegrityError:
+            continue  # параллельная сверка (другой экземпляр) уже добавила этих людей
+        added += n
     return added
 
 
@@ -651,6 +689,8 @@ async def user_answer(poll: Poll, user_id: int) -> int | None:
 
 DAY_START, DAY_END = 8, 21  # родителям пишем только днём: граница рабочего дня работает в обе стороны
 TICK_BUDGET = 50  # секунд на один проход tick (запускается раз в минуту)
+TICK_BATCH = 500  # сборов за один запрос к базе: память не растёт с числом открытых сборов в регионе
+RESUME_BATCH = 200
 
 
 def _is_daytime(tz: str) -> bool:
@@ -723,10 +763,8 @@ async def tick() -> None:
     except Exception:
         log.exception("Отложенные напоминания")
     now = utcnow()
-    async with session() as s:
-        polls = (await s.scalars(select(Poll).where(Poll.closed.is_(False), Poll.deadline.is_not(None))
-                                 .order_by(Poll.deadline))).all()
-    for p in polls:
+    tz_cache: dict[int, str] = {}
+    async for p in due_polls(now):
         if time.monotonic() - started > TICK_BUDGET:
             log.warning("tick сборов не уложился в %s с — продолжим через минуту", TICK_BUDGET)
             break
@@ -739,9 +777,10 @@ async def tick() -> None:
             kind = _due_reminder(p, now)
             if kind is None:
                 continue
-            teacher = await _teacher(p)
-            tz = teacher.tz if teacher else ctx().settings.default_tz
-            if not _is_daytime(tz):
+            if p.teacher_id not in tz_cache:
+                teacher = await _teacher(p)
+                tz_cache[p.teacher_id] = teacher.tz if teacher else ctx().settings.default_tz
+            if not _is_daytime(tz_cache[p.teacher_id]):
                 continue  # ночью не пишем: напоминание уйдёт утром, если срок ещё не наступит
             # одна попытка в 15 минут: при сбое MAX не долбим родителей и API каждую минуту
             if not await ctx().kv.add_once(f"rmt:{p.id}:{kind}", ttl=15 * 60):
@@ -755,6 +794,32 @@ async def tick() -> None:
                 await _mark(p.id, "reminded_2h")
         except Exception:
             log.exception("Обработка сбора %s", p.id)
+
+
+async def due_polls(now, batch: int = TICK_BATCH):
+    """Сборы, по которым tick-у есть дело: срок прошёл или подошло время напоминания.
+    Остальные открытые сборы (их в регионе десятки тысяч) не читаются вовсе. Выборка — пачками
+    по курсору (срок, id), без списков получателей: они нужны только тем, кому напоминаем."""
+    cond = and_(
+        Poll.closed.is_(False), Poll.deadline.is_not(None),
+        or_(
+            Poll.deadline <= now,
+            and_(Poll.dispatched.is_(True), Poll.reminded_2h.is_(False), Poll.deadline <= now + timedelta(hours=2)),
+            and_(Poll.dispatched.is_(True), Poll.reminded_24h.is_(False), Poll.deadline <= now + timedelta(hours=24)),
+        ),
+    )
+    after: tuple | None = None
+    while True:
+        q = select(Poll).options(noload(Poll.targets)).where(cond)
+        if after is not None:
+            q = q.where(or_(Poll.deadline > after[0], and_(Poll.deadline == after[0], Poll.id > after[1])))
+        async with session() as s:
+            rows = (await s.scalars(q.order_by(Poll.deadline, Poll.id).limit(batch))).all()
+        for p in rows:
+            yield p
+        if len(rows) < batch:
+            return
+        after = (rows[-1].deadline, rows[-1].id)
 
 
 async def _mark(poll_id: int, field: str) -> None:

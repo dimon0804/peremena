@@ -414,9 +414,11 @@ def test_health_checks_and_hides_details(web, monkeypatch):
         assert r.status_code == 200 and r.json() == {"status": "ok"}
 
         async def kill_polling():
-            for t in client.app.state.background:
-                if isinstance(t, asyncio.Task):
-                    t.cancel()
+            from app.updates import Background
+
+            for b in client.app.state.background:
+                if isinstance(b, Background) and b.polling_task is not None:  # long polling живёт у лидера
+                    b.polling_task.cancel()
             await asyncio.sleep(0.05)
         client.portal.call(kill_polling)
         r = client.get("/health")

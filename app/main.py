@@ -13,14 +13,15 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import __version__, db
+from . import __version__, db, updates
 from .bot.common import COMMANDS
 from .bot.router import handle_update
 from .config import BASE_DIR, get_settings
 from .core import Ctx, set_ctx
 from .max_api import MaxApiError, MaxClient
 from .state import make_kv
-from .updates import drain, ensure_webhook, make_scheduler, polling_loop, spawn
+from .leader import Leader, make_backend
+from .updates import JOB_OPTS, Background, drain, leader_only, make_scheduler, spawn
 from .webapp.api import router as api_router
 from .webapp.site_api import router as site_api_router
 
@@ -34,30 +35,50 @@ def maintenance_scheduler(c: Ctx):
     from .services import demo, websession
 
     sched = AsyncIOScheduler(timezone="UTC")
-    opts = {"max_instances": 1, "coalesce": True, "misfire_grace_time": 120}
-    sched.add_job(demo.cleanup, "interval", hours=1, id="demo", **opts)
-    sched.add_job(websession.cleanup, "interval", hours=1, id="sessions", **opts)
+    opts = JOB_OPTS
+    sched.add_job(leader_only(demo.cleanup), "interval", hours=1, id="demo", **opts)
+    sched.add_job(leader_only(websession.cleanup), "interval", hours=1, id="sessions", **opts)
     if hasattr(c.kv, "cleanup"):
-        sched.add_job(c.kv.cleanup, "interval", hours=1, id="kv", **opts)
+        sched.add_job(leader_only(c.kv.cleanup), "interval", hours=1, id="kv", **opts)
     return sched
+
+
+async def _start_background(c: Ctx, sched, polling: bool, subscribe_webhook: bool) -> tuple[Background, Leader]:
+    """Планировщик и long polling — только в процессе-лидере (замок в Redis / PostgreSQL)."""
+    bg = Background(c, sched, polling=polling, subscribe_webhook=subscribe_webhook)
+    leader = Leader(make_backend(c.kv, db.engine(), c.settings.max_bot_token), ttl=LEADER_TTL,
+                    on_elected=bg.on_elected, on_demoted=bg.on_demoted)
+    updates.current_leader = leader
+    await leader.step()  # первый шаг сразу: одиночный экземпляр начинает работу без задержки
+    leader.start()
+    return bg, leader
+
+
+LEADER_TTL = 30.0
 
 
 async def startup() -> tuple[Ctx, list]:
     settings = get_settings()
     await db.init_db(settings.database_url)
     kv = await make_kv(settings.redis_url)
-    api = MaxClient(settings.max_bot_token, settings.max_api_url, settings.extra_ca_file)
+    api = MaxClient(settings.max_bot_token, settings.max_api_url, settings.extra_ca_file, rps=settings.max_rps)
+    if kv.redis is not None:
+        api.use_shared_limiter(kv.redis)  # один лимит MAX API на все экземпляры и воркеры
     c = Ctx(settings=settings, api=api, kv=kv, bot_username=settings.bot_username)
     set_ctx(c)
     background: list = []
+    role = settings.role.strip().lower() or "all"
+    if role not in ("all", "web", "worker"):
+        log.error("ROLE=%s не поддерживается (all | web | worker) — работаю как all", settings.role)
+    log.info("Роль процесса: %s; база: %s, пул: %s; состояние: %s", role, db.dialect(),
+             db.pool_status() or "—", type(kv).__name__)
     if settings.dev_auth and settings.is_public:
         log.error("!!! DEV_AUTH=true при заданном PUBLIC_URL/WEBHOOK_URL — это вход под любым пользователем. "
                   "Режим разработки ИГНОРИРУЕТСЯ; уберите DEV_AUTH из настроек прода.")
     if not settings.max_bot_token:
         log.warning("MAX_BOT_TOKEN не задан — работает только веб-часть (API и мини-приложение)")
-        sched = maintenance_scheduler(c)  # демо и сессии убираем и без бота
-        sched.start()
-        background.append(sched)
+        if settings.runs_background:  # демо и сессии убираем и без бота
+            background += await _start_background(c, maintenance_scheduler(c), polling=False, subscribe_webhook=False)
         return c, background
     try:
         me = await api.get_me()
@@ -67,18 +88,15 @@ async def startup() -> tuple[Ctx, list]:
         log.info("Бот: %s (@%s, id=%s)", c.bot_name, c.bot_username, c.bot_user_id)
     except MaxApiError as e:
         log.error("GET /me не удался: %s — проверьте токен и доступ к %s", e, settings.max_api_url)
-    try:
-        await api.set_commands(COMMANDS)
-    except MaxApiError as e:
-        log.warning("Не удалось обновить меню команд: %s", e)
-
-    sched = make_scheduler(c)
-    sched.start()
-    background.append(sched)
-    if settings.mode == "webhook":
-        await ensure_webhook(c, force=True)
+    if settings.runs_background:
+        try:
+            await api.set_commands(COMMANDS)
+        except MaxApiError as e:
+            log.warning("Не удалось обновить меню команд: %s", e)
+        background += await _start_background(c, make_scheduler(c), polling=settings.mode == "polling",
+                                               subscribe_webhook=settings.mode == "webhook")
     else:
-        background.append(asyncio.create_task(polling_loop(c)))
+        log.info("ROLE=web: планировщик и long polling работают в другом экземпляре (ROLE=worker или all)")
     c.started = True
     log.info("Режим получения событий: %s", settings.mode)
     return c, background
@@ -95,11 +113,12 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        for b in background:  # сначала лидер отпускает замок — другой экземпляр подхватит задачи сразу
+            if isinstance(b, Leader):
+                await b.stop()
         for b in background:
-            if isinstance(b, asyncio.Task):
-                b.cancel()
-            else:
-                b.shutdown(wait=False)
+            if isinstance(b, Background):
+                b.shutdown()
         await drain()  # начатые обработки (рассылка, ответ на кнопку) доводим до конца, пока живы API и база
         await c.api.close()
         await c.kv.close()
@@ -231,14 +250,19 @@ async def health():
     Подробности — только в режиме разработки: снаружи незачем знать версию и устройство сервиса."""
     c = app.state.ctx
     checks = {"db": await _db_ok(), "kv": await _kv_ok(c)}
-    polling = [b for b in getattr(app.state, "background", []) if isinstance(b, asyncio.Task)]
-    if polling:  # long polling упал — бот перестал получать сообщения
-        checks["polling"] = not any(t.done() for t in polling)
+    background = getattr(app.state, "background", [])
+    leader = next((b for b in background if isinstance(b, Leader)), None)
+    for b in background:
+        if isinstance(b, Background) and b.polling_ok() is not None:  # long polling упал — события не приходят
+            checks["polling"] = b.polling_ok()
+    if leader is not None and leader._task is not None and leader._task.done():
+        checks["leader"] = False  # цикл выборов умер — процесс не подхватит задачи, если лидер упадёт
     ok = all(checks.values())
     body: dict = {"status": "ok" if ok else "degraded"}
     if c.settings.dev_mode:
         body |= {"checks": checks, "version": __version__, "mode": c.settings.mode, "bot": c.bot_username,
-                 "db": db.dialect(), "kv": type(c.kv).__name__, "bot_ready": c.started}
+                 "db": db.dialect(), "kv": type(c.kv).__name__, "bot_ready": c.started,
+                 "role": c.settings.role, "leader": bool(leader and leader.is_leader), "pool": db.pool_status()}
     return JSONResponse(body, status_code=200 if ok else 503)
 
 

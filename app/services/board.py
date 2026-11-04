@@ -197,9 +197,10 @@ async def publish(ann_id: int) -> bool:
 async def tick() -> None:
     """Раз в минуту: публикуем отложенные записи, время которых пришло."""
     async with session() as s:
+        # пачкой: утром в 8:00 по Москве разом выходят отложенные записи тысяч классов — остальное следующим проходом
         due = (await s.scalars(select(Announcement).where(
             Announcement.published.is_(False), Announcement.publish_at.is_not(None), Announcement.publish_at <= utcnow(),
-        ))).all()
+        ).order_by(Announcement.publish_at).limit(500))).all()
     for a in due:
         try:
             await publish(a.id)

@@ -1,6 +1,7 @@
 """Командная строка «Перемены».
 
     python -m app run              — запустить сервис (бот + API + мини-приложение)
+    python -m app run --role web --workers 4 — только HTTP, 4 процесса (планировщик — в ROLE=worker)
     python -m app check            — проверить токен и доступ к MAX API (GET /me)
     python -m app subscribe        — подписать вебхук на WEBHOOK_URL
     python -m app unsubscribe --all — снять все вебхук-подписки (нужно для long polling)
@@ -15,6 +16,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 
 from .config import get_settings
@@ -155,12 +157,26 @@ async def _digest(user_id: int) -> int:
         await db.close_db()
 
 
+def _workers(n: int, s) -> int:
+    """Несколько процессов uvicorn — только с общим хранилищем: им нужны общий замок лидера,
+    общий лимит MAX API и общая дедупликация событий. На SQLite без Redis — один процесс."""
+    n = max(1, int(n or 1))
+    shared = bool(s.redis_url) or s.database_url.startswith(("postgres", "postgresql"))
+    if n > 1 and not shared:
+        print("WEB_CONCURRENCY>1 требует Redis или PostgreSQL — запускаю один процесс", file=sys.stderr)
+        return 1
+    return n
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="python -m app", description="«Перемена» — бот классного руководителя в MAX")
     sub = p.add_subparsers(dest="cmd")
     r = sub.add_parser("run", help="запустить сервис")
     r.add_argument("--host", default=None)
     r.add_argument("--port", type=int, default=None)
+    r.add_argument("--workers", type=int, default=None, help="процессов uvicorn (по умолчанию WEB_CONCURRENCY)")
+    r.add_argument("--role", choices=("all", "web", "worker"), default=None,
+                   help="all — всё; web — только HTTP; worker — планировщик и long polling (по умолчанию ROLE)")
     sub.add_parser("check", help="проверить токен (GET /me)")
     sub.add_parser("subscribe", help="подписать вебхук на WEBHOOK_URL")
     u = sub.add_parser("unsubscribe", help="снять вебхук")
@@ -179,9 +195,16 @@ def main(argv: list[str] | None = None) -> int:
         import uvicorn
 
         s = get_settings()
+        if getattr(args, "role", None):
+            os.environ["ROLE"] = args.role  # воркеры uvicorn читают настройки заново — передаём через окружение
+            get_settings.cache_clear()
+            s = get_settings()
+        workers = _workers(getattr(args, "workers", None) or s.web_concurrency, s)
         uvicorn.run("app.main:app", host=getattr(args, "host", None) or s.host,
                     port=getattr(args, "port", None) or s.port, proxy_headers=True,
-                    forwarded_allow_ips=s.forwarded_allow_ips)
+                    forwarded_allow_ips=s.forwarded_allow_ips, workers=workers,
+                    # пик вебхуков: очередь соединений и потолок одновременных запросов на процесс
+                    backlog=2048, timeout_keep_alive=15)
         return 0
     if args.cmd == "check":
         return asyncio.run(_check())

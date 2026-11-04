@@ -54,6 +54,8 @@ def display_name(first: str | None, last: str | None) -> str:
 class ClassChat(Base):
     """Учебный чат, куда добавлен бот (чат с родителями / учениками)."""
     __tablename__ = "chats"
+    # «классы учителя» и «кто классный руководитель» — на каждом событии и в утреннем отборе
+    __table_args__ = (Index("ix_chats_teacher_active", "teacher_id", "active"),)
 
     chat_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
     title: Mapped[str] = mapped_column(String(300), default="")
@@ -67,7 +69,10 @@ class ClassChat(Base):
 
 class Member(Base):
     __tablename__ = "members"
-    __table_args__ = (UniqueConstraint("chat_id", "user_id"),)
+    __table_args__ = (
+        UniqueConstraint("chat_id", "user_id"),
+        Index("ix_members_user_present", "user_id", "present"),  # классы родителя: «Мои сборы», вопросы
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     chat_id: Mapped[int] = mapped_column(BigInteger, index=True)
@@ -84,6 +89,12 @@ class Member(Base):
 # ---------------------------------------------------------------- «Перекличка»
 class Poll(Base):
     __tablename__ = "polls"
+    __table_args__ = (
+        Index("ix_polls_open_deadline", "closed", "deadline"),        # tick: срок и напоминания
+        Index("ix_polls_chat_open", "chat_id", "closed"),              # открытые сборы класса
+        Index("ix_polls_teacher_open", "teacher_id", "closed", "created_at"),  # список сборов учителя
+        Index("ix_polls_dispatch", "dispatched", "closed"),            # досылка прерванных рассылок
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     teacher_id: Mapped[int] = mapped_column(BigInteger, index=True)
@@ -113,7 +124,10 @@ class Poll(Base):
 
 class PollTarget(Base):
     __tablename__ = "poll_targets"
-    __table_args__ = (UniqueConstraint("poll_id", "user_id"),)
+    __table_args__ = (
+        UniqueConstraint("poll_id", "user_id"),
+        Index("ix_poll_targets_user_answer", "user_id", "answer"),  # сборы, ждущие ответа родителя
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     poll_id: Mapped[int] = mapped_column(ForeignKey("polls.id", ondelete="CASCADE"), index=True)
@@ -173,6 +187,7 @@ class Material(Base):
 class InboxItem(Base):
     """То, что пришло учителю вне рабочего окна и ждёт утренней сводки."""
     __tablename__ = "inbox"
+    __table_args__ = (Index("ix_inbox_teacher_pending", "teacher_id", "delivered", "created_at"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     teacher_id: Mapped[int] = mapped_column(BigInteger, index=True)
@@ -190,6 +205,7 @@ class InboxItem(Base):
 # ---------------------------------------------------------------- «Счётчик пользы»
 class Metric(Base):
     __tablename__ = "metrics"
+    __table_args__ = (Index("ix_metrics_teacher_created", "teacher_id", "created_at"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     teacher_id: Mapped[int] = mapped_column(BigInteger, index=True)
@@ -249,6 +265,10 @@ class Campaign(Base):
 class Announcement(Base):
     """Домашнее задание или объявление. Бот отвечает по нему на «что задали?» и публикует в чат по расписанию."""
     __tablename__ = "announcements"
+    __table_args__ = (
+        Index("ix_announcements_due", "published", "publish_at"),       # отложенные публикации (tick)
+        Index("ix_announcements_chat_created", "chat_id", "created_at"),  # «что задали?» по классу
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     chat_id: Mapped[int] = mapped_column(BigInteger, index=True)
@@ -293,7 +313,10 @@ class KVEntry(Base):
 class Absence(Base):
     """Родитель отметил, что ребёнок не придёт. Учитель получает список утром, без сообщений в общем чате."""
     __tablename__ = "absences"
-    __table_args__ = (UniqueConstraint("chat_id", "user_id", "day", "child_name"),)
+    __table_args__ = (
+        UniqueConstraint("chat_id", "user_id", "day", "child_name"),
+        Index("ix_absences_chat_day", "chat_id", "day"),  # «кто сегодня не придёт» по классу
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     chat_id: Mapped[int] = mapped_column(BigInteger, index=True)
@@ -310,6 +333,7 @@ class OpenQuestion(Base):
     """Вопрос, на который в справочнике не нашлось ответа. Похожие вопросы группируются,
     и бот предлагает учителю сохранить ответ на самый частый."""
     __tablename__ = "open_questions"
+    __table_args__ = (Index("ix_open_questions_teacher_open", "teacher_id", "resolved", "created_at"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     teacher_id: Mapped[int] = mapped_column(BigInteger, index=True)

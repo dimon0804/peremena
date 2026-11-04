@@ -35,6 +35,24 @@ class Settings(BaseSettings):
     # --- Хранилища ---
     database_url: str = f"sqlite+aiosqlite:///{(BASE_DIR / 'data' / 'peremena.db').as_posix()}"
     redis_url: str = ""
+    # Пул соединений PostgreSQL на один процесс (воркер uvicorn). Итог на базу: экземпляры × воркеры ×
+    # (DB_POOL_SIZE + DB_MAX_OVERFLOW) — должен оставаться меньше max_connections сервера.
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+    db_pool_timeout: float = 30.0
+
+    # --- Масштабирование ---
+    # all — всё в одном процессе (как раньше); web — только HTTP (вебхук, API, сайт);
+    # worker — планировщик и long polling (HTTP остаётся только для /health).
+    # Планировщик и long polling работают ровно в одном процессе — лидере (замок в Redis или PostgreSQL).
+    role: str = "all"
+    # Процессов uvicorn в одном контейнере. Больше одного — только с Redis или PostgreSQL (нужен общий замок)
+    web_concurrency: int = 1
+    # Общий потолок запросов к MAX API в секунду на бота — один на все экземпляры (через Redis)
+    max_rps: float = 25.0
+    # Сколько событий MAX один процесс обрабатывает одновременно; остальные ждут очереди в памяти.
+    # Без потолка пик в тысячи событий выбирает весь пул базы, и обработчики падают по таймауту пула.
+    handler_concurrency: int = 64
 
     # --- Мини-приложение ---
     # Публичный https-адрес сервиса (тот же домен, что у вебхука). Нужен для ссылок на выгрузку.
@@ -66,6 +84,11 @@ class Settings(BaseSettings):
         if self.updates_mode in ("webhook", "polling"):
             return self.updates_mode
         return "webhook" if self.webhook_url else "polling"
+
+    @property
+    def runs_background(self) -> bool:
+        """Этот процесс претендует на роль лидера: планировщик и long polling."""
+        return self.role.strip().lower() in ("all", "worker", "")
 
     @property
     def miniapp(self) -> bool:

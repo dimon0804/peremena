@@ -23,7 +23,17 @@ def _dedup_key(update: dict) -> str:
     return f"ev:{t}:{update.get('timestamp')}:{update.get('chat_id')}:{(update.get('user') or {}).get('user_id')}"
 
 
-_locks: dict[str, asyncio.Lock] = {}
+_gate: tuple[object, asyncio.Semaphore] | None = None
+
+
+def gate() -> asyncio.Semaphore:
+    """Потолок одновременно обрабатываемых событий в процессе (HANDLER_CONCURRENCY): пик в тысячи
+    событий ждёт очереди здесь, а не в пуле соединений базы, где обработчик упал бы по таймауту."""
+    global _gate
+    loop = asyncio.get_running_loop()
+    if _gate is None or _gate[0] is not loop:
+        _gate = (loop, asyncio.Semaphore(max(1, ctx().settings.handler_concurrency)))
+    return _gate[1]
 
 
 def _actor_key(update: dict) -> str:
@@ -50,11 +60,11 @@ async def handle_update(update: dict) -> None:
         return  # MAX повторяет доставку, пока не получит 200 — дубликаты пропускаем
     # События одного человека обрабатываем по очереди: иначе двойное нажатие «Разослать»
     # создаёт два сбора, а первое сообщение нового пользователя дублирует запись в базе.
-    key = _actor_key(update)
-    lock = _locks.setdefault(key, asyncio.Lock())
+    # Замок общий для всех экземпляров (Redis): два нажатия одного человека могут прийти в разные процессы.
     try:
-        async with lock:
-            await _dispatch(update)
+        async with c.kv.lock("actor:" + _actor_key(update), ttl=60, wait=60):
+            async with gate():
+                await _dispatch(update)
     except asyncio.CancelledError:
         # остановка сервиса посреди обработки: снимаем отметку «обработано», чтобы повторная доставка
         # после перезапуска не была отброшена как дубликат
@@ -64,9 +74,6 @@ async def handle_update(update: dict) -> None:
             except Exception:
                 pass
         raise
-    finally:
-        if not lock.locked() and len(_locks) > 5000:
-            _locks.pop(key, None)
 
 
 async def _dispatch(update: dict) -> None:
