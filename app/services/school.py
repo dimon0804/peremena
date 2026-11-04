@@ -16,6 +16,7 @@ from sqlalchemy import select
 
 from ..core import ctx
 from ..db import session
+from ..demo_ids import is_demo
 from ..models import Campaign, ClassChat, Poll, School, SchoolMember, SubjectTeacher, User
 from ..timeutil import fmt_dt
 from . import chats
@@ -98,7 +99,15 @@ async def _set_member(s, school_id: int, user_id: int, role: str) -> None:
         m.role = "admin"
 
 
+JOIN_TRIES_PER_HOUR = 10
+
+
 async def join_by_code(user_id: int, code: str) -> tuple[School | None, str]:
+    """(школа, роль). Не нашли — (None, ""); слишком много попыток — (None, "limit")."""
+    from .. import ratelimit
+
+    if not await ratelimit.hit("join", user_id, JOIN_TRIES_PER_HOUR, 3600):  # код из 6 знаков — против перебора
+        return None, "limit"
     code = code.strip().upper()
     async with session() as s:
         sch = await s.scalar(select(School).where(School.code == code))
@@ -106,7 +115,8 @@ async def join_by_code(user_id: int, code: str) -> tuple[School | None, str]:
         if sch is None:
             sch = await s.scalar(select(School).where(School.admin_code == code))
             role = "admin"
-        if sch is None:
+        # демо и настоящие школы не смешиваются: песочница не попадает к реальным родителям и наоборот
+        if sch is None or is_demo(sch.created_by) != is_demo(user_id):
             return None, ""
         await _set_member(s, sch.id, user_id, role)
         return sch, role
@@ -181,7 +191,7 @@ async def accept_subject_invite(user_id: int, code: str, subject: str = "") -> C
     if not data:
         return None
     chat = await chats.get_chat(data["chat_id"])
-    if not chat:
+    if not chat or is_demo(chat.chat_id) != is_demo(user_id):
         return None
     async with session() as s:
         exists = await s.scalar(select(SubjectTeacher).where(

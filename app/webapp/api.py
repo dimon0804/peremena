@@ -716,6 +716,8 @@ async def create_school(body: SchoolIn, user: User = Depends(current_user)):
 @router.post("/school/join")
 async def join_school(body: JoinIn, user: User = Depends(current_user)):
     sch, role = await school.join_by_code(user.user_id, body.code)
+    if role == "limit":
+        raise HTTPException(429, "Слишком много попыток — попробуйте через час")
     if not sch:
         raise HTTPException(404, "Код не найден")
     return {"id": sch.id, "name": sch.name, "role": role}

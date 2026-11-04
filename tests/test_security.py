@@ -120,3 +120,34 @@ def test_not_that_requires_access_and_is_limited(env):
     n = len(fake.sent)
     run(loop, api.not_that(own.id, parent))
     assert len(fake.sent) == n
+
+
+def test_demo_and_real_schools_do_not_mix_and_join_is_limited(env):
+    from app.services import demo, school
+
+    loop, fake, c = env
+    teacher, teacher2 = _two_classes(loop)
+    real = run(loop, api.create_school(api.SchoolIn(name="Лицей № 1"), teacher))
+    real_code = run(loop, api.me(teacher))["school"]["code"]
+    sb = run(loop, demo.create_sandbox())
+    demo_teacher = run(loop, chats.get_user(sb.teacher_id))
+    demo_code = run(loop, api.me(demo_teacher))["school"]["code"]
+
+    for code, who in ((real_code, demo_teacher), (demo_code, teacher2)):
+        with pytest.raises(HTTPException) as err:
+            run(loop, api.join_school(api.JoinIn(code=code), who))
+        assert err.value.status_code == 404
+    assert run(loop, school.school_of_teacher(TEACHER2["user_id"])) is None
+    assert run(loop, school.school_of_teacher(sb.teacher_id)) != real["id"]
+
+    # перебор кода упирается в лимит
+    statuses = []
+    for code in [f"AAAA{a}{b}" for a in "BC" for b in "234567"]:
+        try:
+            run(loop, api.join_school(api.JoinIn(code=code), teacher2))
+        except HTTPException as err:
+            statuses.append(err.status_code)
+    assert statuses[-1] == 429
+    with pytest.raises(HTTPException) as err:  # даже верный код — после лимита
+        run(loop, api.join_school(api.JoinIn(code=real_code), teacher2))
+    assert err.value.status_code == 429
