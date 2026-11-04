@@ -7,18 +7,21 @@
 """
 from __future__ import annotations
 
+import asyncio
 import html
 import logging
+import time
 from datetime import timedelta
 
 from sqlalchemy import select
+from sqlalchemy import update as sa_update
 
 from .. import keyboards as kb
 from ..core import ctx
 from ..db import session
 from ..max_api import MaxApiError
 from ..models import ClassChat, Poll, PollTarget, User
-from ..timeutil import fmt_dt, local_now, utcnow
+from ..timeutil import fmt_dt, local_now, to_local, to_utc, utcnow
 from . import chats, stats
 from .quiet import notify_teacher
 
@@ -110,7 +113,7 @@ def rub(n: int) -> str:
 
 
 async def create_poll(teacher_id: int, chat_id: int, template: str, text: str, options: list[str],
-                      deadline, amount: int | None = None) -> Poll:
+                      deadline, amount: int | None = None, send_at=None) -> Poll:
     tpl = TEMPLATES.get(template, TEMPLATES["consent"])
     opts = [o.strip()[:60] for o in (options or tpl["options"]) if o.strip()][:10]
     clarify = tpl["clarify"]
@@ -122,6 +125,7 @@ async def create_poll(teacher_id: int, chat_id: int, template: str, text: str, o
             teacher_id=teacher_id, chat_id=chat_id, template=template, title=title, text=body,
             options=opts, clarify_option=clarify, deadline=deadline,
             amount=amount if template == "money" and amount else None,
+            dispatched=False, send_at=send_at,
         )
         s.add(poll)
         await s.flush()
@@ -133,8 +137,42 @@ async def get_poll(poll_id: int) -> Poll | None:
         return await s.get(Poll, poll_id)
 
 
+# сборы, которые рассылаются в этом процессе прямо сейчас (возобновление их не трогает)
+_dispatching: set[int] = set()
+SEND_CONCURRENCY = 5  # одновременных отправок: общий лимит MAX держит ограничитель клиента
+
+
+async def send_many(jobs: list[tuple[object, dict]]) -> list[tuple[object, dict | None]]:
+    """Отправляет пачку сообщений с ограниченным параллелизмом. jobs — (ключ, kwargs для send_message).
+    Возвращает (ключ, ответ MAX или None при ошибке) в том же порядке."""
+    c = ctx()
+    sem = asyncio.Semaphore(SEND_CONCURRENCY)
+
+    async def one(key, kw):
+        async with sem:
+            try:
+                return key, await c.api.send_message(**kw)
+            except MaxApiError as e:
+                log.info("Не доставлено %s: %s", kw.get("user_id") or kw.get("chat_id"), e)
+                return key, None
+
+    return list(await asyncio.gather(*(one(k, kw) for k, kw in jobs)))
+
+
 async def send_poll(poll_id: int) -> dict:
-    """Рассылает сбор: каждому в личку + одно сообщение в чат класса (как запасной путь)."""
+    """Рассылает сбор: каждому в личку + одно сообщение в чат класса (как запасной путь).
+    Можно вызывать повторно: уже доставленным второй раз не пишем — так рассылка, прерванная
+    перезапуском, продолжается с места остановки."""
+    if poll_id in _dispatching:
+        return {"total": 0, "delivered": 0, "failed": 0, "synced": 0, "group_posted": False, "busy": True}
+    _dispatching.add(poll_id)
+    try:
+        return await _send_poll(poll_id)
+    finally:
+        _dispatching.discard(poll_id)
+
+
+async def _send_poll(poll_id: int) -> dict:
     c = ctx()
     poll = await get_poll(poll_id)
     assert poll is not None
@@ -148,46 +186,85 @@ async def send_poll(poll_id: int) -> dict:
     members = await chats.class_list(poll.chat_id, exclude={poll.teacher_id})
 
     async with session() as s:
+        known = {t.user_id: t for t in (await s.scalars(select(PollTarget).where(PollTarget.poll_id == poll.id))).all()}
         for m in members:
-            s.add(PollTarget(poll_id=poll.id, user_id=m.user_id, name=m.name))
+            if m.user_id not in known:
+                t = PollTarget(poll_id=poll.id, user_id=m.user_id, name=m.name)
+                s.add(t)
+                known[m.user_id] = t
+        await s.flush()
+        todo = [(t.user_id, t.id) for t in known.values() if not t.delivered and t.answer is None]
+        already = sum(1 for t in known.values() if t.delivered)
 
-    delivered = failed = 0
     text = parent_text(poll, tz, chat_title, teacher_name)
-    for m in members:
-        msg = None
-        try:
-            msg = await c.api.send_message(user_id=m.user_id, text=text, attachments=kb.kb_list(answer_buttons(poll)))
-        except MaxApiError as e:
-            log.info("Сбор %s: не доставлено %s: %s", poll.id, m.user_id, e)
-        async with session() as s:
-            t = await s.scalar(select(PollTarget).where(PollTarget.poll_id == poll.id, PollTarget.user_id == m.user_id))
-            if t and msg:
-                t.delivered = True
-                t.message_id = (msg.get("body") or {}).get("mid")
-        if msg:
-            delivered += 1
-        else:
-            failed += 1
+    att = kb.kb_list(answer_buttons(poll))
+    results = await send_many([((uid, tid), {"user_id": uid, "text": text, "attachments": att}) for uid, tid in todo])
+    delivered = already
+    failed = 0
+    async with session() as s:
+        for (uid, tid), msg in results:
+            if msg:
+                delivered += 1
+                row = await s.get(PollTarget, tid)
+                if row:
+                    row.delivered = True
+                    row.message_id = (msg.get("body") or {}).get("mid")
+            else:
+                failed += 1
 
     # Сообщение в общий чат: кто не получил личку (не запускал бота), ответит здесь — ответ всё равно личный.
-    group_text = (
-        f"📋 <b>Сбор от учителя</b>\n\n{html.escape(poll.text)}\n\n"
-        + (f"Сумма: <b>{rub(poll.amount)}</b>\n" if poll.amount else "")
-        + (f"Срок: <b>{fmt_dt(poll.deadline, tz)}</b>\n" if poll.deadline else "")
-        + "Ответьте кнопкой ниже — ответ засчитается лично вам, другим участникам он не виден."
-    )
-    gmsg = await c.safe_send(chat_id=poll.chat_id, text=group_text, attachments=kb.kb_list(answer_buttons(poll)))
-    if gmsg:
-        async with session() as s:
-            p = await s.get(Poll, poll.id)
+    gmsg = None
+    if not poll.group_message_id:
+        group_text = (
+            f"📋 <b>Сбор от учителя</b>\n\n{html.escape(poll.text)}\n\n"
+            + (f"Сумма: <b>{rub(poll.amount)}</b>\n" if poll.amount else "")
+            + (f"Срок: <b>{fmt_dt(poll.deadline, tz)}</b>\n" if poll.deadline else "")
+            + "Ответьте кнопкой ниже — ответ засчитается лично вам, другим участникам он не виден."
+        )
+        gmsg = await c.safe_send(chat_id=poll.chat_id, text=group_text, attachments=att)
+    async with session() as s:
+        p = await s.get(Poll, poll.id)
+        if gmsg:
             p.group_message_id = (gmsg.get("body") or {}).get("mid")
+        p.dispatched = True
+        p.send_at = None
 
-    return {"total": len(members), "delivered": delivered, "failed": failed, "synced": synced,
-            "group_posted": bool(gmsg)}
+    total = len(members) if members else delivered + failed
+    return {"total": total, "delivered": delivered, "failed": failed, "synced": synced,
+            "group_posted": bool(gmsg or poll.group_message_id)}
+
+
+async def resume_dispatch() -> int:
+    """Сборы, рассылка которых не доведена до конца (перезапуск посреди рассылки) или отложена
+    до утра и время пришло, — досылаем. Возвращает, сколько сборов обработано."""
+    now = utcnow()
+    async with session() as s:
+        rows = (await s.scalars(select(Poll).where(Poll.dispatched.is_(False), Poll.closed.is_(False)))).all()
+    done = 0
+    for p in rows:
+        if p.id in _dispatching:
+            continue
+        if p.send_at is not None:
+            if p.send_at > now:
+                continue
+        elif now - p.created_at < timedelta(minutes=2):
+            continue  # только что созданный сбор рассылает тот, кто его создал
+        try:
+            rep = await send_poll(p.id)
+            done += 1
+            if p.send_at is not None and not rep.get("busy"):
+                await notify_teacher(
+                    p.teacher_id, f"📤 Сбор «{html.escape(p.title)}» разослан: в личку доставлено "
+                                  f"{rep['delivered']} из {rep['total']}.",
+                    kind="report", chat_id=p.chat_id, raw_text=f"«{p.title}»: разослан утром")
+        except Exception:
+            log.exception("Досылка сбора %s", p.id)
+    return done
 
 
 async def record_answer(poll_id: int, user: dict, option: int, chat_id_hint: int | None = None) -> tuple[Poll | None, str]:
-    """Записывает ответ. Возвращает (poll, статус): ok | changed | closed | bad."""
+    """Записывает ответ. Возвращает (poll, статус): ok | changed | same | closed | bad | forbidden.
+    chat_id_hint — чат, где нажата кнопка: нажатие под сообщением в чате класса доказывает, что человек в нём."""
     uid = user.get("user_id")
     async with session() as s:
         poll = await s.get(Poll, poll_id)
@@ -196,6 +273,12 @@ async def record_answer(poll_id: int, user: dict, option: int, chat_id_hint: int
         if poll.closed:
             return poll, "closed"
         t = await s.scalar(select(PollTarget).where(PollTarget.poll_id == poll_id, PollTarget.user_id == uid))
+        if t is None and uid == poll.teacher_id:
+            return poll, "forbidden"
+        if t is None and chat_id_hint != poll.chat_id and not await chats.is_present(poll.chat_id, uid):
+            # чужой сбор (ссылка ?start=poll_N переслана постороннему): ответ не принимаем,
+            # иначе итог «1/4» вместо «1/3» и в списке класса чужой человек
+            return poll, "forbidden"
         status = "ok"
         if t is None:
             # человек пришёл в чат позже рассылки — добавляем его в список
@@ -233,7 +316,8 @@ async def after_answer(poll: Poll, uid: int, opt: int, status: str) -> None:
     await backfill_targets(poll.chat_id)
     poll = await get_poll(poll.id)
     answered, total, _ = counts(poll)
-    if total and answered == total:
+    # два последних ответа почти одновременно — оба видят «все ответили»; сообщаем учителю один раз
+    if total and answered == total and await ctx().kv.add_once(f"allans:{poll.id}:{total}", ttl=30 * 24 * 3600):
         text, buttons = await status_card(poll)
         await notify_teacher(poll.teacher_id, "🎉 Ответили все!\n\n" + text, kind="report",
                              chat_id=poll.chat_id, raw_text=f"«{poll.title}»: ответили все {total}",
@@ -259,6 +343,21 @@ async def backfill_targets(chat_id: int) -> int:
     return added
 
 
+async def drop_member(chat_id: int, user_id: int) -> int:
+    """Человек ушёл из чата класса: убираем его из открытых сборов, где он ещё не ответил, —
+    иначе ему продолжают приходить напоминания, а «25/27» никогда не станет «все ответили».
+    Уже данные ответы остаются: они были, учителю их видеть нужно."""
+    async with session() as s:
+        rows = (await s.scalars(
+            select(PollTarget).join(Poll, Poll.id == PollTarget.poll_id).where(
+                Poll.chat_id == chat_id, Poll.closed.is_(False), PollTarget.user_id == user_id,
+                PollTarget.answer.is_(None), PollTarget.paid.is_(False))
+        )).all()
+        for t in rows:
+            await s.delete(t)
+    return len(rows)
+
+
 def counts(poll: Poll) -> tuple[int, int, list[int]]:
     per = [0] * len(poll.options)
     answered = 0
@@ -273,8 +372,9 @@ def money(poll: Poll) -> dict | None:
     """Сбор денег: сколько ждём, сколько учитель подтвердил, кто отметил «перевёл», но ещё не подтверждён."""
     if not poll.amount:
         return None
-    participants = [t for t in poll.targets if t.answer != PAY_SKIP]
-    paid = [t for t in participants if t.paid]
+    # сдал деньги — участник, даже если потом нажал «Не участвуем»: деньги у учителя, их надо учесть
+    participants = [t for t in poll.targets if t.answer != PAY_SKIP or t.paid]
+    paid = [t for t in poll.targets if t.paid]
     waiting = [t for t in participants if not t.paid and t.answer in (PAY_TRANSFER, PAY_CASH)]
     return {
         "amount": poll.amount,
@@ -285,14 +385,29 @@ def money(poll: Poll) -> dict | None:
     }
 
 
-def pay_buttons(poll: Poll) -> list[list[dict]]:
-    """Кнопки «отметить сдавших»: ✅/⬜ у каждого участника (кроме «не участвуем»)."""
+PAY_PAGE = 25  # MAX принимает не больше 30 рядов кнопок — оставляем место под листание и «Готово»
+
+
+def pay_buttons(poll: Poll, page: int = 0) -> list[list[dict]]:
+    """Кнопки «отметить сдавших»: ✅/⬜ у каждого участника (кроме «не участвуем», если он не сдавал).
+    В кнопке — значение, которое она поставит (а не «переключить»): двойное нажатие не снимет отметку."""
+    people = [t for t in poll.targets if t.answer != PAY_SKIP or t.paid]
+    pages = max(1, -(-len(people) // PAY_PAGE))
+    page = min(max(page, 0), pages - 1)
     rows = []
-    for t in poll.targets:
-        if t.answer == PAY_SKIP:
-            continue
-        hint = " · перевёл" if t.answer == PAY_TRANSFER else " · наличные" if t.answer == PAY_CASH else ""
-        rows.append([kb.cb(f"{'✅' if t.paid else '⬜'} {t.name}{hint}"[:64], f"pp:{poll.id}:{t.id}")])
+    for t in people[page * PAY_PAGE:(page + 1) * PAY_PAGE]:
+        hint = " · перевёл" if t.answer == PAY_TRANSFER else " · наличные" if t.answer == PAY_CASH else \
+            " · не участвует" if t.answer == PAY_SKIP else ""
+        rows.append([kb.cb(f"{'✅' if t.paid else '⬜'} {t.name}{hint}"[:64],
+                           f"pp:{poll.id}:{t.id}:{0 if t.paid else 1}:{page}")])
+    if pages > 1:
+        nav = []
+        if page > 0:
+            nav.append(kb.cb("◀️ Назад", f"pm:{poll.id}:{page - 1}"))
+        nav.append(kb.cb(f"{page + 1}/{pages}", f"pm:{poll.id}:{page}"))
+        if page < pages - 1:
+            nav.append(kb.cb("Дальше ▶️", f"pm:{poll.id}:{page + 1}"))
+        rows.append(nav)
     rows.append([kb.cb("Готово", f"ps:{poll.id}")])
     return rows
 
@@ -388,50 +503,89 @@ def full_list(poll: Poll) -> str:
 
 
 async def remind(poll_id: int, auto: bool = False) -> dict:
+    """Напоминание молчащим: в личку, а кому личка не дошла — одним сообщением в чат класса.
+    Возвращает {"sent", "group", "pending"}; "dup" — такое же ручное напоминание только что уже ушло."""
     c = ctx()
     poll = await get_poll(poll_id)
     if poll is None or poll.closed:
-        return {"sent": 0, "group": 0}
+        return {"sent": 0, "group": 0, "pending": 0}
+    if not auto and not await c.kv.add_once(f"rmd:{poll_id}", ttl=60):
+        # двойное нажатие «Напомнить» (или кнопка + приложение) — второй раз родителям не пишем
+        return {"sent": 0, "group": 0, "pending": 0, "dup": True}
     teacher = await _teacher(poll)
     tz = teacher.tz if teacher else c.settings.default_tz
     chat = await chats.get_chat(poll.chat_id)
     pending = [t for t in poll.targets if t.answer is None]
+    text = parent_text(poll, tz, chat.title if chat else "", teacher.display_name if teacher else "", reminder=True)
+    att = kb.kb_list(answer_buttons(poll))
+    results = await send_many([(t, {"user_id": t.user_id, "text": text, "attachments": att}) for t in pending])
     sent = 0
     undelivered: list[PollTarget] = []
-    for t in pending:
-        text = parent_text(poll, tz, chat.title if chat else "", teacher.display_name if teacher else "", reminder=True)
-        msg = await c.safe_send(user_id=t.user_id, text=text, attachments=kb.kb_list(answer_buttons(poll)))
-        async with session() as s:
-            row = await s.get(PollTarget, t.id)
+    async with session() as s:
+        for t, msg in results:
             if msg:
-                row.delivered = True
-                row.reminders += 1
-            # недоставленных упомянем в общем чате одним сообщением
-        if msg:
-            sent += 1
-        else:
-            undelivered.append(t)
+                sent += 1
+                row = await s.get(PollTarget, t.id)
+                if row:
+                    row.delivered = True
+                    row.reminders += 1
+            else:
+                undelivered.append(t)  # недоставленных упомянем в общем чате одним сообщением
     group = 0
     if undelivered:
         mentions = ", ".join(f'<a href="max://user/{t.user_id}">{html.escape(t.name)}</a>' for t in undelivered[:40])
         text = (f"⏰ <b>{html.escape(poll.title)}</b>\nЖдём ответ от: {mentions}\n"
                 + (f"Срок: {fmt_dt(poll.deadline, tz)}. " if poll.deadline else "")
                 + "Ответьте кнопкой ниже.")
-        if await c.safe_send(chat_id=poll.chat_id, text=text, attachments=kb.kb_list(answer_buttons(poll))):
+        if await c.safe_send(chat_id=poll.chat_id, text=text, attachments=att):
             group = len(undelivered)
     await stats.add(poll.teacher_id, "reminder", sent + group)
-    return {"sent": sent, "group": group}
+    return {"sent": sent, "group": group, "pending": len(pending)}
+
+
+DEFERRED_KEY = "rma"  # сборы, где учитель ночью попросил «напомнить утром»
+
+
+async def defer_remind(poll_id: int) -> None:
+    ids = await ctx().kv.get(DEFERRED_KEY) or []
+    if poll_id not in ids:
+        await ctx().kv.set(DEFERRED_KEY, [*ids, poll_id], ttl=3 * 24 * 3600)
+
+
+async def run_deferred_reminders() -> int:
+    """Утренние напоминания, отложенные учителем ночью: уходят, как только у родителей наступает день."""
+    ids = await ctx().kv.get(DEFERRED_KEY) or []
+    if not ids:
+        return 0
+    left, sent = [], 0
+    for pid in ids:
+        poll = await get_poll(pid)
+        if poll is None or poll.closed:
+            continue
+        teacher = await _teacher(poll)
+        tz = teacher.tz if teacher else ctx().settings.default_tz
+        if not _is_daytime(tz):
+            left.append(pid)
+            continue
+        res = await remind(pid, auto=True)
+        sent += 1
+        await notify_teacher(poll.teacher_id, f"⏰ Напомнил молчащим по сбору «{html.escape(poll.title)}»: "
+                                              f"в личку {res['sent']}" + (f", в чате {res['group']}" if res["group"] else "") + ".",
+                             kind="report", chat_id=poll.chat_id, raw_text=f"«{poll.title}»: напоминание утром")
+    await ctx().kv.set(DEFERRED_KEY, left, ttl=3 * 24 * 3600)
+    return sent
 
 
 async def close_poll(poll_id: int, by_deadline: bool = False) -> Poll | None:
     c = ctx()
+    # атомарно: кнопка «Закрыть» и закрытие по сроку одновременно — итог уходит один раз
     async with session() as s:
-        poll = await s.get(Poll, poll_id)
-        if poll is None or poll.closed:
-            return poll
-        poll.closed = True
-        poll.closed_at = utcnow()
+        res = await s.execute(sa_update(Poll).where(Poll.id == poll_id, Poll.closed.is_(False))
+                              .values(closed=True, closed_at=utcnow()))
+        won = res.rowcount == 1
     poll = await get_poll(poll_id)
+    if not won or poll is None:
+        return poll
     await stats.add(poll.teacher_id, "poll_done")
     if poll.group_message_id:
         try:
@@ -481,6 +635,13 @@ async def pending_for_user(user_id: int) -> list[Poll]:
     return list(rows)
 
 
+async def is_addressee(poll: Poll, user_id: int) -> bool:
+    """Сбор адресован человеку: он в списке рассылки или сейчас участник чата класса (не учитель)."""
+    if user_id == poll.teacher_id:
+        return False
+    return any(t.user_id == user_id for t in poll.targets) or await chats.is_present(poll.chat_id, user_id)
+
+
 async def user_answer(poll: Poll, user_id: int) -> int | None:
     for t in poll.targets:
         if t.user_id == user_id:
@@ -488,32 +649,109 @@ async def user_answer(poll: Poll, user_id: int) -> int | None:
     return None
 
 
+DAY_START, DAY_END = 8, 21  # родителям пишем только днём: граница рабочего дня работает в обе стороны
+TICK_BUDGET = 50  # секунд на один проход tick (запускается раз в минуту)
+
+
 def _is_daytime(tz: str) -> bool:
     h = local_now(tz).hour
-    return 8 <= h < 21
+    return DAY_START <= h < DAY_END
+
+
+def next_daytime(tz: str | None, at=None):
+    """Ближайший момент (UTC), когда родителям уже можно писать: сам at, если он днём, иначе 8:00."""
+    loc = to_local(at or utcnow(), tz)
+    if loc.hour < DAY_START:
+        loc = loc.replace(hour=DAY_START, minute=0, second=0, microsecond=0)
+    elif loc.hour >= DAY_END:
+        loc = (loc + timedelta(days=1)).replace(hour=DAY_START, minute=0, second=0, microsecond=0)
+    return to_utc(loc)
+
+
+def reminder_plan(deadline, created_at, tz: str | None) -> list:
+    """Когда tick() напомнит молчащим (UTC). Повторяет его правила: за сутки (если сбор дольше 26 ч)
+    и за 2 часа (если дольше 4 ч); ночные напоминания переносятся на 8:00, если срок ещё не прошёл;
+    два напоминания ближе 6 часов друг к другу не шлём."""
+    if not deadline:
+        return []
+    lifetime = deadline - created_at
+    t24 = t2 = None
+    if lifetime > timedelta(hours=26):
+        t24 = next_daytime(tz, deadline - timedelta(hours=24))
+        if t24 >= deadline:
+            t24 = None
+    if lifetime > timedelta(hours=4):
+        t2 = next_daytime(tz, deadline - timedelta(hours=2))
+        if t2 >= deadline:
+            t2 = None
+    if t24 and deadline - t24 <= timedelta(hours=6):
+        t2 = None  # позднее «суточное» напоминание заменяет «двухчасовое»
+    return [t for t in (t24, t2) if t]
+
+
+def plan_text(poll: Poll, tz: str | None) -> str:
+    """Что пообещать учителю про напоминания — из реального плана, а не «за сутки и за 2 часа» всегда."""
+    if not poll.deadline:
+        return "Срока нет — напомнить молчащим можно кнопкой «Напомнить» в статусе."
+    plan = reminder_plan(poll.deadline, poll.created_at, tz)
+    if not plan:
+        return "До срока мало времени — сам напоминать не буду, напомнить можно кнопкой «Напомнить»."
+    when = " и ".join(fmt_dt(t, tz) for t in plan)
+    return f"Напомню молчащим: {when} (ночью родителям не пишу)."
+
+
+def _due_reminder(p: Poll, now) -> str | None:
+    left = p.deadline - now
+    lifetime = p.deadline - p.created_at
+    if not p.reminded_2h and left <= timedelta(hours=2) and lifetime > timedelta(hours=4):
+        return "2h"
+    if not p.reminded_24h and left <= timedelta(hours=24) and lifetime > timedelta(hours=26):
+        return "24h"
+    return None
 
 
 async def tick() -> None:
-    """Раз в минуту: напоминания за сутки и за 2 часа, закрытие по сроку."""
+    """Раз в минуту: досылка прерванных и отложенных рассылок, напоминания за сутки и за 2 часа,
+    закрытие по сроку. Проход ограничен по времени — остальное доделает следующий."""
+    started = time.monotonic()
+    try:
+        await resume_dispatch()
+    except Exception:
+        log.exception("Досылка сборов")
+    try:
+        await run_deferred_reminders()
+    except Exception:
+        log.exception("Отложенные напоминания")
     now = utcnow()
     async with session() as s:
-        polls = (await s.scalars(select(Poll).where(Poll.closed.is_(False), Poll.deadline.is_not(None)))).all()
+        polls = (await s.scalars(select(Poll).where(Poll.closed.is_(False), Poll.deadline.is_not(None))
+                                 .order_by(Poll.deadline))).all()
     for p in polls:
+        if time.monotonic() - started > TICK_BUDGET:
+            log.warning("tick сборов не уложился в %s с — продолжим через минуту", TICK_BUDGET)
+            break
         try:
             if p.deadline <= now:
                 await close_poll(p.id, by_deadline=True)
                 continue
+            if not p.dispatched:
+                continue  # рассылка ещё не прошла — напоминать рано
+            kind = _due_reminder(p, now)
+            if kind is None:
+                continue
             teacher = await _teacher(p)
             tz = teacher.tz if teacher else ctx().settings.default_tz
+            if not _is_daytime(tz):
+                continue  # ночью не пишем: напоминание уйдёт утром, если срок ещё не наступит
+            # одна попытка в 15 минут: при сбое MAX не долбим родителей и API каждую минуту
+            if not await ctx().kv.add_once(f"rmt:{p.id}:{kind}", ttl=15 * 60):
+                continue
+            res = await remind(p.id, auto=True)
+            if res["sent"] + res["group"] == 0 and res["pending"]:
+                continue  # ничего не ушло — не отмечаем, попробуем позже
             left = p.deadline - now
-            lifetime = p.deadline - p.created_at
-            if not p.reminded_24h and left <= timedelta(hours=24) and lifetime > timedelta(hours=26):
-                if _is_daytime(tz) or left <= timedelta(hours=10):
-                    await remind(p.id, auto=True)
-                    await _mark(p.id, "reminded_24h")
-            elif not p.reminded_2h and left <= timedelta(hours=2) and lifetime > timedelta(hours=4):
-                if _is_daytime(tz):
-                    await remind(p.id, auto=True)
+            await _mark(p.id, "reminded_24h")
+            if kind == "2h" or left <= timedelta(hours=6):
                 await _mark(p.id, "reminded_2h")
         except Exception:
             log.exception("Обработка сбора %s", p.id)

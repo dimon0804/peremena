@@ -20,7 +20,7 @@ from .config import BASE_DIR, get_settings
 from .core import Ctx, set_ctx
 from .max_api import MaxApiError, MaxClient
 from .state import make_kv
-from .updates import ensure_webhook, make_scheduler, polling_loop, spawn
+from .updates import drain, ensure_webhook, make_scheduler, polling_loop, spawn
 from .webapp.api import router as api_router
 from .webapp.site_api import router as site_api_router
 
@@ -100,6 +100,7 @@ async def lifespan(app: FastAPI):
                 b.cancel()
             else:
                 b.shutdown(wait=False)
+        await drain()  # начатые обработки (рассылка, ответ на кнопку) доводим до конца, пока живы API и база
         await c.api.close()
         await c.kv.close()
         await db.close_db()

@@ -50,7 +50,7 @@ def test_parent_marks_absence_in_bot_and_teacher_sees_it(env):
     assert "Иванов Пётр" in api_.texts_to(user_id=parent["user_id"])[-1]
     # и оно же в утренней сводке
     teacher = run(loop, api.chats.get_user(TEACHER["user_id"]))
-    text, _ = run(loop, quiet.build_digest(teacher))
+    text, _, _ = run(loop, quiet.build_digest(teacher))
     assert "Сегодня не придут (1)" in text and "Иванов Пётр" in text
 
 
@@ -89,7 +89,7 @@ def test_frequent_unanswered_question_becomes_card(env):
     clusters = run(loop, faq_learning.clusters(TEACHER["user_id"]))
     assert len(clusters) == 1 and clusters[0].count == 3
     # на третьем вопросе учитель получил подсказку с кнопкой
-    nudge = [s for s in api_.sent if s.get("user_id") == TEACHER["user_id"] and "спросили уже 3 раза" in s["text"]]
+    nudge = [s for s in api_.sent if s.get("user_id") == TEACHER["user_id"] and "спросили уже 3 человека" in s["text"]]
     assert len(nudge) == 1
     button = nudge[0]["attachments"][0]["payload"]["buttons"][0][0]["payload"]
     run(loop, handle_update(cb_update(TEACHER, button, "n1")))

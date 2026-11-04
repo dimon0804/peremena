@@ -89,13 +89,19 @@ async def save(teacher_id: int, media: dict, caption: str = "", chat_id: int | N
 
 
 async def visible_materials(user_id: int, teacher_view: bool) -> list[Material]:
-    """Учитель видит всю свою полку; родитель — материалы, отправленные в его чаты."""
+    """Учитель (классный руководитель или предметник) видит всю свою полку и материалы своих классов;
+    родитель — материалы, отправленные в его чаты."""
+    from sqlalchemy import or_
+
     from . import chats
 
+    chat_ids = [c.chat_id for c in await chats.member_chats(user_id)]
     async with session() as s:
         if teacher_view:
-            return list((await s.scalars(select(Material).where(Material.teacher_id == user_id))).all())
-        chat_ids = [c.chat_id for c in await chats.member_chats(user_id)]
+            cond = Material.teacher_id == user_id
+            if chat_ids:
+                cond = or_(cond, Material.chat_id.in_(chat_ids))
+            return list((await s.scalars(select(Material).where(cond))).all())
         if not chat_ids:
             return []
         return list((await s.scalars(select(Material).where(Material.chat_id.in_(chat_ids)))).all())
@@ -191,6 +197,7 @@ async def import_history(chat_id: int, teacher_id: int, pages: int = 5) -> int:
 
     added = 0
     before = None
+    seen: set[str] = set()
     for _ in range(pages):
         try:
             data = await ctx().api.get_messages(chat_id, count=100, before=before)
@@ -198,8 +205,12 @@ async def import_history(chat_id: int, teacher_id: int, pages: int = 5) -> int:
             log.info("История чата %s недоступна: %s", chat_id, e)
             break
         msgs = data.get("messages") or []
-        if not msgs:
+        # страница не сдвинулась (те же сообщения) — дальше листать бессмысленно
+        fresh = [m for m in msgs if ((m.get("body") or {}).get("mid") or id(m)) not in seen]
+        if not fresh:
             break
+        seen.update((m.get("body") or {}).get("mid") or id(m) for m in fresh)
+        msgs = fresh
         for msg in msgs:
             sender = (msg.get("sender") or {}).get("user_id")
             if sender != teacher_id:
@@ -211,7 +222,7 @@ async def import_history(chat_id: int, teacher_id: int, pages: int = 5) -> int:
                                         source="history", sent_at=sent_at)
                 added += int(created)
         oldest = min((m.get("timestamp") or 0) for m in msgs)
-        if not oldest or len(msgs) < 100:
+        if not oldest or len(msgs) < 100 or (before is not None and oldest - 1 >= before):
             break
         before = oldest - 1
     return added

@@ -9,6 +9,7 @@ from ..core import ctx
 from ..db import session
 from ..models import ClassChat, User
 from ..services import attendance, chats, faq, faq_learning, polls, quiet, school, shelf, stats
+from ..timeutil import fmt_dt
 from . import absence, dialog, staff
 from .common import ack, clear_state, get_state, send, set_state
 
@@ -86,6 +87,13 @@ async def on_callback(update: dict) -> None:
         if head == "lg":
             await staff.on_login_cb(cid, uid, tail)
             return
+        if head == "fg":  # «удалить мои данные» — только после подтверждения кнопкой
+            await ack(cid)
+            if tail == "yes":
+                await dialog.do_forget(uid)
+            else:
+                await send(uid, "Хорошо, ничего не удаляю.")
+            return
         if head == "prp":
             await on_repeat_poll(cid, uid, tail)
             return
@@ -108,9 +116,15 @@ async def on_poll_answer(cid: str, uid: int, user: dict, tail: str, in_group: bo
         # учитель нажал кнопку своего сбора — его ответ не считаем, иначе «25/27» превратится в «26/28»
         await ack(cid, "Это ваш сбор — статус в личке: /status")
         return
-    poll, status = await polls.record_answer(pid, user, opt)
+    group_chat = (message.get("recipient") or {}).get("chat_id") if in_group else None
+    if group_chat and existing is not None and group_chat == existing.chat_id:
+        await chats.touch_member(group_chat, user)  # нажал под сообщением в чате класса — значит, он в классе
+    poll, status = await polls.record_answer(pid, user, opt, chat_id_hint=group_chat)
     if status == "bad" or poll is None:
         await ack(cid, "Сбор не найден")
+        return
+    if status == "forbidden":
+        await ack(cid, "Этот сбор для другого класса — ответ не засчитан")
         return
     if status == "closed":
         await ack(cid, "Сбор уже закрыт — напишите учителю, если ответ ещё нужен")
@@ -182,8 +196,8 @@ async def on_poll_flow(cid: str, uid: int, tail: str) -> None:
             return
         await dialog.on_deadline_preset(uid, arg)
     elif action == "send":
-        await ack(cid, "Рассылаю")
-        await dialog.confirm_poll(uid)
+        await ack(cid, "Разошлю утром" if arg == "am" else "Рассылаю")
+        await dialog.confirm_poll(uid, morning=arg == "am")
     else:
         await ack(cid)
 
@@ -210,20 +224,30 @@ async def on_poll_teacher(cid: str, uid: int, head: str, tail: str) -> None:
         if not poll.amount:
             await ack(cid, "Это не сбор денег")
             return
-        if head == "pp" and target.isdigit():
-            t = await polls.set_paid(poll.id, int(target))
+        # pp:<сбор>:<цель>[:<1|0>:<страница>] — значение в кнопке явное: двойное нажатие не снимает отметку;
+        # старые кнопки без значения работают как переключатель
+        parts = target.split(":")
+        if head == "pp" and parts[0].isdigit():
+            value = None if len(parts) < 2 else parts[1] == "1"
+            page = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+            t = await polls.set_paid(poll.id, int(parts[0]), value)
             poll = await polls.get_poll(poll.id)
             m = polls.money(poll)
             body = {"text": f"💰 <b>{html.escape(poll.title)}</b>\nСобрано {polls.rub(m['collected'])} из "
                             f"{polls.rub(m['expected'])}. Нажмите на имя, чтобы отметить сдавшего.",
-                    "format": "html", "attachments": kb.kb_list(polls.pay_buttons(poll))}
+                    "format": "html", "attachments": kb.kb_list(polls.pay_buttons(poll, page))}
             await ack(cid, ("✅ Отмечено: " if t and t.paid else "Снято: ") + (t.name if t else ""), message=body)
             return
-        await ack(cid)
+        page = int(parts[0]) if parts[0].isdigit() else None
         m = polls.money(poll)
-        await send(uid, f"💰 <b>{html.escape(poll.title)}</b>\nСобрано {polls.rub(m['collected'])} из "
-                        f"{polls.rub(m['expected'])}. Нажмите на имя, чтобы отметить сдавшего.",
-                   polls.pay_buttons(poll))
+        text = (f"💰 <b>{html.escape(poll.title)}</b>\nСобрано {polls.rub(m['collected'])} из "
+                f"{polls.rub(m['expected'])}. Нажмите на имя, чтобы отметить сдавшего.")
+        if page is not None:  # листание списка — меняем то же сообщение
+            await ack(cid, message={"text": text, "format": "html",
+                                    "attachments": kb.kb_list(polls.pay_buttons(poll, page))})
+            return
+        await ack(cid)
+        await send(uid, text, polls.pay_buttons(poll))
         return
     if head == "ps":
         await ack(cid)
@@ -233,8 +257,25 @@ async def on_poll_teacher(cid: str, uid: int, head: str, tail: str) -> None:
         await ack(cid)
         await send(uid, polls.full_list(poll))
     elif head == "pr":
+        teacher = await chats.get_user(uid)
+        tz = teacher.tz if teacher else ctx().settings.default_tz
+        morning = polls.next_daytime(tz)
+        can_wait = not polls._is_daytime(tz) and (not poll.deadline or morning < poll.deadline)
+        if target == "am" or (target == "" and can_wait):
+            if target == "am":
+                await polls.defer_remind(poll.id)
+                await ack(cid, "Напомню утром")
+                await send(uid, f"🌙 Напомню молчащим утром — {fmt_dt(morning, tz)}.")
+            else:
+                # граница рабочего дня работает и для родителей: ночью без явного «сейчас» не пишем
+                await ack(cid)
+                await send(uid, f"🌙 У родителей сейчас ночь. Напомнить утром ({fmt_dt(morning, tz)}) или сейчас?",
+                           [[kb.cb("🌙 Утром", f"pr:{poll.id}:am"), kb.cb("Сейчас", f"pr:{poll.id}:now")]])
+            return
         await ack(cid, "Напоминаю")
         res = await polls.remind(poll.id)
+        if res.get("dup"):
+            return  # двойное нажатие: напоминание уже ушло, отчёт пришёл на первое
         msg = f"⏰ Напомнил в личку: {res['sent']}."
         if res["group"]:
             msg += f" Ещё {res['group']} упомянул в чате класса."
@@ -312,6 +353,10 @@ async def on_faq(cid: str, uid: int, tail: str) -> None:
     elif action == "open":
         await ack(cid)
         await dialog.show_open_questions(uid)
+    elif action == "page" and arg.isdigit():  # листание кнопок /faq — меняем то же сообщение
+        text, entries = await faq.render_list(uid)
+        rows = dialog.faq_buttons(entries, int(arg), bool(await school.school_of_teacher(uid)))
+        await ack(cid, message={"text": text, "format": "html", "attachments": kb.kb_list(rows)})
     elif action == "nosave":
         await c.kv.delete(f"sv:{arg}")
         await ack(cid, "Хорошо, не сохраняю")
@@ -342,12 +387,18 @@ async def on_shelf(cid: str, uid: int, tail: str) -> None:
             await ack(cid, "Пересылать может только учитель")
             return
         chat_id = int(parts[2])
-        chat = await chats.get_chat(chat_id)
-        if not chat or chat.teacher_id != uid:
+        # классный руководитель или предметник этого класса
+        chat = next((c for c, _ in await staff.staff_chats(uid) if c.chat_id == chat_id), None)
+        if not chat:
             await ack(cid, "Чат не найден")
+            return
+        if not await ctx().kv.add_once(f"shto:{m.id}:{chat_id}", ttl=60):
+            await ack(cid, "Уже отправлено")  # двойное нажатие — второй раз в чат класса не шлём
             return
         ok = await shelf.send_material(m, chat_id=chat_id, caption=html.escape(m.title) if m.title else None)
         await ack(cid, f"Отправлено в {chat.title}" if ok else "Не получилось отправить")
+        if not ok:
+            await ctx().kv.delete(f"shto:{m.id}:{chat_id}")  # можно сразу попробовать ещё раз
         if ok:
             async with session() as s:
                 row = await s.get(type(m), m.id)

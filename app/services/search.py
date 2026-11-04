@@ -34,12 +34,21 @@ QUESTION_WORDS = (
 )
 
 
+# Разговорные формы школьных слов → полные: «физра» и «физкультура» должны совпадать
+SYNONYMS = {
+    "физра": "физкультура", "физре": "физкультуре", "физру": "физкультуру", "физры": "физкультуры",
+    "физрук": "физкультура", "матеша": "математика", "матешу": "математику", "матеше": "математике",
+    "англ": "английский", "инглиш": "английский", "родсобрание": "собрание",
+    "домашка": "домашнее", "домашку": "домашнее", "дз": "домашнее",
+}
+
+
 def normalize(text: str) -> str:
-    return (text or "").lower().replace("ё", "е")
+    return (text or "").lower().replace("ё", "е").replace("физ-ра", "физра").replace("физ-ру", "физру")
 
 
 def words(text: str) -> list[str]:
-    return _word_re.findall(normalize(text))
+    return [SYNONYMS.get(w, w) for w in _word_re.findall(normalize(text))]
 
 
 @lru_cache(maxsize=50000)
@@ -51,6 +60,10 @@ def stem(word: str) -> str:
 
 def content_stems(text: str) -> list[str]:
     return [stem(w) for w in words(text) if w not in STOPWORDS]
+
+
+def _significant(st: str) -> bool:
+    return len(st) >= 3 or st.isdigit()
 
 
 def trigrams(text: str) -> set[str]:
@@ -97,6 +110,9 @@ class Hit(Generic[T]):
     score: float
 
 
+UNSURE_CAP = 0.5  # потолок оценки, если половина значимых слов вопроса не нашлась (ниже порога «отвечаю сам»)
+
+
 def score_text(query: str, keywords: str, body: str) -> float:
     """Оценка 0..1 совпадения запроса с карточкой (ключевые слова + текст вопроса)."""
     q = content_stems(query)
@@ -118,7 +134,15 @@ def score_text(query: str, keywords: str, body: str) -> float:
     kw_overlap = len(qset & kw_stems) / len(qset) if kw_stems else 0.0
     tri = trigram_similarity(query, body + " " + keywords)
     score = 0.55 * overlap + 0.25 * kw_overlap + 0.2 * tri + phrase_bonus
-    return round(min(score, 1.0), 3)
+    # Штраф за значимые слова вопроса, которых нет в карточке: «форма на экскурсию» ≠ «форма на физкультуру».
+    # Совпало одно слово из двух — это повод предложить вариант, но не отвечать уверенно.
+    significant = {s for s in qset if _significant(s)}
+    if significant:
+        missing = len(significant - all_stems) / len(significant)
+        score -= 0.4 * missing
+        if missing >= 0.5 and len(significant) >= 2:
+            score = min(score, UNSURE_CAP)
+    return round(max(min(score, 1.0), 0.0), 3)
 
 
 def rank(query: str, items: Iterable[T], keywords_of, body_of, limit: int = 5, min_score: float = 0.2) -> list[Hit[T]]:

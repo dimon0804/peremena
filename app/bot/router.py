@@ -38,7 +38,15 @@ def _actor_key(update: dict) -> str:
 
 async def handle_update(update: dict) -> None:
     c = ctx()
-    if not await c.kv.add_once("dd:" + _dedup_key(update), ttl=24 * 3600):
+    key_dd = "dd:" + _dedup_key(update)
+    try:
+        fresh = await c.kv.add_once(key_dd, ttl=24 * 3600)
+    except Exception:
+        # хранилище состояния недоступно: лучше обработать событие без дедупликации, чем молча потерять
+        # (и оставить кнопку у пользователя «нажатой» без ответа)
+        log.exception("Дедупликация недоступна — обрабатываем событие без неё")
+        fresh, key_dd = True, None
+    if not fresh:
         return  # MAX повторяет доставку, пока не получит 200 — дубликаты пропускаем
     # События одного человека обрабатываем по очереди: иначе двойное нажатие «Разослать»
     # создаёт два сбора, а первое сообщение нового пользователя дублирует запись в базе.
@@ -47,6 +55,15 @@ async def handle_update(update: dict) -> None:
     try:
         async with lock:
             await _dispatch(update)
+    except asyncio.CancelledError:
+        # остановка сервиса посреди обработки: снимаем отметку «обработано», чтобы повторная доставка
+        # после перезапуска не была отброшена как дубликат
+        if key_dd:
+            try:
+                await c.kv.delete(key_dd)
+            except Exception:
+                pass
+        raise
     finally:
         if not lock.locked() and len(_locks) > 5000:
             _locks.pop(key, None)
@@ -94,7 +111,8 @@ async def on_bot_started(update: dict) -> None:
         return
     if payload.startswith("poll_") and payload[5:].isdigit():
         poll = await polls.get_poll(int(payload[5:]))
-        if poll and not poll.closed:
+        # ссылку могли переслать постороннему — сбор показываем только тем, кому он адресован
+        if poll and not poll.closed and await polls.is_addressee(poll, uid):
             chat = await chats.get_chat(poll.chat_id)
             teacher = await chats.get_user(poll.teacher_id)
             tz = teacher.tz if teacher else ctx().settings.default_tz

@@ -75,6 +75,8 @@ async def on_admin_changed(update: dict) -> None:
                 user_id=chat.teacher_id,
                 text=f"✅ Теперь я администратор в «{html.escape(chat.title)}»: вижу список класса и вопросы в чате.",
             )
+            # без прав администратора историю читать нельзя — подтягиваем файлы учителя сейчас
+            await shelf.import_history(chat_id, chat.teacher_id, pages=3)
 
 
 async def on_user_added(update: dict) -> None:
@@ -87,6 +89,8 @@ async def on_user_added(update: dict) -> None:
 async def on_user_removed(update: dict) -> None:
     if update.get("chat_id") and update.get("user"):
         await chats.touch_member(update["chat_id"], update["user"], present=False)
+        # ушёл из чата — из открытых сборов, где он молчал, убираем: напоминания ему больше не нужны
+        await polls.drop_member(update["chat_id"], update["user"].get("user_id"))
 
 
 async def on_title_changed(update: dict) -> None:
@@ -123,6 +127,19 @@ async def on_message(update: dict) -> None:
     if uid == chat.teacher_id:
         await on_teacher_message(chat_id, uid, msg, text)
         return
+
+    # Срочное («Срочно! Ребёнок упал») — учителю сразу, в любое время. Проверяем раньше остальных фильтров:
+    # срочное сообщение не обязано быть вопросом и не должно склеиваться с недавним вопросом того же родителя.
+    teacher = await chats.get_user(chat.teacher_id) if chat.teacher_id else None
+    urgent = bool(teacher and text and quiet.is_urgent(teacher, text))
+    if urgent:
+        name = await chats.member_name(chat_id, uid)
+        await quiet.notify_teacher(
+            chat.teacher_id, f"🚨 <b>Срочно</b> — в чате «{html.escape(chat.title)}» пишет "
+                             f"<a href=\"max://user/{uid}\">{html.escape(name)}</a>:\n\n{html.escape(text[:1000])}",
+            kind="chat_question", chat_id=chat_id, from_user_id=uid, from_name=name, raw_text=text[:500],
+            urgent=True,
+        )
 
     # «мы сегодня не придём, заболел» — предлагаем отметить отсутствие кнопкой (не чаще раза в день на человека)
     if attendance.looks_like_absence(text) and await c.kv.add_once(f"abq:{chat_id}:{uid}", ttl=12 * 3600):
@@ -162,8 +179,7 @@ async def on_message(update: dict) -> None:
                 return
 
     # 2) вопрос пришёл вне рабочего времени — положим во «входящие» к утру
-    if chat.teacher_id:
-        teacher = await chats.get_user(chat.teacher_id)
+    if chat.teacher_id and not urgent:
         if teacher and not quiet.in_work_window(teacher):
             if await c.kv.add_once(f"cq:{chat_id}:{uid}", ttl=30 * 60):
                 name = await chats.member_name(chat_id, uid)

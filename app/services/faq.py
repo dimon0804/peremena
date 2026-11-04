@@ -17,7 +17,7 @@ from . import search
 # Пороги уверенности
 ANSWER_SCORE = 0.55   # отвечаем сами в личке
 SUGGEST_SCORE = 0.30  # предлагаем варианты «возможно, вы имели в виду»
-GROUP_SCORE = 0.70    # отвечаем в общем чате (только если учитель включил автоответ)
+GROUP_SCORE = 0.85    # отвечаем в общем чате (только если учитель включил автоответ) — только почти дословно
 
 
 async def add_entry(teacher_id: int, question: str, answer: str, keywords: str | None = None,
@@ -124,15 +124,23 @@ async def mark_miss(entry_id: int) -> FaqEntry | None:
         return e
 
 
-async def render_answer(e: FaqEntry) -> str:
+async def render_answer(e: FaqEntry, chat_ids: list[int] | None = None) -> str:
+    """chat_ids — классы спрашивающего: если их несколько, подписываем, из справочника какого класса ответ."""
     async with session() as s:
         teacher = await s.get(User, e.teacher_id)
+        label = ""
+        if chat_ids and len(chat_ids) > 1 and not e.school_id:
+            ids = [e.chat_id] if e.chat_id else chat_ids
+            titles = [c.title for c in (await s.scalars(select(ClassChat).where(
+                ClassChat.chat_id.in_(ids), ClassChat.teacher_id == e.teacher_id))).all() if c.title]
+            label = ", ".join(titles[:3])
     who = teacher.display_name if teacher else "учителем"
     tz = teacher.tz if teacher else None
     if e.school_id:
         source = f"📖 Из базы ответов школы · обновлено {fmt_date(e.updated_at, tz)}"
     else:
-        source = f"📖 Из справочника класса · сохранено учителем ({html.escape(who)}) {fmt_date(e.updated_at, tz)}"
+        where = f"класса {html.escape(label)}" if label else "класса"
+        source = f"📖 Из справочника {where} · сохранено учителем ({html.escape(who)}) {fmt_date(e.updated_at, tz)}"
     return f"{html.escape(e.answer)}\n\n<i>{source}</i>"
 
 

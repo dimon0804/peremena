@@ -8,7 +8,7 @@ import secrets
 from .. import keyboards as kb
 from ..core import ctx
 from ..models import User
-from ..services import attendance, chats, faq, faq_learning, polls, quiet, school, search, shelf, stats
+from ..services import answers, chats, faq, faq_learning, polls, quiet, school, search, shelf, stats
 from ..timeutil import fmt_dt, fmt_minutes, local_now, parse_deadline, parse_hours, preset_deadline
 from . import absence, staff
 from .common import (
@@ -76,7 +76,7 @@ async def run_command(uid: int, cmd: str, rest: str) -> None:
         "start": show_start, "help": show_start, "poll": start_poll, "status": show_status_list,
         "faq": show_faq, "add": start_faq_add, "quiet": show_quiet, "morning": send_morning,
         "stats": show_stats, "chats": show_chats, "app": show_app, "my": show_my_polls,
-        "cancel": cancel, "absent": absence.show_list, "board": staff.show_board, "invite": staff.start_invite, "school": staff.show_school,
+        "cancel": cancel, "forget": ask_forget, "absent": absence.show_list, "board": staff.show_board, "invite": staff.start_invite, "school": staff.show_school,
     }
     if cmd == "start" and rest and await staff.handle_start_payload(uid, rest):
         return
@@ -120,6 +120,21 @@ async def show_start(uid: int) -> None:
         await send(uid, PARENT_HELP, parent_menu())
     else:
         await send(uid, ONBOARD_HELP, parent_menu())
+
+
+async def ask_forget(uid: int) -> None:
+    await send(uid, "🗑 <b>Удалить мои данные?</b>\n\nУдалю ваши вопросы, отметки «ребёнок не придёт», имя ребёнка "
+                    "и ваши сообщения во «входящих» учителя. Ответы на закрытых сборах обезличу — учитель увидит, "
+                    "что ответ был, но не чей. Ответы на открытых сборах останутся до их закрытия.",
+               [[kb.cb("🗑 Да, удалить", "fg:yes"), kb.cb("Нет", "fg:no")]])
+
+
+async def do_forget(uid: int) -> None:
+    from ..services import retention
+
+    res = await retention.forget(uid)
+    await send(uid, f"✅ Готово. Удалено вопросов: {res['questions']}, отметок отсутствия: {res['absences']}, "
+                    f"сообщений учителю: {res['inbox']}; обезличено ответов: {res['answers']}.")
 
 
 async def cancel(uid: int) -> None:
@@ -351,10 +366,33 @@ async def show_poll_preview(uid: int, data: dict) -> None:
                      "уйдёт только сообщением в чат, без сверки «кто не ответил».")
     else:
         lines.append(f"Получат в личку: <b>{len(targets)}</b> человек + сообщение в чат класса.")
-    await send(uid, "\n".join(lines), [[kb.cb("✅ Разослать", "f:send")], [kb.cb("Отмена", "f:cancel")]])
+    morning = _morning_slot(user.tz if user else None, dl)
+    if morning:
+        lines.append(f"\n🌙 У родителей сейчас ночь. Могу разослать утром — {fmt_dt(morning, user.tz if user else None)}.")
+        rows = [[kb.cb("🌙 Разослать утром", "f:send:am")], [kb.cb("Разослать сейчас", "f:send")],
+                [kb.cb("Отмена", "f:cancel")]]
+    else:
+        rows = [[kb.cb("✅ Разослать", "f:send")], [kb.cb("Отмена", "f:cancel")]]
+    await send(uid, "\n".join(lines), rows)
 
 
-async def confirm_poll(uid: int) -> None:
+def _morning_slot(tz: str | None, deadline) -> object | None:
+    """Если у родителей сейчас ночь — время (UTC), когда рассылку можно отправить; иначе None."""
+    from datetime import timedelta
+
+    from ..timeutil import utcnow
+
+    if polls._is_daytime(tz):
+        return None
+    at = polls.next_daytime(tz)
+    if at <= utcnow():  # граница окна (например, ровно 21:00) — ближайшее утро
+        at = polls.next_daytime(tz, utcnow() + timedelta(hours=11))
+    if deadline and at >= deadline:
+        return None
+    return at
+
+
+async def confirm_poll(uid: int, morning: bool = False) -> None:
     from datetime import datetime
 
     st = await get_state(uid)
@@ -364,8 +402,16 @@ async def confirm_poll(uid: int) -> None:
     await clear_state(uid)
     data = st["data"]
     dl = datetime.fromisoformat(data["deadline"]) if data.get("deadline") else None
+    user = await chats.get_user(uid)
+    tz = user.tz if user else None
+    send_at = _morning_slot(tz, dl) if morning else None
     poll = await polls.create_poll(uid, data["chat_id"], data["template"], data["text"], data.get("options") or [], dl,
-                                   amount=data.get("amount"))
+                                   amount=data.get("amount"), send_at=send_at)
+    if send_at:
+        # граница рабочего дня работает и для родителей: ночью сбор не будит их уведомлением
+        await send(uid, f"🌙 Сбор сохранён и уйдёт родителям {fmt_dt(send_at, tz)}. Пришлю отчёт о рассылке.\n"
+                        + polls.plan_text(poll, tz))
+        return
     await send(uid, "⏳ Рассылаю…")
     report = await polls.send_poll(poll.id)
     lines = [f"✅ Сбор запущен: в личку доставлено <b>{report['delivered']}</b> из {report['total']}."]
@@ -374,9 +420,9 @@ async def confirm_poll(uid: int) -> None:
                      f"ответ всё равно засчитается лично им.")
     if not report["group_posted"]:
         lines.append("⚠️ Не получилось написать в чат класса — проверьте, что я всё ещё в нём.")
-    lines.append("Напомню молчащим за сутки и за 2 часа до срока. Статус — /status")
-    await send(uid, "\n".join(lines))
     poll = await polls.get_poll(poll.id)
+    lines.append(polls.plan_text(poll, tz) + " Статус — /status")
+    await send(uid, "\n".join(lines))
     text, buttons = await polls.status_card(poll)
     await send(uid, text, buttons)
 
@@ -417,21 +463,39 @@ async def show_my_polls(uid: int) -> None:
 
 
 # ====================================================================== «Справочник»
-async def show_faq(uid: int) -> None:
-    if not await _teacher_or_explain(uid):
-        return
-    text, entries = await faq.render_list(uid)
+FAQ_PAGE = 10  # карточек с кнопками на одной странице /faq
+
+
+def faq_buttons(entries, page: int, in_school: bool) -> list[list[dict]]:
+    """Кнопки удаления (и «в базу школы») постранично: удалить можно любую карточку, а не только первые 10."""
+    pages = max(1, -(-len(entries) // FAQ_PAGE))
+    page = min(max(page, 0), pages - 1)
     rows = [[kb.cb("➕ Добавить", "fq:add")]]
-    in_school = bool(await school.school_of_teacher(uid))
-    for e in entries[:10]:
+    for e in entries[page * FAQ_PAGE:(page + 1) * FAQ_PAGE]:
         row = [kb.cb(f"🗑 {e.question[:40]}", f"fq:del:{e.id}")]
         if in_school and not e.school_id:
             row.append(kb.cb("🏛 В базу школы", f"fq:share:{e.id}"))
         rows.append(row)
+    if pages > 1:
+        nav = []
+        if page > 0:
+            nav.append(kb.cb("◀️ Назад", f"fq:page:{page - 1}"))
+        nav.append(kb.cb(f"{page + 1}/{pages}", f"fq:page:{page}"))
+        if page < pages - 1:
+            nav.append(kb.cb("Дальше ▶️", f"fq:page:{page + 1}"))
+        rows.append(nav)
     c = ctx()
     if c.bot_username:
         rows.append([kb.app("Править в приложении", c.bot_username, "faq")])
-    await send(uid, text, rows)
+    return rows
+
+
+async def show_faq(uid: int) -> None:
+    if not await _teacher_or_explain(uid):
+        return
+    text, entries = await faq.render_list(uid)
+    in_school = bool(await school.school_of_teacher(uid))
+    await send(uid, text, faq_buttons(entries, 0, in_school))
     await show_open_questions(uid, quiet_if_empty=True)
 
 
@@ -446,8 +510,8 @@ async def show_open_questions(uid: int, quiet_if_empty: bool = False) -> None:
     rows = []
     for c in top:
         key = await faq_learning.remember_cluster(c)
-        lines.append(f"• {html.escape(c.question)} — {c.count}×")
-        rows.append([kb.cb(f"💾 {c.question[:45]} ({c.count}×)", f"fq:oq:{key}")])
+        lines.append(f"• {html.escape(c.question)} — {c.people}")
+        rows.append([kb.cb(f"💾 {c.question[:45]} ({c.people})", f"fq:oq:{key}")])
     await send(uid, "\n".join(lines), rows)
 
 
@@ -497,17 +561,28 @@ async def faq_add_step(uid: int, step: str, data: dict, text: str) -> bool:
 async def faq_reply_step(uid: int, data: dict, text: str) -> bool:
     """Учитель отвечает на переданный вопрос: ответ уходит родителю, в справочник — по желанию учителя.
     Автосохранение засоряло справочник: живой тест дал карточку «срочно → ?»."""
-    await clear_state(uid)
     q = await ctx().kv.get(f"qq:{data['qid']}")
     if not q:
+        await clear_state(uid)
         await send(uid, "Вопрос устарел — ответьте родителю напрямую.")
         return True
+    if not text.strip():
+        # картинка или файл без подписи: пустое сообщение родителю и пустая карточка справочника никому не нужны
+        await send(uid, "Ответ нужен текстом — напишите его одним сообщением. Отменить — /cancel")
+        return True
+    await clear_state(uid)
     sent = await ctx().safe_send(
         user_id=q["from_user_id"],
         text=f"✉️ <b>Ответ учителя</b> на ваш вопрос «{html.escape(q['text'][:200])}»:\n\n{html.escape(text)}",
     )
+    if not sent:
+        # вопрос не снимаем: кнопка «Ответить» продолжит работать, можно попробовать позже
+        await send(uid, "⚠️ Не удалось доставить ответ родителю — возможно, он остановил бота. "
+                        "Попробуйте ещё раз позже или напишите ему напрямую.",
+                   [[kb.cb("✍️ Ответить ещё раз", f"fr:{data['qid']}")]])
+        return True
     await ctx().kv.delete(f"qq:{data['qid']}")
-    head = "✅ Ответ отправлен." if sent else "⚠️ Не удалось доставить ответ родителю."
+    head = "✅ Ответ отправлен."
     if len(search.content_stems(q["text"])) < 2 or len(text.strip()) < 3:
         await send(uid, head)  # «срочно» → «?» в справочник не предлагаем
         return True
@@ -520,69 +595,40 @@ async def faq_reply_step(uid: int, data: dict, text: str) -> bool:
 
 # ====================================================================== вопросы
 async def answer_text(uid: int, text: str, is_teacher: bool) -> None:
+    """Вопрос в личке. Сам поиск ответа — в services.answers (его же использует мини-приложение),
+    здесь только отправка с кнопками."""
     low = text.lower()
-    if is_teacher and low.startswith(("найди", "найти", "полка", "где ")):
+    if low.startswith(("найди", "найти", "полка", "где ")) and (await answers.who(uid)).is_staff:
         await shelf_search(uid, text.split(" ", 1)[1] if " " in text else "")
         return
 
-    user = await chats.get_user(uid)
-    tz = user.tz if user else ctx().settings.default_tz
-    if is_teacher:
-        entries = await faq.list_entries(uid, with_school=True)
-        chat_ids = []
-        board_chats = [c.chat_id for c, _ in await staff.staff_chats(uid)]
-    else:
-        chat_ids = [c.chat_id for c in await chats.member_chats(uid)]
-        board_chats = chat_ids + [c.chat_id for c, _ in await staff.staff_chats(uid)]
-        if not board_chats:
-            await send(uid, ONBOARD_HELP)
-            return
-        entries = await faq.candidates_for_chats(chat_ids)
-
-    # «Заболел, сегодня не придём» — предлагаем отметить отсутствие кнопкой
-    if not is_teacher and attendance.looks_like_absence(text):
+    a = await answers.answer(uid, text)
+    if a.kind == "onboard":
+        await send(uid, ONBOARD_HELP)
+    elif a.kind == "absence":
         await absence.offer(uid)
-        return
-
-    # «Что задали?» и «какие объявления?» — по доске класса
-    if await staff.answer_board_question(uid, text, board_chats, tz):
-        return
-
-    hits = faq.rank(text, entries)
-    if hits and hits[0].score >= faq.ANSWER_SCORE:
-        e = hits[0].item
-        prefix = "👩‍🏫 <i>Так я отвечу родителям:</i>\n\n" if is_teacher else ""
-        await send(uid, prefix + await faq.render_answer(e), [[kb.cb("Это не то", f"fq:no:{e.id}")]] if not is_teacher else None)
-        if not is_teacher:
-            await faq.mark_hit(e.id)
-            await stats.add(e.teacher_id, "faq_answer")
-        return
-
-    # материалы на полке
-    mats = await shelf.find(uid, text, teacher_view=is_teacher, limit=3)
-    if hits:
-        rows = [[kb.cb(h.item.question[:60], f"fq:show:{h.item.id}")] for h in hits]
-        if not is_teacher:
+    elif a.kind in ("board", "news"):
+        await send(uid, a.text)
+    elif a.kind == "board_missing":
+        await send(uid, a.text, [[kb.cb("✉️ Спросить учителя", "fw:ask")]] if a.can_forward else None)
+    elif a.kind == "faq":
+        if a.as_teacher:
+            await send(uid, "👩‍🏫 <i>Так я отвечу родителям:</i>\n\n" + a.text)
+        else:
+            await send(uid, a.text, [[kb.cb("Это не то", f"fq:no:{a.entry.id}")]])
+    elif a.kind == "suggest":
+        rows = [[kb.cb(h.item.question[:60], f"fq:show:{h.item.id}")] for h in a.hits]
+        if a.can_forward:
             rows.append([kb.cb("Нет, спросить учителя", "fw:ask")])
-            await ctx().kv.set(f"q:{uid}", {"text": text, "chats": chat_ids}, 3600 * 6)
-        await send(uid, "🤔 Возможно, вы имели в виду:", rows)
-        return
-    if mats:
-        await send_material_list(uid, mats, is_teacher, header="🗂 Нашёл на полке:")
-        if not is_teacher:
-            await ctx().kv.set(f"q:{uid}", {"text": text, "chats": chat_ids}, 3600 * 6)
+        await send(uid, a.text, rows)
+    elif a.kind == "shelf":
+        await send_material_list(uid, a.materials, a.as_teacher, header=a.text)
+        if a.can_forward:
             await send(uid, "Если это не то — могу передать вопрос учителю.", [[kb.cb("Спросить учителя", "fw:ask")]])
-        return
-
-    if is_teacher:
-        await send(uid, "В справочнике и на полке такого нет. Добавить ответ — /add, найти файл — /shelf.",
-                   teacher_menu())
-        return
-    await ctx().kv.set(f"q:{uid}", {"text": text, "chats": chat_ids}, 3600 * 6)
-    # запоминаем вопрос без ответа: когда тему спросят несколько раз, бот подскажет учителю сохранить ответ
-    await faq_learning.record(chat_ids, uid, text)
-    await send(uid, "В справочнике класса пока нет готового ответа. Передать вопрос учителю?",
-               [[kb.cb("✉️ Передать учителю", "fw:ask")], [kb.cb("Не надо", "fw:x")]])
+    elif a.as_teacher:
+        await send(uid, a.text, teacher_menu())
+    else:
+        await send(uid, a.text, [[kb.cb("✉️ Передать учителю", "fw:ask")], [kb.cb("Не надо", "fw:x")]])
 
 
 async def forward_question(uid: int, chat_id: int | None = None) -> None:
@@ -622,7 +668,7 @@ async def forward_question(uid: int, chat_id: int | None = None) -> None:
             f"<i>Ответьте кнопкой — ответ уйдёт родителю, а сохранить его в справочник я предложу.</i>")
     status = await quiet.notify_teacher(
         ch.teacher_id, text, kind="question", chat_id=chat_id, from_user_id=uid, from_name=name,
-        raw_text=q["text"], buttons=[[kb.cb("✍️ Ответить", f"fr:{qid}")]],
+        raw_text=q["text"], buttons=[[kb.cb("✍️ Ответить", f"fr:{qid}")]], ref=qid,
     )
     if status == "sent":
         await send(uid, "✅ Передал учителю. Ответ придёт сюда или в чат класса.")
@@ -638,7 +684,7 @@ async def forward_question(uid: int, chat_id: int | None = None) -> None:
 
 # ====================================================================== «Полка»
 async def save_to_shelf(uid: int, media: list[dict], caption: str) -> None:
-    my_chats = await chats.teacher_chats(uid)
+    my_chats = [c for c, _ in await staff.staff_chats(uid)]  # и классы, где он предметник
     for item in media:
         m, created = await shelf.save(uid, item, caption, source="manual")
         rows = [[kb.cb(f"➡️ В {c.title[:30] or 'класс'}", f"sh:to:{m.id}:{c.chat_id}")] for c in my_chats[:4]]
@@ -655,7 +701,7 @@ async def ask_shelf(uid: int) -> None:
 
 
 async def shelf_search(uid: int, query: str) -> None:
-    is_teacher = await chats.is_teacher(uid)
+    is_teacher = (await school.roles(uid)).is_staff  # предметник тоже ищет по своей полке
     if not query.strip():
         await ask_shelf(uid)
         return
@@ -688,7 +734,7 @@ async def show_material(uid: int, mid: int, is_teacher: bool | None = None) -> N
         is_teacher = m.teacher_id == uid
     rows = [[kb.cb("📥 Прислать мне", f"sh:get:{m.id}")]]
     if is_teacher and m.teacher_id == uid:
-        for c in (await chats.teacher_chats(uid))[:4]:
+        for c, _ in (await staff.staff_chats(uid))[:4]:
             rows.append([kb.cb(f"➡️ Переслать в {c.title[:30] or 'класс'}", f"sh:to:{m.id}:{c.chat_id}")])
         rows.append([kb.cb("✏️ Подпись", f"sh:cap:{m.id}"), kb.cb("🗑 Убрать", f"sh:del:{m.id}")])
     await send(uid, await shelf.describe(m), rows)
@@ -713,7 +759,8 @@ async def show_quiet(uid: int) -> None:
     ]
     if my_chats:
         lines.append("")
-        lines.append("Автоответ прямо в чате класса (по точному совпадению со справочником):")
+        lines.append("Автоответ прямо в чате класса — только когда вопрос почти дословно совпадает с карточкой "
+                     "справочника (в остальных случаях молчу и не мешаю):")
         for c in my_chats:
             lines.append(f"• {html.escape(c.title or str(c.chat_id))}: {'вкл' if c.autoanswer else 'выкл'}")
     rows = [

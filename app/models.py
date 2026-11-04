@@ -3,13 +3,14 @@
 Хранится только то, что учитель явно сохранил, и служебные отметки о том, кто ответил на сбор.
 Переписка родителей не сохраняется (кроме вопросов, пришедших вне рабочего окна, —
 они лежат во «входящих» до утренней сводки и помечаются доставленными).
+Сроки хранения и «удалить мои данные» (/forget) — app/services/retention.py.
 """
 from __future__ import annotations
 
 from datetime import datetime
 
 from sqlalchemy import (
-    JSON, BigInteger, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, false,
+    JSON, BigInteger, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, false, true,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -101,6 +102,9 @@ class Poll(Base):
     group_message_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     campaign_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)  # сбор на параллель
     amount: Mapped[int | None] = mapped_column(Integer, nullable=True)  # сбор денег: рублей с каждого
+    # рассылка доведена до конца; False — ещё не начата (отложена до утра) или прервана перезапуском
+    dispatched: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
+    send_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # UTC: отложенная рассылка
 
     targets: Mapped[list["PollTarget"]] = relationship(
         back_populates="poll", cascade="all, delete-orphan", lazy="selectin", order_by="PollTarget.name"
@@ -179,6 +183,8 @@ class InboxItem(Base):
     text: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     delivered: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    # ключ переданного вопроса (qq:<ref> в KV) — чтобы ответить родителю прямо из утренней сводки
+    ref: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
 
 # ---------------------------------------------------------------- «Счётчик пользы»

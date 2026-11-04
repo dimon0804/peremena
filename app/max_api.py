@@ -5,7 +5,8 @@
 * личные диалоги адресуются по ``user_id``, групповые чаты — по ``chat_id``;
 * не больше ~2 сообщений в секунду в один диалог и ~30 запросов в секунду всего —
   поэтому есть общий ограничитель и пауза между сообщениями одному адресату;
-* на 429 и 5xx делаем несколько повторов с нарастающей паузой.
+* на 429 ждём Retry-After (общая пауза для всех); 5xx и обрывы повторяем только для идемпотентных
+  запросов — отправку сообщения после таймаута не повторяем, иначе родитель получит дубль.
 """
 from __future__ import annotations
 
@@ -85,30 +86,57 @@ def build_ssl_context(extra_ca_file: str | None) -> ssl.SSLContext:
 
 
 class _RateLimiter:
-    """Общий потолок запросов в секунду + минимальный интервал на одного адресата."""
+    """Общий потолок запросов в секунду + минимальный интервал на одного адресата.
+
+    Слот вычисляется под замком, а ждём уже вне его: пауза перед вторым сообщением одному родителю
+    не задерживает отправку всем остальным. После 429 все запросы ждут общую паузу (Retry-After)."""
 
     def __init__(self, rps: float = 25.0, per_peer_interval: float = 0.55):
         self._interval = 1.0 / rps
         self._per_peer = per_peer_interval
         self._lock = asyncio.Lock()
         self._last = 0.0
+        self._paused_until = 0.0
         self._peer_last: dict[str, float] = {}
+
+    def pause(self, seconds: float) -> None:
+        """MAX ответил 429: никому не стучимся, пока не пройдёт пауза."""
+        self._paused_until = max(self._paused_until, time.monotonic() + seconds)
 
     async def wait(self, peer: str | None = None) -> None:
         async with self._lock:
             now = time.monotonic()
-            delay = self._last + self._interval - now
+            # общий поток занимает ближайший свободный слот; пауза одного адресата сдвигает только его запрос
+            # (запас между 25 и 30 запросами в секунду покрывает редкое совпадение слотов)
+            slot = self._last = max(now, self._last + self._interval, self._paused_until)
             if peer:
-                delay = max(delay, self._peer_last.get(peer, 0.0) + self._per_peer - now)
-            if delay > 0:
-                await asyncio.sleep(delay)
-            now = time.monotonic()
-            self._last = now
+                slot = max(slot, self._peer_last.get(peer, 0.0) + self._per_peer)
             if peer:
-                self._peer_last[peer] = now
+                self._peer_last[peer] = slot
                 if len(self._peer_last) > 5000:
                     cutoff = now - 10
                     self._peer_last = {k: v for k, v in self._peer_last.items() if v > cutoff}
+        delay = slot - time.monotonic()
+        if delay > 0:
+            await asyncio.sleep(delay)
+
+
+# Ошибки, при которых запрос точно не дошёл до MAX, — их безопасно повторять даже для отправки сообщения.
+# Таймаут чтения или 5xx после отправки так не считаются: сообщение могло уйти, повтор дал бы дубль родителю.
+NOT_SENT_ERRORS = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
+REQUEST_TIMEOUT = 10.0  # обычные запросы; long polling GET /updates задаёт свой таймаут
+DEFAULT_RETRIES = 2     # итого до 3 попыток
+RETRY_AFTER_MAX = 30.0
+
+
+def _retry_after(resp: httpx.Response, attempt: int) -> float:
+    raw = resp.headers.get("Retry-After")
+    try:
+        if raw is not None:
+            return min(max(float(raw), 0.5), RETRY_AFTER_MAX)
+    except ValueError:
+        pass
+    return float(min(2 ** attempt, 8))
 
 
 class MaxClient:
@@ -119,7 +147,7 @@ class MaxClient:
         self._http = httpx.AsyncClient(
             base_url=self.base_url,
             headers={"Authorization": token},
-            timeout=httpx.Timeout(40.0, connect=10.0),
+            timeout=httpx.Timeout(REQUEST_TIMEOUT, connect=5.0),
             verify=self._ssl,
         )
         self._limiter = _RateLimiter()
@@ -138,9 +166,14 @@ class MaxClient:
         json: Any = None,
         peer: str | None = None,
         timeout: float | None = None,
-        retries: int = 4,
+        retries: int = DEFAULT_RETRIES,
+        idempotent: bool | None = None,
     ) -> Any:
+        """Запрос к MAX с повторами. Неидемпотентные запросы (POST) повторяем только когда точно знаем,
+        что MAX их не выполнил: соединение не установлено или 429 «слишком часто»."""
         params = {k: v for k, v in (params or {}).items() if v is not None}
+        if idempotent is None:
+            idempotent = method.upper() != "POST"
         attempt = 0
         while True:
             await self._limiter.wait(peer)
@@ -151,17 +184,24 @@ class MaxClient:
                 )
             except (httpx.TransportError, httpx.TimeoutException) as e:
                 attempt += 1
-                if attempt > retries:
-                    raise MaxApiError(0, "network", str(e)) from e
-                await asyncio.sleep(min(2 ** attempt, 15))
+                if attempt > retries or not (idempotent or isinstance(e, NOT_SENT_ERRORS)):
+                    raise MaxApiError(0, "network", f"{type(e).__name__}: {e}") from e
+                await asyncio.sleep(min(2 ** (attempt - 1), 4))
                 continue
 
-            if resp.status_code == 429 or resp.status_code >= 500:
+            if resp.status_code == 429:
                 attempt += 1
+                self._limiter.pause(_retry_after(resp, attempt))
                 if attempt > retries:
-                    raise MaxApiError(resp.status_code, "retry_exhausted", resp.text[:300])
-                await asyncio.sleep(min(2 ** attempt, 15))
-                continue
+                    raise MaxApiError(429, "too_many_requests", resp.text[:300])
+                continue  # пауза выдерживается в limiter.wait — общая для всех запросов
+
+            if resp.status_code >= 500 and idempotent:
+                attempt += 1
+                if attempt <= retries:
+                    await asyncio.sleep(min(2 ** (attempt - 1), 4))
+                    continue
+                raise MaxApiError(resp.status_code, "retry_exhausted", resp.text[:300])
 
             data: Any
             try:
@@ -247,9 +287,11 @@ class MaxClient:
         return await self.request("DELETE", "/messages", params={"message_id": message_id})
 
     async def get_messages(self, chat_id: int, *, count: int = 100, before: int | None = None) -> dict:
+        """История чата, новые первыми. Параметра before у MAX нет: верхняя граница времени (мс)
+        передаётся в from — «сообщения до этого времени» (https://dev.max.ru/docs-api/methods/GET/messages)."""
         if is_demo(chat_id):
             return {"messages": []}
-        return await self.request("GET", "/messages", params={"chat_id": chat_id, "count": count, "before": before})
+        return await self.request("GET", "/messages", params={"chat_id": chat_id, "count": count, "from": before})
 
     async def answer_callback(self, callback_id: str, *, notification: str | None = None,
                               message: dict | None = None) -> dict:
@@ -302,7 +344,7 @@ class MaxClient:
         body: dict[str, Any] = {"url": url, "update_types": UPDATE_TYPES}
         if secret:
             body["secret"] = secret
-        return await self.request("POST", "/subscriptions", json=body)
+        return await self.request("POST", "/subscriptions", json=body, idempotent=True)
 
     async def unsubscribe(self, url: str) -> dict:
         return await self.request("DELETE", "/subscriptions", params={"url": url})
@@ -310,7 +352,7 @@ class MaxClient:
     # ------------------------------------------------------------------ uploads
     async def upload(self, kind: str, filename: str, content: bytes, content_type: str | None = None) -> dict:
         """Загружает файл в MAX и возвращает payload для вложения (обычно {"token": ...})."""
-        endpoint = await self.request("POST", "/uploads", params={"type": kind})
+        endpoint = await self.request("POST", "/uploads", params={"type": kind}, idempotent=True)
         url = endpoint["url"]
         async with httpx.AsyncClient(timeout=httpx.Timeout(300.0), verify=self._ssl) as up:
             resp = await up.post(url, files={"data": (filename, content, content_type or "application/octet-stream")})
