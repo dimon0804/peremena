@@ -4,6 +4,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import hmac
+import html
 import io
 from datetime import datetime
 
@@ -12,6 +13,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
+from .. import ratelimit
 from ..core import ctx
 from ..db import session
 from ..max_api import MaxApiError
@@ -344,12 +346,26 @@ async def ask_forward(body: ForwardIn, user: User = Depends(current_user)):
 
 @router.post("/faq/{fid}/not-that")
 async def not_that(fid: int, user: User = Depends(current_user)):
-    e = await faq.mark_miss(fid)
-    if e:
+    e = await faq.get_entry(fid)
+    if e is None:
+        raise HTTPException(404, "Карточка не найдена")
+    # отметить можно только карточку, которую справочник мог показать этому человеку
+    if e.teacher_id != user.user_id:
+        visible = await faq.candidates_for_chats([c.chat_id for c in await chats.member_chats(user.user_id)])
+        if e.id not in {x.id for x in visible}:
+            raise HTTPException(404, "Карточка не найдена")
+    # одна отметка на карточку в сутки и не больше 20 в час — иначе это рассылка учителю, а не отзыв
+    if not await ratelimit.hit("notthat", user.user_id, 20, 3600) \
+            or not await ctx().kv.add_once(f"notthat:{user.user_id}:{fid}", ttl=24 * 3600):
+        return {"ok": True}
+    await faq.mark_miss(fid)
+    if e.teacher_id != user.user_id:
         name = await chats.member_name(e.chat_id, user.user_id)
-        await quiet.notify_teacher(e.teacher_id, f"🙅 Ответ из справочника не подошёл: «{e.question[:150]}» ({name})",
+        q = e.question[:150]
+        await quiet.notify_teacher(e.teacher_id,
+                                   f"🙅 Ответ из справочника не подошёл: «{html.escape(q)}» ({html.escape(name)})",
                                    kind="not_that", from_user_id=user.user_id, from_name=name,
-                                   raw_text=f"Не подошло: «{e.question[:150]}»")
+                                   raw_text=f"Не подошло: «{q}»")
     return {"ok": True}
 
 

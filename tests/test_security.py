@@ -95,3 +95,28 @@ def test_open_questions_key_belongs_to_teacher(env):
     # хозяин — может
     run(loop, api.faq_open_answer(api.OpenAnswerIn(key=key, answer="В 18:00"), teacher))
     assert not run(loop, faq_learning.clusters(TEACHER["user_id"]))
+
+
+def test_not_that_requires_access_and_is_limited(env):
+    from app.services import faq
+
+    loop, fake, c = env
+    teacher, teacher2 = _two_classes(loop)
+    # участник чата 9Б (класс TEACHER) с «разметкой» в имени
+    parent = run(loop, chats.upsert_user({"user_id": PARENTS[0]["user_id"], "first_name": "<b>Анна</b>"}))
+    assert CHAT_ID in {x.chat_id for x in run(loop, chats.member_chats(parent.user_id))}
+    e = run(loop, faq.add_entry(TEACHER2["user_id"], "Где <i>форма</i>?", "В шкафу"))
+    # чужая карточка (учитель другого класса) — 404 и ни одного сообщения
+    before = len(fake.sent)
+    with pytest.raises(HTTPException) as err:
+        run(loop, api.not_that(e.id, parent))
+    assert err.value.status_code == 404 and len(fake.sent) == before
+
+    own = run(loop, faq.add_entry(TEACHER["user_id"], "Во сколько <i>собрание</i>?", "В 18:00"))
+    run(loop, api.not_that(own.id, parent))
+    msgs = fake.texts_to(user_id=TEACHER["user_id"])
+    assert "&lt;i&gt;собрание" in msgs[-1] and "<b>" not in msgs[-1]
+    # повторно ту же карточку — без новой рассылки
+    n = len(fake.sent)
+    run(loop, api.not_that(own.id, parent))
+    assert len(fake.sent) == n
