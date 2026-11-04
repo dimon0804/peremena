@@ -45,10 +45,40 @@ on top of the same services the bot uses, and all of them work in the demo sandb
 | 🔌 **Open REST API v1** | API keys (`Authorization: Bearer prm_…`) for school portals, e-journals, 1C, spreadsheets: classes, polls with per-person answers, absences, homework; write-enabled keys can launch polls. Schema: `GET /api/v1/openapi.json`. 120 requests/min per key. |
 | 📡 **Outgoing webhooks** | `poll.created`, `poll.answered`, `poll.closed`, `absence.created` delivered as signed JSON (`X-Peremena-Signature: sha256=HMAC(secret, timestamp + "." + body)`), with a delivery log and a “Test” button. HTTPS to public addresses only (SSRF protection), no redirects, 3 attempts. |
 | 🖨 **Printable sheet and QR consent forms** | A signature sheet for the teacher's folder and tear-off consent forms with pre-filled names and a QR code that opens the poll in MAX. |
+| 📒 **School e-journal** | `/journal`: upload a CSV/XLSX export → homework on the board, schedule in bot answers, class list checked against the chat; absences and poll results back as CSV. Details below. |
 | 🗓 **“This week”** | `/week`: deadlines, homework by day, announcements and absence notes in one card. |
 
 Tokens are generated with `secrets.token_urlsafe` and stored as SHA-256 hashes; keys can be revoked and calendar
 links rotated instantly. Calendar feeds contain no other people's names.
+
+### School e-journals
+
+Russian e-journals (“Сетевой город”, ЭлЖур, ЭЖД/МЭШ, regional “Электронная школа”, ФГИС «Моя школа») have no open
+API for third-party bots, but almost all of them export to Excel or CSV. So the main path is a file
+(`app/integrations/journals/`):
+
+- **Import.** The teacher sends the exported table to the bot with the caption “журнал” (or `/journal` → “Upload”),
+  or uploads it in the mini app. The bot first shows what it found (“27 students, 34 assignments, schedule for
+  5 days”) and writes only after the teacher confirms. Homework goes to the class board silently (no chat
+  message) with subject and date; re-importing the same file creates no duplicates, changed assignments are
+  updated, hand-written entries are left alone. The schedule powers answers to “what lessons are tomorrow?” and
+  “what to bring on Wednesday?”. The class list is matched against chat members, so the teacher sees who is not
+  in the chat yet. Only “Surname Name” of a student and “Surname I.” of parents are kept; patronymics, birth dates,
+  phones and e-mails are dropped while parsing.
+- **Format detection** by column headers (several known variants per column, title rows above the header are
+  skipped, every XLSX sheet is parsed, a weekday grid schedule is supported) plus a downloadable template
+  (`/api/journals/template.xlsx`). The header variants were collected from typical exports and have **not been
+  checked against real files** from every journal.
+- **Safe parsing:** no `eval`, 3 MB / 5,000 rows limit, openpyxl in `read_only` + `data_only` mode (formulas are not
+  evaluated), zip size checked up front, defusedxml for XML.
+- **Export back:** absence notes and poll results as CSV (UTF-8 with BOM, `;` separator, formula-like cells are
+  prefixed with an apostrophe) — from the bot, the mini app (signed links valid for 24 h) and the open API
+  (`GET /api/v1/export/{absences|polls}.csv`, `GET /api/v1/schedule`).
+- **Dnevnik.ru connector** over its OAuth REST API (`DNEVNIK_ENABLED=true`, per-teacher token stored encrypted
+  or a school token in `DNEVNIK_TOKEN`). Endpoints are taken from public descriptions; **not tested against the
+  live API** — tests run on a mock server. Off by default.
+
+Only the class teacher of a class can import or export; parents and other teachers are refused.
 
 ## Quick start
 
