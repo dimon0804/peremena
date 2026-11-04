@@ -67,6 +67,9 @@ async def mark(chat_id: int, user_id: int, day: str, reason: str = "sick", child
     if created:
         teacher_id = (await chats.get_chat(chat_id) or ClassChat()).teacher_id
         await stats.add(teacher_id, "absence")
+        from ..integrations import webhooks  # событие absence.created для внешних систем
+
+        await webhooks.safe(webhooks.on_absence(a, teacher_id))
     return a, created
 
 

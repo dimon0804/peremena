@@ -26,6 +26,8 @@ COMMANDS = [
     ("quiet", "Тихий режим и рабочее время"),
     ("morning", "Утренняя сводка сейчас"),
     ("stats", "Счётчик пользы"),
+    ("week", "Что важно на неделе"),
+    ("calendar", "Сроки и домашка в моём календаре"),
     ("chats", "Мои классы"),
     ("invite", "Пригласить предметника"),
     ("school", "Школа и сводка для завуча"),
@@ -58,6 +60,8 @@ ALIASES = {
     "board": "board", "доска": "board",
     "invite": "invite", "пригласить": "invite",
     "school": "school", "школа": "school",
+    "week": "week", "неделя": "week",
+    "calendar": "calendar", "календарь": "calendar", "cal": "calendar",
 }
 
 
@@ -108,6 +112,7 @@ def teacher_menu() -> list[list[dict]]:
         [kb.cb("🗂 Полка", "m:shelf")],
         [kb.cb("🌙 Тихий режим", "m:quiet"), kb.cb("⏱ Польза", "m:stats")],
         [kb.cb("🏫 Мои классы", "m:chats"), kb.cb("🏛 Школа", "m:school")],
+        [kb.cb("🗓 Неделя", "m:week"), kb.cb("📆 В календарь", "m:cal")],
     ]
     if c.bot_username:
         rows.append([kb.app("📱 Открыть приложение", c.bot_username, "home")])
@@ -139,7 +144,8 @@ def parent_menu() -> list[list[dict]]:
     rows = [
         [kb.cb("📋 Мои сборы", "m:my"), kb.cb("❓ Задать вопрос", "m:ask")],
         [kb.cb("📚 Что задали?", "m:hwq"), kb.cb("🤒 Ребёнок не придёт", "ab:start")],
-        [kb.cb("🗂 Материалы класса", "m:shelf")],
+        [kb.cb("🗓 Что на неделе", "m:week"), kb.cb("🗂 Материалы", "m:shelf")],
+        [kb.cb("📆 Сроки в мой календарь", "m:cal")],
     ]
     if c.bot_username:
         rows.append([kb.app("📱 Открыть приложение", c.bot_username, "home")])

@@ -86,6 +86,11 @@ async def run_command(uid: int, cmd: str, rest: str) -> None:
     if cmd == "shelf":
         await (shelf_search(uid, rest) if rest else ask_shelf(uid))
         return
+    if cmd in ("week", "calendar"):
+        from . import integrations
+
+        await integrations.on_menu(uid, "week" if cmd == "week" else "cal")
+        return
     h = handlers.get(cmd)
     if h:
         await h(uid)
