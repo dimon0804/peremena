@@ -452,7 +452,7 @@ async def show_open_questions(uid: int, quiet_if_empty: bool = False) -> None:
 
 
 async def start_open_answer(uid: int, key: str) -> None:
-    item = await ctx().kv.get(f"oqc:{key}")
+    item = await faq_learning.get_cluster(uid, key)
     if not item:
         await send(uid, "Список устарел — откройте /faq ещё раз.")
         return
@@ -484,7 +484,7 @@ async def faq_add_step(uid: int, step: str, data: dict, text: str) -> bool:
         e = await faq.add_entry(uid, data["q"], text)
         closed = 0
         if data.get("oq"):  # отвечали на частый вопрос без ответа — снимаем всю группу
-            await faq_learning.resolve(data["oq"])
+            await faq_learning.resolve(data["oq"], uid)
             closed = len(data["oq"])
         note = f"\n\nСнял {closed} вопрос(ов) родителей из списка «без ответа»." if closed else ""
         await send(uid, f"✅ Сохранил.\n\n<b>{html.escape(e.question)}</b>\n→ {html.escape(e.answer)}\n\n"

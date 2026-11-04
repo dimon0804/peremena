@@ -5,8 +5,14 @@ import json
 import time
 
 import pytest
+from fastapi import HTTPException
 
+from app.bot.router import handle_update
+from app.services import chats
+from app.webapp import api
 from app.webapp.auth import InitDataError, validate_init_data
+
+from .conftest import CHAT2_ID, CHAT_ID, PARENTS, TEACHER, TEACHER2
 
 TOKEN = "123:abc"
 
@@ -49,6 +55,43 @@ def test_init_data_requires_sane_auth_date(auth_date):
 
 def test_init_data_non_ascii_hash_is_rejected_not_crash():
     fields = {"auth_date": str(int(time.time())), "user": '{"id":5}'}
-    raw = "&".join(f"{k}={v}" for k, v in fields.items()) + "&hash=ж" * 1
+    raw = "&".join(f"{k}={v}" for k, v in fields.items()) + "&hash=ж"
     with pytest.raises(InitDataError):
         validate_init_data(raw, TOKEN)
+
+
+# ---------------------------------------------------------------- доступ к чужим данным
+def run(loop, coro):
+    return loop.run_until_complete(coro)
+
+
+def _two_classes(loop):
+    for chat_id, t in ((CHAT_ID, TEACHER), (CHAT2_ID, TEACHER2)):
+        run(loop, handle_update({"update_type": "bot_added", "timestamp": chat_id, "chat_id": chat_id, "user": t,
+                                 "is_channel": False}))
+    return run(loop, chats.get_user(TEACHER["user_id"])), run(loop, chats.get_user(TEACHER2["user_id"]))
+
+
+def test_open_questions_key_belongs_to_teacher(env):
+    from app.db import session
+    from app.models import OpenQuestion
+    from app.services import faq_learning
+
+    loop, fake, c = env
+    teacher, teacher2 = _two_classes(loop)
+
+    async def seed():
+        async with session() as s:
+            for text in ("Во сколько собрание в пятницу?", "собрание в пятницу во сколько?"):
+                s.add(OpenQuestion(teacher_id=TEACHER["user_id"], chat_id=CHAT_ID, user_id=PARENTS[0]["user_id"],
+                                   text=text, stems=" ".join(faq_learning._stems(text))))
+    run(loop, seed())
+    key = run(loop, api.faq_open(teacher))[0]["key"]
+    # другой учитель угадал ключ (это id первого вопроса) — ни текста вопроса, ни закрытия
+    with pytest.raises(HTTPException) as e:
+        run(loop, api.faq_open_answer(api.OpenAnswerIn(key=key, answer="В 18:00"), teacher2))
+    assert e.value.status_code == 404
+    assert run(loop, faq_learning.clusters(TEACHER["user_id"]))
+    # хозяин — может
+    run(loop, api.faq_open_answer(api.OpenAnswerIn(key=key, answer="В 18:00"), teacher))
+    assert not run(loop, faq_learning.clusters(TEACHER["user_id"]))

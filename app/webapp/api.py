@@ -879,12 +879,12 @@ class OpenAnswerIn(BaseModel):
 
 @router.post("/faq/open")
 async def faq_open_answer(body: OpenAnswerIn, user: User = Depends(teacher_user)):
-    item = await ctx().kv.get(f"oqc:{body.key}")
+    item = await faq_learning.get_cluster(user.user_id, body.key)
     if not item:
         raise HTTPException(404, "Список устарел — обновите страницу")
     sid = await _school_for_share(user, body.shared)
     e = await faq.add_entry(user.user_id, body.question or item["q"], body.answer, None, None, sid)
-    await faq_learning.resolve(item["ids"])
+    await faq_learning.resolve(item["ids"], user.user_id)
     return faq_out(e, user.user_id) | {"resolved": len(item["ids"])}
 
 

@@ -30,6 +30,7 @@ class Cluster:
     stems: set[str] = field(default_factory=set)
     users: set[int] = field(default_factory=set)
     members: list[set[str]] = field(default_factory=list)  # основы слов каждого вопроса группы
+    teacher_id: int = 0                # чьи это вопросы — ключ кнопки отдаём только ему
 
     def accepts(self, st: set[str]) -> bool:
         # сравниваем с каждым вопросом, а не с объединением слов группы: иначе случайные слова
@@ -89,7 +90,7 @@ async def clusters(teacher_id: int, min_count: int = 2) -> list[Cluster]:
         st = set(q.stems.split())
         target = next((c for c in found if c.accepts(st)), None)
         if target is None:
-            target = Cluster(question=q.text)
+            target = Cluster(question=q.text, teacher_id=teacher_id)
             found.append(target)
         target.ids.append(q.id)
         target.stems |= st
@@ -103,10 +104,13 @@ async def clusters(teacher_id: int, min_count: int = 2) -> list[Cluster]:
     return result
 
 
-async def resolve(ids: list[int]) -> None:
+async def resolve(ids: list[int], teacher_id: int | None = None) -> None:
     if ids:
+        cond = [OpenQuestion.id.in_(ids)]
+        if teacher_id is not None:  # снимать можно только вопросы своих родителей
+            cond.append(OpenQuestion.teacher_id == teacher_id)
         async with session() as s:
-            await s.execute(update(OpenQuestion).where(OpenQuestion.id.in_(ids)).values(resolved=True))
+            await s.execute(update(OpenQuestion).where(*cond).values(resolved=True))
 
 
 async def resolve_matching(teacher_id: int, question: str, keywords: str = "") -> int:
@@ -129,7 +133,7 @@ async def _nudge(teacher_id: int, c: Cluster) -> None:
     key = "oqn:" + "-".join(sorted(c.stems))[:200]
     if not await ctx().kv.add_once(key, ttl=7 * 24 * 3600):
         return
-    await ctx().kv.set(f"oqc:{c.ids[0]}", {"q": c.question, "ids": c.ids}, 14 * 24 * 3600)
+    await ctx().kv.set(f"oqc:{c.ids[0]}", {"q": c.question, "ids": c.ids, "t": teacher_id}, 14 * 24 * 3600)
     await notify_teacher(
         teacher_id,
         f"📖 Про «{html.escape(c.question)}» спросили уже {c.count} раза, а в справочнике ответа нет.\n\n"
@@ -151,5 +155,13 @@ async def digest_hint(teacher_id: int) -> str:
 async def remember_cluster(c: Cluster) -> str:
     """Кладёт кластер в KV под коротким ключом для кнопки. Возвращает ключ."""
     key = str(c.ids[0])
-    await ctx().kv.set(f"oqc:{key}", {"q": c.question, "ids": c.ids}, 14 * 24 * 3600)
+    await ctx().kv.set(f"oqc:{key}", {"q": c.question, "ids": c.ids, "t": c.teacher_id}, 14 * 24 * 3600)
     return key
+
+
+async def get_cluster(teacher_id: int, key: str) -> dict | None:
+    """Кластер по ключу кнопки — только если он принадлежит этому учителю (ключ — маленькое число, его легко угадать)."""
+    item = await ctx().kv.get(f"oqc:{key}")
+    if not isinstance(item, dict) or item.get("t") != teacher_id:
+        return None
+    return item
