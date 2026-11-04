@@ -1,0 +1,83 @@
+# Профиль «один VPS: 2 vCPU / 4 ГБ» — весь стек (бот, PostgreSQL, Redis, балансировщик) в этих границах.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.vps.yml up -d --build
+#
+# Лимиты делят машину так, как её делит нагрузка (замер — docs/НАГРУЗКА.md, «Один VPS 2 vCPU / 4 ГБ»):
+#   bot   1.2 CPU / 1280 МБ — Python съедает больше всего процессора: ~5 мс на событие, сайт и мини-приложение;
+#   db    0.5 CPU / 2048 МБ — память под кэш страниц (shared_buffers + кэш ОС), процессора нужно втрое меньше бота;
+#   redis 0.15 CPU / 512 МБ — очередь событий, замки, лимит MAX: операции по микросекунде, память — под очередь;
+#   lb    0.15 CPU / 256 МБ — Caddy перед ботом.
+# Итого 2.0 CPU и 4096 МБ. Системе и хостовому nginx/Caddy остаётся то, что ядро не отдаёт контейнерам сверх
+# лимитов, — на настоящем VPS с 4 ГБ имеет смысл снизить db до 1792M.
+#
+# Соединений с базой: WEB_CONCURRENCY × (DB_POOL_SIZE + DB_MAX_OVERFLOW) = 2 × (8 + 8) = 32 < max_connections=60.
+services:
+  bot:
+    environment:
+      ROLE: all
+      EVENT_QUEUE: redis
+      # два процесса uvicorn: каждый и принимает вебхуки, и обрабатывает очередь — 1.2 CPU используются целиком
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
+      HANDLER_CONCURRENCY: ${HANDLER_CONCURRENCY:-32}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-8}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-8}
+      # журнал каждого запроса пишет хостовый nginx/Caddy; в процессе бота это лишний процессор на пике
+      ACCESS_LOG: ${ACCESS_LOG:-false}
+      # ~0,7 КБ на событие в Redis: 200 000 — около 150 МБ при лимите Redis 384 МБ
+      EVENT_STREAM_MAXLEN: ${EVENT_STREAM_MAXLEN:-200000}
+      EVENT_BACKLOG_WARN: ${EVENT_BACKLOG_WARN:-5000}
+      EVENT_READY_BACKLOG: ${EVENT_READY_BACKLOG:-20000}
+    deploy:
+      resources:
+        limits:
+          cpus: "1.2"
+          memory: 1280M
+
+  db:
+    command:
+      - postgres
+      - -c
+      - max_connections=60
+      - -c
+      - shared_buffers=512MB
+      - -c
+      - effective_cache_size=1GB
+      - -c
+      - work_mem=8MB
+      - -c
+      - maintenance_work_mem=128MB
+      - -c
+      - wal_buffers=16MB
+      - -c
+      - max_wal_size=1GB
+      - -c
+      - checkpoint_completion_target=0.9
+      - -c
+      - random_page_cost=1.1
+      # фоновые параллельные запросы на 0.5 CPU только мешают коротким запросам бота
+      - -c
+      - max_parallel_workers_per_gather=0
+    shm_size: 256mb
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 2048M
+
+  redis:
+    # очередь, замки и дедупликация — в памяти; снимок раз в минуту, чтобы очередь пережила перезапуск.
+    # noeviction: при нехватке памяти Redis откажет в записи (бот обработает событие сам), а не выбросит замки
+    command: ["redis-server", "--save", "60", "1", "--appendonly", "no",
+              "--maxmemory", "384mb", "--maxmemory-policy", "noeviction"]
+    deploy:
+      resources:
+        limits:
+          cpus: "0.15"
+          memory: 512M
+
+  lb:
+    deploy:
+      resources:
+        limits:
+          cpus: "0.15"
+          memory: 256M

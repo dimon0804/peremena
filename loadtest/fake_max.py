@@ -41,6 +41,7 @@ class Stats:
         self.window: deque = deque()          # моменты принятых запросов за последнюю секунду
         self.sent: list[dict] = []            # POST /messages: кому, payload кнопок
         self.answers: Counter = Counter()     # callback_id → сколько раз ответили
+        self.answer_t: dict[str, float] = {}  # callback_id → когда ответили впервые (задержка нажатие → ответ)
         self.edits = 0
         self.started = time.time()
 
@@ -120,7 +121,9 @@ async def history():
 
 @app.post("/answers")
 async def answer(request: Request):
-    S.answers[request.query_params.get("callback_id", "")] += 1
+    cid = request.query_params.get("callback_id", "")
+    S.answers[cid] += 1
+    S.answer_t.setdefault(cid, time.time())
     return {"success": True}
 
 
@@ -183,6 +186,11 @@ async def answers():
     return dict(S.answers)
 
 
+@app.get("/_answer_times")
+async def answer_times():
+    return S.answer_t
+
+
 @app.post("/_reset")
 async def reset():
     S.reset()
@@ -193,11 +201,12 @@ def main() -> None:
     global LIMIT, LATENCY
     p = argparse.ArgumentParser()
     p.add_argument("--port", type=int, default=59100)
+    p.add_argument("--host", default="127.0.0.1", help="0.0.0.0 — в контейнере стенда")
     p.add_argument("--limit", type=float, default=30.0, help="запросов в секунду на бота; 0 — без лимита")
     p.add_argument("--latency", type=float, default=0.01, help="задержка ответа, с (сеть до MAX)")
     a = p.parse_args()
     LIMIT, LATENCY = a.limit, a.latency
-    uvicorn.run(app, host="127.0.0.1", port=a.port, log_level="warning", access_log=False)
+    uvicorn.run(app, host=a.host, port=a.port, log_level="warning", access_log=False)
 
 
 if __name__ == "__main__":
