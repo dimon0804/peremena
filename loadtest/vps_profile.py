@@ -181,16 +181,23 @@ async def step(a) -> dict:
     send_s = t_sent - t0
     if camp is not None:
         await camp
-    # ответы родителей параллели на сбор завуча: по одному нажатию на каждого получателя
-    sent_msgs = await get_json(fh, fp, "/_sent")
+    # ответы родителей параллели на сбор завуча: по одному нажатию на каждого получателя.
+    # Часть рассылки может доводить минутная задача планировщика уже после ответа API — ждём до 60 с.
     camp_parents = {roster.parent_id(i, j) for i in camp_classes for j in range(roster.PARENTS)}
     camp_msgs: dict[int, list[str]] = {}
-    for m in sent_msgs:
-        if m["user_id"] in camp_parents:
-            for x in m["payloads"]:
-                if x.startswith("pa:"):
-                    camp_msgs.setdefault(m["user_id"], []).append(x)
-                    break
+    t_wait_camp = time.time()
+    while True:
+        camp_msgs = {}
+        for m in await get_json(fh, fp, "/_sent"):
+            if m["user_id"] in camp_parents:
+                for x in m["payloads"]:
+                    if x.startswith("pa:"):
+                        camp_msgs.setdefault(m["user_id"], []).append(x)
+                        break
+        if len(camp_msgs) >= len(camp_parents) or time.time() - t_wait_camp > 60:
+            break
+        await asyncio.sleep(2)
+    camp_result["messages_wait_s"] = round(time.time() - t_wait_camp, 1)
     camp_cb = []
     for uid, payloads in camp_msgs.items():
         pid = payloads[0].split(":")[1]

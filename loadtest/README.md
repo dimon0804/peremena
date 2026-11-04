@@ -12,6 +12,9 @@
 | `httpload.py` | лёгкий keep-alive HTTP-клиент генератора (httpx сам съедал бы процессор на тысячах запросов в секунду) |
 | `profile_handlers.py` | профиль обработки событий в одном процессе: событий/с, мс процессора и SQL-запросов на событие |
 | `bench_search.py` | микробенчмарк поиска по справочнику |
+| `vps_profile.py` | ступень «вечерний пик N классов» против поднятого стенда: вебхуки, «Мои сборы», сбор на параллель, сверка, метрики очереди с `/metrics` |
+| `vps_stress.sh` | ступени на стенде профиля VPS: засев → нагрузка → `docker stats`, лог бота, OOM → `results/vps-<метка>-<N>.json` |
+| `docker-compose.stress.yml` | стенд поверх `docker-compose.vps.yml`: поддельный MAX и генератор вне лимитов VPS |
 | `results/` | JSON последних прогонов, по ним составлен `docs/НАГРУЗКА.md` |
 
 ## Подготовка
@@ -49,6 +52,23 @@ python loadtest/run_all.py --instances 2 --workers 3 --out loadtest/results/afte
 
 Метрики: RPS, p50/p95/p99 задержки ответа, коды ответов, время полной рассылки и обработки, пиковый RPS к MAX,
 число 429, ошибки и таймауты пула в логах ботов (логи — рядом с JSON, в `*-logs/`).
+
+## Стенд «один VPS 2 vCPU / 4 ГБ»
+
+Бот, PostgreSQL, Redis и балансировщик — в лимитах `docker-compose.vps.yml`, поддельный MAX (30 запросов/с)
+и генератор — отдельными контейнерами вне лимитов. Отдельный проект compose, порт только на 127.0.0.1:
+
+```bash
+P="docker compose -p peremena-stress -f docker-compose.yml -f docker-compose.vps.yml -f loadtest/docker-compose.stress.yml"
+export PEREMENA_TAG=stress BOT_PORT=18090
+$P up -d --build
+DURATION=120 loadtest/vps_stress.sh final 100 300 1000 1200 1500 3000      # с лимитом MAX, как в жизни
+FAKE_LIMIT=0 STRESS_MAX_RPS=5000 loadtest/vps_stress.sh nolimit 1500        # потолок без лимита MAX
+BOT_CPUS=1.2 DB_CPUS=0.5 REDIS_CPUS=0.15 LB_CPUS=0.15 loadtest/vps_stress.sh real 1000   # другое деление CPU
+$P down -v
+```
+
+Методика и результаты — `docs/НАГРУЗКА.md`, раздел «Один VPS 2 vCPU / 4 ГБ».
 
 ## Уборка
 

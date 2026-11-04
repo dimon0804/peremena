@@ -37,7 +37,7 @@ for N in "$@"; do
   "${P[@]}" stop bot >/dev/null
   "${P[@]}" run --rm -T loadgen loadtest/seed.py --db "$DB_URL" --project /srv --classes "$N" --polls --reset
   "${P[@]}" exec -T redis redis-cli FLUSHALL >/dev/null
-  "${P[@]}" up -d bot fakemax >/dev/null
+  "${P[@]}" up -d bot fakemax lb >/dev/null  # lb тоже: иначе новые LB_CPUS/LB_MEMORY к нему не применятся
   wait_bot
   STATS="$RAW/stats-$N.csv"
   : > "$STATS"
