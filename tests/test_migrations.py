@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from app import db
 
-HEAD = "0006"  # последняя миграция в app/migrations/versions
+HEAD = "0010"  # последняя миграция в app/migrations/versions
 
 
 def _url(tmp_path, name):
@@ -34,7 +34,9 @@ def test_fresh_database_is_built_by_migrations(tmp_path):
                 from alembic.autogenerate import compare_metadata
                 from alembic.migration import MigrationContext
 
-                return compare_metadata(MigrationContext.configure(sync_conn), db.Base.metadata)
+                # столбец vector и индекс HNSW pgvector в моделях не описаны намеренно (db.SCHEMA_EXTRAS)
+                mc = MigrationContext.configure(sync_conn, opts={"include_object": db.include_object})
+                return compare_metadata(mc, db.Base.metadata)
             changes = await conn.run_sync(diff)
         await db.close_db()
         return version, changes

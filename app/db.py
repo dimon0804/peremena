@@ -79,6 +79,19 @@ async def init_db(url: str, *, pool_size: int | None = None, max_overflow: int |
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 
+# Объекты схемы, которых нет в моделях намеренно: столбец vector(312) и индекс HNSW появляются только
+# на PostgreSQL с pgvector (миграция 0010). Сравнение моделей со схемой их не замечает.
+SCHEMA_EXTRAS = {("faq_embeddings", "embedding"), ("faq_embeddings", "ix_faq_embeddings_hnsw")}
+
+
+def include_object(obj, name, type_, reflected, compare_to) -> bool:
+    """Фильтр для alembic autogenerate / compare_metadata: пропускает SCHEMA_EXTRAS."""
+    if reflected and compare_to is None and type_ in ("column", "index"):
+        table = getattr(getattr(obj, "table", None), "name", None)
+        if (table, name) in SCHEMA_EXTRAS:
+            return False
+    return True
+
 
 def _migrate(conn) -> None:
     """Схема базы — через миграции Alembic (app/migrations).

@@ -76,6 +76,19 @@ class Settings(BaseSettings):
     demo_per_ip_hour: int = 10
     demo_max_sandboxes: int = 1000  # живых песочниц одновременно (каждая — около 150 строк в базе)
 
+    # --- Семантический поиск по справочнику (опционально, app/services/semantic.py) ---
+    # on — эмбеддинги rubert-tiny2 помогают найти карточку, спрошенную другими словами. Отвечает бот всё так же
+    # только текстом учителя. Нужен образ с WITH_EMBEDDINGS=1 (или pip install -r requirements-ml.txt).
+    embeddings: str = "off"
+    embeddings_backend: str = "auto"  # auto | onnx (onnxruntime, без torch) | st (sentence-transformers)
+    embeddings_model: str = "cointegrated/rubert-tiny2"
+    embeddings_model_dir: str = str(BASE_DIR / "models" / "rubert-tiny2")  # в образе: /srv/models/rubert-tiny2
+    embeddings_threads: int = 1
+    # Пороги косинуса (подбираются loadtest/eval_semantic.py на настоящей модели)
+    embeddings_answer_cos: float = 0.80
+    embeddings_suggest_cos: float = 0.65
+    embeddings_margin: float = 0.05
+
     # --- Прочее ---
     default_tz: str = "Europe/Moscow"
     host: str = "0.0.0.0"
@@ -95,6 +108,10 @@ class Settings(BaseSettings):
         if self.updates_mode in ("webhook", "polling"):
             return self.updates_mode
         return "webhook" if self.webhook_url else "polling"
+
+    @property
+    def embeddings_on(self) -> bool:
+        return self.embeddings.strip().lower() in ("on", "1", "true", "yes")
 
     @property
     def runs_background(self) -> bool:

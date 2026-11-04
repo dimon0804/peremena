@@ -13,3 +13,4 @@ docs
 deploy
 *.md
 docker-compose.yml
+models

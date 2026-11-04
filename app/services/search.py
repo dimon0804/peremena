@@ -108,6 +108,7 @@ T = TypeVar("T")
 class Hit(Generic[T]):
     item: T
     score: float
+    cos: float | None = None  # косинус по эмбеддингам, если включён семантический поиск (semantic.py)
 
 
 UNSURE_CAP = 0.5  # потолок оценки, если половина значимых слов вопроса не нашлась (ниже порога «отвечаю сам»)
