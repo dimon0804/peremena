@@ -121,6 +121,81 @@ class _RateLimiter:
             await asyncio.sleep(delay)
 
 
+# Общий для всех экземпляров ограничитель: «ближайший свободный слот» хранится в Redis и вычисляется
+# атомарно в Lua по часам Redis (у экземпляров часы могут расходиться). Логика та же, что у _RateLimiter:
+# общий поток занимает слот через интервал 1/rps, пауза одного адресата сдвигает только его запрос,
+# после 429 все ждут общую паузу. Возвращает, сколько миллисекунд ждать до своего слота.
+_SHARED_WAIT = """
+local t = redis.call('TIME')
+local now = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
+local interval = tonumber(ARGV[1])
+local slot = now
+local last = tonumber(redis.call('GET', KEYS[1]) or '0')
+if last + interval > slot then slot = last + interval end
+local paused = tonumber(redis.call('GET', KEYS[2]) or '0')
+if paused > slot then slot = paused end
+redis.call('SET', KEYS[1], slot, 'PX', 60000)
+if ARGV[3] == '1' then
+  local peer = tonumber(redis.call('GET', KEYS[3]) or '0')
+  if peer + tonumber(ARGV[2]) > slot then slot = peer + tonumber(ARGV[2]) end
+  redis.call('SET', KEYS[3], slot, 'PX', 10000)
+end
+return slot - now
+"""
+_SHARED_PAUSE = """
+local t = redis.call('TIME')
+local untl = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000) + tonumber(ARGV[1])
+local cur = tonumber(redis.call('GET', KEYS[1]) or '0')
+if untl > cur then redis.call('SET', KEYS[1], untl, 'PX', tonumber(ARGV[1]) + 1000) end
+return untl
+"""
+
+
+class SharedRateLimiter:
+    """Потолок запросов к MAX на бота, общий для всех экземпляров и воркеров (Redis).
+    Если Redis недоступен — откат на локальный ограничитель процесса (с предупреждением в логе)."""
+
+    def __init__(self, redis, token: str, rps: float = 25.0, per_peer_interval: float = 0.55,
+                 fallback: "_RateLimiter | None" = None) -> None:
+        import hashlib
+
+        self._r = redis
+        self._interval_ms = max(1, round(1000.0 / rps))
+        self._per_peer_ms = max(0, round(per_peer_interval * 1000))
+        ns = "pm:rl:" + hashlib.sha256(token.encode()).hexdigest()[:10]  # у разных ботов — разные лимиты
+        self._k_slot, self._k_pause, self._k_peer = ns + ":slot", ns + ":pause", ns + ":p:"
+        self._fallback = fallback or _RateLimiter(rps, per_peer_interval)
+        self._warned_at = 0.0
+
+    def _degraded(self, e: Exception) -> None:
+        now = time.monotonic()
+        if now - self._warned_at > 60:
+            self._warned_at = now
+            log.warning("Общий лимитер MAX API недоступен (%s) — временно лимит этого процесса", e)
+
+    def pause(self, seconds: float) -> None:
+        self._fallback.pause(seconds)
+        task = asyncio.ensure_future(self._pause(seconds))
+        task.add_done_callback(lambda t: t.cancelled() or t.exception())  # без «exception never retrieved»
+
+    async def _pause(self, seconds: float) -> None:
+        try:
+            await self._r.eval(_SHARED_PAUSE, 1, self._k_pause, int(seconds * 1000))
+        except Exception as e:
+            self._degraded(e)
+
+    async def wait(self, peer: str | None = None) -> None:
+        try:
+            delay_ms = await self._r.eval(_SHARED_WAIT, 3, self._k_slot, self._k_pause, self._k_peer + (peer or "-"),
+                                          self._interval_ms, self._per_peer_ms, "1" if peer else "0")
+        except Exception as e:
+            self._degraded(e)
+            await self._fallback.wait(peer)
+            return
+        if delay_ms and int(delay_ms) > 0:
+            await asyncio.sleep(int(delay_ms) / 1000)
+
+
 # Ошибки, при которых запрос точно не дошёл до MAX, — их безопасно повторять даже для отправки сообщения.
 # Таймаут чтения или 5xx после отправки так не считаются: сообщение могло уйти, повтор дал бы дубль родителю.
 NOT_SENT_ERRORS = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
@@ -140,7 +215,7 @@ def _retry_after(resp: httpx.Response, attempt: int) -> float:
 
 
 class MaxClient:
-    def __init__(self, token: str, base_url: str, extra_ca_file: str | None = None):
+    def __init__(self, token: str, base_url: str, extra_ca_file: str | None = None, rps: float = 25.0):
         self.token = token
         self.base_url = base_url.rstrip("/")
         self._ssl = build_ssl_context(extra_ca_file)
@@ -149,9 +224,16 @@ class MaxClient:
             headers={"Authorization": token},
             timeout=httpx.Timeout(REQUEST_TIMEOUT, connect=5.0),
             verify=self._ssl,
+            limits=httpx.Limits(max_connections=100, max_keepalive_connections=50),
         )
-        self._limiter = _RateLimiter()
+        self._rps = rps
+        self._limiter: _RateLimiter | SharedRateLimiter = _RateLimiter(rps)
         self._demo_seq = itertools.count(1)
+
+    def use_shared_limiter(self, redis) -> None:
+        """Несколько экземпляров бота — один лимит MAX на всех: ограничитель переезжает в Redis."""
+        local = self._limiter if isinstance(self._limiter, _RateLimiter) else _RateLimiter(self._rps)
+        self._limiter = SharedRateLimiter(redis, self.token, self._rps, fallback=local)
 
     async def close(self) -> None:
         await self._http.aclose()

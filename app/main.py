@@ -3,25 +3,28 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import json
 import logging
 import mimetypes
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.exception_handlers import http_exception_handler
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import __version__, db
+from . import __version__, db, updates
 from .bot.common import COMMANDS
 from .bot.router import handle_update
 from .config import BASE_DIR, get_settings
 from .core import Ctx, set_ctx
 from .max_api import MaxApiError, MaxClient
 from .state import make_kv
-from .updates import drain, ensure_webhook, make_scheduler, polling_loop, spawn
+from .events import EventQueue
+from .leader import Leader, make_backend
+from .updates import JOB_OPTS, Background, drain, leader_only, make_scheduler, spawn
 from .webapp.api import router as api_router
 from .webapp.site_api import router as site_api_router
 from .integrations.api_v1 import router as api_v1_router
@@ -37,30 +40,56 @@ def maintenance_scheduler(c: Ctx):
     from .services import demo, websession
 
     sched = AsyncIOScheduler(timezone="UTC")
-    opts = {"max_instances": 1, "coalesce": True, "misfire_grace_time": 120}
-    sched.add_job(demo.cleanup, "interval", hours=1, id="demo", **opts)
-    sched.add_job(websession.cleanup, "interval", hours=1, id="sessions", **opts)
+    opts = JOB_OPTS
+    sched.add_job(leader_only(demo.cleanup), "interval", hours=1, id="demo", **opts)
+    sched.add_job(leader_only(websession.cleanup), "interval", hours=1, id="sessions", **opts)
     if hasattr(c.kv, "cleanup"):
-        sched.add_job(c.kv.cleanup, "interval", hours=1, id="kv", **opts)
+        sched.add_job(leader_only(c.kv.cleanup), "interval", hours=1, id="kv", **opts)
     return sched
+
+
+async def _start_background(c: Ctx, sched, polling: bool, subscribe_webhook: bool) -> tuple[Background, Leader]:
+    """Планировщик и long polling — только в процессе-лидере (замок в Redis / PostgreSQL)."""
+    bg = Background(c, sched, polling=polling, subscribe_webhook=subscribe_webhook)
+    leader = Leader(make_backend(c.kv, db.engine(), c.settings.max_bot_token), ttl=LEADER_TTL,
+                    on_elected=bg.on_elected, on_demoted=bg.on_demoted)
+    updates.current_leader = leader
+    await leader.step()  # первый шаг сразу: одиночный экземпляр начинает работу без задержки
+    leader.start()
+    return bg, leader
+
+
+LEADER_TTL = 30.0
 
 
 async def startup() -> tuple[Ctx, list]:
     settings = get_settings()
     await db.init_db(settings.database_url)
     kv = await make_kv(settings.redis_url)
-    api = MaxClient(settings.max_bot_token, settings.max_api_url, settings.extra_ca_file)
+    api = MaxClient(settings.max_bot_token, settings.max_api_url, settings.extra_ca_file, rps=settings.max_rps)
+    if kv.redis is not None:
+        api.use_shared_limiter(kv.redis)  # один лимит MAX API на все экземпляры и воркеры
     c = Ctx(settings=settings, api=api, kv=kv, bot_username=settings.bot_username)
     set_ctx(c)
     background: list = []
+    mode = settings.event_queue.strip().lower()
+    updates.queue = None
+    if kv.redis is not None and mode in ("auto", "redis"):
+        updates.queue = EventQueue(kv.redis)
+    elif mode == "redis":
+        log.error("EVENT_QUEUE=redis, но Redis не подключён — события обрабатываются в принявшем процессе")
+    role = settings.role.strip().lower() or "all"
+    if role not in ("all", "web", "worker"):
+        log.error("ROLE=%s не поддерживается (all | web | worker) — работаю как all", settings.role)
+    log.info("Роль процесса: %s; база: %s, пул: %s; состояние: %s", role, db.dialect(),
+             db.pool_status() or "—", type(kv).__name__)
     if settings.dev_auth and settings.is_public:
         log.error("!!! DEV_AUTH=true при заданном PUBLIC_URL/WEBHOOK_URL — это вход под любым пользователем. "
                   "Режим разработки ИГНОРИРУЕТСЯ; уберите DEV_AUTH из настроек прода.")
     if not settings.max_bot_token:
         log.warning("MAX_BOT_TOKEN не задан — работает только веб-часть (API и мини-приложение)")
-        sched = maintenance_scheduler(c)  # демо и сессии убираем и без бота
-        sched.start()
-        background.append(sched)
+        if settings.runs_background:  # демо и сессии убираем и без бота
+            background += await _start_background(c, maintenance_scheduler(c), polling=False, subscribe_webhook=False)
         return c, background
     try:
         me = await api.get_me()
@@ -70,18 +99,18 @@ async def startup() -> tuple[Ctx, list]:
         log.info("Бот: %s (@%s, id=%s)", c.bot_name, c.bot_username, c.bot_user_id)
     except MaxApiError as e:
         log.error("GET /me не удался: %s — проверьте токен и доступ к %s", e, settings.max_api_url)
-    try:
-        await api.set_commands(COMMANDS)
-    except MaxApiError as e:
-        log.warning("Не удалось обновить меню команд: %s", e)
-
-    sched = make_scheduler(c)
-    sched.start()
-    background.append(sched)
-    if settings.mode == "webhook":
-        await ensure_webhook(c, force=True)
+    if settings.runs_background:
+        try:
+            await api.set_commands(COMMANDS)
+        except MaxApiError as e:
+            log.warning("Не удалось обновить меню команд: %s", e)
+        background += await _start_background(c, make_scheduler(c), polling=settings.mode == "polling",
+                                               subscribe_webhook=settings.mode == "webhook")
+        if updates.queue is not None:  # обработчики очереди — в каждом процессе all/worker, не только у лидера
+            background.append(asyncio.create_task(
+                updates.queue.consume(handle_update, settings.handler_concurrency), name="event-queue"))
     else:
-        background.append(asyncio.create_task(polling_loop(c)))
+        log.info("ROLE=web: планировщик и long polling работают в другом экземпляре (ROLE=worker или all)")
     c.started = True
     log.info("Режим получения событий: %s", settings.mode)
     return c, background
@@ -98,11 +127,17 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        for b in background:  # сначала лидер отпускает замок — другой экземпляр подхватит задачи сразу
+            if isinstance(b, Leader):
+                await b.stop()
+        for b in background:
+            if isinstance(b, Background):
+                b.shutdown()
+        if updates.queue is not None:
+            await updates.queue.drain()
         for b in background:
             if isinstance(b, asyncio.Task):
                 b.cancel()
-            else:
-                b.shutdown(wait=False)
         await drain()  # начатые обработки (рассылка, ответ на кнопку) доводим до конца, пока живы API и база
         await c.api.close()
         await c.kv.close()
@@ -126,26 +161,6 @@ BODY_LIMIT = 1024 * 1024  # JSON-запросы и вебхук; загрузк�
 DEV_ONLY = ("/api/docs", "/openapi.json")
 
 
-@app.middleware("http")
-async def security_headers(request: Request, call_next):
-    path = request.url.path
-    try:
-        length = int(request.headers.get("content-length") or 0)
-    except ValueError:
-        length = 0
-    if length > BODY_LIMIT and path != "/api/materials/upload":
-        return JSONResponse({"detail": "Слишком большой запрос"}, status_code=413)
-    response = await call_next(request)
-    response.headers.setdefault("X-Content-Type-Options", "nosniff")
-    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
-    if path not in DEV_ONLY:  # Swagger грузит скрипты с CDN — ему CSP не ставим, он есть только в разработке
-        # Мини-приложение MAX открывает во фрейме/вебвью — ему frame-ancestors не ограничиваем;
-        # сайт (вход, главная) во фрейм чужого сайта не встраивается.
-        csp = CSP if path == "/app" or path.startswith("/app/") else CSP + "; frame-ancestors 'self'"
-        response.headers.setdefault("Content-Security-Policy", csp)
-    return response
-
-
 @app.get("/openapi.json", include_in_schema=False)
 async def openapi_schema():
     if not get_settings().dev_mode:
@@ -160,29 +175,75 @@ async def api_docs():
     return get_swagger_ui_html(openapi_url="/openapi.json", title="Перемена — API")
 
 
-@app.middleware("http")
-async def revalidate_static(request: Request, call_next):
-    """Страницы, скрипты и стили сайта и мини-приложения браузер должен сверять с сервером (по ETag),
-    иначе после обновления у пользователей остаётся старый код — особенно во встроенном браузере MAX."""
-    response = await call_next(request)
-    path = request.url.path
-    if not path.startswith("/api/") and (path.endswith((".html", ".js", ".css")) or path.endswith("/")
-                                         or path in ("/login", "/app")):
-        response.headers["Cache-Control"] = "no-cache"
-    return response
-
-
 def _is_api(path: str) -> bool:
     return path.startswith(("/api/", "/webhook", "/health"))
 
 
-@app.middleware("http")
-async def api_404_json(request: Request, call_next):
-    """Неизвестный адрес /api/... попадает в статику сайта и получил бы HTML-страницу 404 — API отвечает JSON."""
-    response = await call_next(request)
-    if response.status_code == 404 and _is_api(request.url.path)             and response.headers.get("content-type", "").startswith("text/html"):
-        return JSONResponse({"detail": "Не найдено"}, status_code=404)
-    return response
+def _revalidate(path: str) -> bool:
+    """Страницы, скрипты и стили сайта и мини-приложения браузер должен сверять с сервером (по ETag),
+    иначе после обновления у пользователей остаётся старый код — особенно во встроенном браузере MAX."""
+    return not path.startswith("/api/") and (path.endswith((".html", ".js", ".css")) or path.endswith("/")
+                                             or path in ("/login", "/app"))
+
+
+class HttpPolicy:
+    """Общие правила HTTP одним ASGI-слоем (раньше — три @app.middleware("http"); каждый такой слой — отдельная
+    задача и поток тела ответа, на сотнях запросов в секунду это заметная доля процессора):
+    * запрос больше BODY_LIMIT — 413 (загрузка файлов проверяет свой лимит сама);
+    * заголовки безопасности: nosniff, Referrer-Policy, CSP (мини-приложению MAX без frame-ancestors —
+      его открывают во фрейме/вебвью; Swagger в разработке грузит скрипты с CDN — ему CSP не ставим);
+    * Cache-Control: no-cache для страниц, скриптов и стилей;
+    * неизвестный /api/... попадает в статику сайта и получил бы HTML-страницу 404 — отвечаем JSON."""
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        path = scope["path"]
+        length = 0
+        for k, v in scope["headers"]:
+            if k == b"content-length":
+                try:
+                    length = int(v)
+                except ValueError:
+                    length = 0
+                break
+        if length > BODY_LIMIT and path != "/api/materials/upload":
+            return await JSONResponse({"detail": "Слишком большой запрос"}, status_code=413)(scope, receive, send)
+        extra = [(b"x-content-type-options", b"nosniff"), (b"referrer-policy", b"strict-origin-when-cross-origin")]
+        if path not in DEV_ONLY:
+            csp = CSP if path == "/app" or path.startswith("/app/") else CSP + "; frame-ancestors 'self'"
+            extra.append((b"content-security-policy", csp.encode()))
+        revalidate = _revalidate(path)
+        api = _is_api(path)
+        swallow = False
+
+        async def wrapped(message):
+            nonlocal swallow
+            if swallow:
+                return
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers") or [])
+                if api and message["status"] == 404 and any(
+                        k.lower() == b"content-type" and v.startswith(b"text/html") for k, v in headers):
+                    swallow = True
+                    body = json.dumps({"detail": "Не найдено"}, ensure_ascii=False).encode()
+                    await send({"type": "http.response.start", "status": 404, "headers": [
+                        (b"content-type", b"application/json"), (b"content-length", str(len(body)).encode()),
+                        *extra]})
+                    await send({"type": "http.response.body", "body": body})
+                    return
+                present = {k.lower() for k, _ in headers}
+                headers += [(k, v) for k, v in extra if k not in present]  # как setdefault
+                if revalidate:
+                    headers = [(k, v) for k, v in headers if k.lower() != b"cache-control"]
+                    headers.append((b"cache-control", b"no-cache"))
+                message = {**message, "headers": headers}
+            await send(message)
+
+        await self.app(scope, receive, wrapped)
 
 
 @app.exception_handler(StarletteHTTPException)
@@ -193,22 +254,70 @@ async def not_found_page(request: Request, exc: StarletteHTTPException):
     return await http_exception_handler(request, exc)
 
 
-@app.post("/webhook")
-async def webhook(request: Request, x_max_bot_api_secret: str | None = Header(default=None)):
+async def accept_webhook(secret: bytes | None, raw: bytes) -> tuple[int, dict]:
+    """Приём вебхука MAX: проверка секрета, разбор, в очередь (или в обработку). Возвращает (статус, тело)."""
     settings = get_settings()
     expected = settings.effective_webhook_secret
     if not expected:  # без токена бота вебхук не принимаем: секрет был бы выведен из пустой строки
-        raise HTTPException(503, "bot is not configured")
+        return 503, {"detail": "bot is not configured"}
     # сравниваем байты: строка с не-ASCII символами в compare_digest даёт TypeError (и 500)
-    if not x_max_bot_api_secret or not hmac.compare_digest(x_max_bot_api_secret.encode(), expected.encode()):
-        raise HTTPException(403, "bad secret")
+    if not secret or not hmac.compare_digest(secret, expected.encode()):
+        return 403, {"detail": "bad secret"}
     try:
-        update = await request.json()
+        update = json.loads(raw)
     except ValueError:
-        raise HTTPException(400, "bad json")
+        return 400, {"detail": "bad json"}
     if isinstance(update, dict) and update.get("update_type"):
-        spawn(handle_update(update))
-    return {"ok": True}
+        # с очередью — только XADD в Redis: 200 уходит сразу, а событие уже не потеряется при падении процесса
+        if not await updates.enqueue(update):
+            spawn(handle_update(update))
+    return 200, {"ok": True}
+
+
+class WebhookFastPath:
+    """POST /webhook — в обход стека middleware FastAPI (каждый @app.middleware("http") — отдельная задача
+    и поток тела ответа). На пике это половина процессора приёма: так один процесс принимает в разы больше
+    вебхуков в секунду. Заголовки ответа — те же, что ставит security_headers."""
+
+    HEADERS = [(b"content-type", b"application/json"), (b"x-content-type-options", b"nosniff"),
+               (b"referrer-policy", b"strict-origin-when-cross-origin"),
+               (b"content-security-policy", (CSP + "; frame-ancestors 'self'").encode())]
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or scope["path"] != "/webhook" or scope["method"] != "POST":
+            return await self.app(scope, receive, send)
+        secret = None
+        length = 0
+        for k, v in scope["headers"]:
+            if k == b"x-max-bot-api-secret":
+                secret = v
+            elif k == b"content-length":
+                try:
+                    length = int(v)
+                except ValueError:
+                    length = 0
+        status, body = 413, {"detail": "Слишком большой запрос"}
+        if length <= BODY_LIMIT:
+            chunks, size, more = [], 0, True
+            while more:
+                msg = await receive()
+                if msg["type"] == "http.disconnect":
+                    return
+                chunk = msg.get("body", b"")
+                size += len(chunk)
+                if size > BODY_LIMIT:
+                    break
+                chunks.append(chunk)
+                more = msg.get("more_body", False)
+            if size <= BODY_LIMIT:
+                status, body = await accept_webhook(secret, b"".join(chunks))
+        raw = json.dumps(body, ensure_ascii=False).encode()
+        await send({"type": "http.response.start", "status": status,
+                    "headers": self.HEADERS + [(b"content-length", str(len(raw)).encode())]})
+        await send({"type": "http.response.body", "body": raw})
 
 
 async def _db_ok() -> bool:
@@ -236,14 +345,24 @@ async def health():
     Подробности — только в режиме разработки: снаружи незачем знать версию и устройство сервиса."""
     c = app.state.ctx
     checks = {"db": await _db_ok(), "kv": await _kv_ok(c)}
-    polling = [b for b in getattr(app.state, "background", []) if isinstance(b, asyncio.Task)]
-    if polling:  # long polling упал — бот перестал получать сообщения
-        checks["polling"] = not any(t.done() for t in polling)
+    background = getattr(app.state, "background", [])
+    leader = next((b for b in background if isinstance(b, Leader)), None)
+    for b in background:
+        if isinstance(b, Background) and b.polling_ok() is not None:  # long polling упал — события не приходят
+            checks["polling"] = b.polling_ok()
+    if leader is not None and leader._task is not None and leader._task.done():
+        checks["leader"] = False  # цикл выборов умер — процесс не подхватит задачи, если лидер упадёт
+    consumers = [b for b in background if isinstance(b, asyncio.Task) and b.get_name() == "event-queue"]
+    if consumers:
+        checks["queue"] = not any(t.done() for t in consumers)  # обработчик очереди упал
     ok = all(checks.values())
     body: dict = {"status": "ok" if ok else "degraded"}
     if c.settings.dev_mode:
         body |= {"checks": checks, "version": __version__, "mode": c.settings.mode, "bot": c.bot_username,
-                 "db": db.dialect(), "kv": type(c.kv).__name__, "bot_ready": c.started}
+                 "db": db.dialect(), "kv": type(c.kv).__name__, "bot_ready": c.started,
+                 "role": c.settings.role, "leader": bool(leader and leader.is_leader), "pool": db.pool_status(),
+                 "queue": (await updates.queue.backlog()) if updates.queue is not None else None,
+                 "processed": updates.queue.processed if updates.queue is not None else None}
     return JSONResponse(body, status_code=200 if ok else 503)
 
 
@@ -266,3 +385,7 @@ async def cabinet():
 app.mount("/app", StaticFiles(directory=BASE_DIR / "webapp", html=True), name="webapp")
 # Сайт: главная страница, стили, картинки
 app.mount("/", StaticFiles(directory=SITE_DIR, html=True), name="site")
+
+app.add_middleware(HttpPolicy)
+# последним — значит, снаружи всех: вебхук не проходит общий стек
+app.add_middleware(WebhookFastPath)

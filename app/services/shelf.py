@@ -122,13 +122,21 @@ async def find(user_id: int, query: str, teacher_view: bool, limit: int = 5) -> 
     return hits
 
 
-async def chat_titles() -> dict[int, str]:
+async def chat_titles(chat_ids=None) -> dict[int, str]:
+    """Названия классов по id. Без списка — все классы базы: в масштабе региона это десятки тысяч строк,
+    поэтому вызывающие передают только нужные id."""
+    q = select(ClassChat.chat_id, ClassChat.title)
+    if chat_ids is not None:
+        ids = list({i for i in chat_ids if i is not None})
+        if not ids:
+            return {}
+        q = q.where(ClassChat.chat_id.in_(ids))
     async with session() as s:
-        return {c.chat_id: c.title for c in (await s.scalars(select(ClassChat))).all()}
+        return {cid: title for cid, title in (await s.execute(q)).all()}
 
 
 async def describe(m: Material, tz: str | None = None) -> str:
-    titles = await chat_titles()
+    titles = await chat_titles([m.chat_id])
     icon = TYPE_ICON.get(m.attach_type, "📄")
     parts = [f"{icon} <b>{html.escape(m.filename or 'Файл')}</b>"]
     if m.title:

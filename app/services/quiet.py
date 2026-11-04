@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import html
 import logging
+import time
 from datetime import datetime, timedelta
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 
 from .. import keyboards as kb
 from ..core import ctx
@@ -282,31 +283,70 @@ async def send_digest(teacher: User, include_empty: bool = False) -> bool:
     return await deliver_digest(teacher, include_empty) == "sent"
 
 
+MORNING_WINDOW = 120   # минут после начала рабочего дня, в которые сводка ещё уместна
+MORNING_BATCH = 500    # учителей за один запрос
+_TZ_TTL = 300.0
+_tz_cache: tuple[int, float, list[str]] | None = None
+
+
+async def _teacher_zones() -> list[str]:
+    """Часовые пояса классных руководителей. Их единицы, а учителей — тысячи: окно «утро» считаем
+    один раз на пояс, а не для каждого учителя. Список обновляется раз в 5 минут."""
+    global _tz_cache
+    from .. import db
+
+    now, eid = time.monotonic(), id(db.engine())
+    if _tz_cache and _tz_cache[0] == eid and now - _tz_cache[1] < _TZ_TTL:
+        return _tz_cache[2]
+    async with session() as s:
+        zones = [z for z in (await s.scalars(
+            select(User.tz).where(User.user_id.in_(_active_teacher_ids())).distinct()
+        )).all() if z]
+    _tz_cache = (eid, now, zones)
+    return zones
+
+
+def _active_teacher_ids():
+    return select(ClassChat.teacher_id).where(ClassChat.active.is_(True), ClassChat.teacher_id.is_not(None))
+
+
+async def due_for_digest(batch: int = MORNING_BATCH):
+    """Учителя, у которых прямо сейчас утреннее окно и сводки сегодня ещё не было.
+    Окно и «сегодня» считаются на часовой пояс, отбор — в базе, пачками по курсору user_id."""
+    for zone in await _teacher_zones():
+        now = local_now(zone)
+        today = now.strftime("%Y-%m-%d")
+        minutes = now.hour * 60 + now.minute
+        cond = [
+            User.tz == zone,
+            User.user_id.in_(_active_teacher_ids()),
+            ~User.user_id.between(DEMO_BASE, DEMO_BASE + DEMO_SPAN),  # демо-учителям сводка не нужна
+            User.work_start <= minutes, User.work_start > minutes - MORNING_WINDOW,
+            or_(User.last_digest_on.is_(None), User.last_digest_on != today),
+        ]
+        if now.weekday() >= 5:
+            cond.append(User.weekends_off.is_(False))
+        after = None
+        while True:
+            q = select(User).where(*cond)
+            if after is not None:
+                q = q.where(User.user_id > after)
+            async with session() as s:
+                rows = (await s.scalars(q.order_by(User.user_id).limit(batch))).all()
+            for u in rows:
+                yield u
+            if len(rows) < batch:
+                break
+            after = rows[-1].user_id
+
+
 async def morning_tick() -> None:
     """Раз в минуту: кому из учителей пора получить утреннюю сводку.
     Сводку получают все классные руководители — и с выключенным тихим режимом: в ней ещё
     «кто сегодня не придёт», сборы со сроком сегодня и итоги недели."""
-    async with session() as s:
-        # только классные руководители: родителей в базе в десятки раз больше, перебирать их каждую минуту незачем
-        teacher_ids = select(ClassChat.teacher_id).where(ClassChat.active.is_(True), ClassChat.teacher_id.is_not(None))
-        teachers = (await s.scalars(
-            select(User).where(User.user_id.in_(teacher_ids),
-                               ~User.user_id.between(DEMO_BASE, DEMO_BASE + DEMO_SPAN))  # демо-учителям сводка не нужна
-        )).all()
-    for t in teachers:
+    async for t in due_for_digest():
         now = local_now(t.tz)
         today = now.strftime("%Y-%m-%d")
-        if t.last_digest_on == today:
-            continue
-        if t.weekends_off and now.weekday() >= 5:
-            continue
-        minutes = now.hour * 60 + now.minute
-        if not (t.work_start <= minutes < t.work_start + 120):
-            continue
-        from .chats import is_teacher
-
-        if not await is_teacher(t.user_id):
-            continue
         # не доставилась (сбой MAX) — повторим, но не чаще раза в 20 минут
         if not await ctx().kv.add_once(f"dg:{t.user_id}:{today}", ttl=20 * 60):
             continue
@@ -318,6 +358,4 @@ async def morning_tick() -> None:
         if status == "failed":
             continue  # день не отмечаем: иначе сводки не было бы до завтра
         async with session() as s:
-            u = await s.get(User, t.user_id)
-            if u:
-                u.last_digest_on = today
+            await s.execute(update(User).where(User.user_id == t.user_id).values(last_digest_on=today))

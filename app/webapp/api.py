@@ -130,8 +130,9 @@ def material_out(m, titles: dict, tz: str | None) -> dict:
             "sent_at": m.sent_at.isoformat() + "Z", "date": f"{to_local(m.sent_at, tz):%d.%m.%Y}"}
 
 
-async def _titles() -> dict[int, str]:
-    return await shelf.chat_titles()
+async def _titles(chat_ids) -> dict[int, str]:
+    """Названия только нужных классов (а не всех классов базы на каждый запрос)."""
+    return await shelf.chat_titles(chat_ids)
 
 
 # ====================================================================== общее
@@ -174,7 +175,7 @@ async def templates(_: User = Depends(current_user)):
 @router.get("/polls")
 async def list_polls(all: bool = True, user: User = Depends(teacher_user)):
     items = await polls.list_polls(user.user_id, include_closed=all, limit=50)
-    titles = await _titles()
+    titles = await _titles(p.chat_id for p in items)
     return [poll_out(p, user.tz, chat_titles=titles) for p in items]
 
 
@@ -217,7 +218,7 @@ async def create_poll(body: PollIn, user: User = Depends(teacher_user)):
                                 amount=body.amount)
     report = await polls.send_poll(p.id)
     p = await polls.get_poll(p.id)
-    return {"poll": poll_out(p, user.tz, with_targets=True, chat_titles=await _titles()), "report": report}
+    return {"poll": poll_out(p, user.tz, with_targets=True, chat_titles=await _titles([p.chat_id])), "report": report}
 
 
 async def _own(pid: int, user: User):
@@ -229,7 +230,8 @@ async def _own(pid: int, user: User):
 
 @router.get("/polls/{pid}")
 async def get_poll(pid: int, user: User = Depends(teacher_user)):
-    return poll_out(await _own(pid, user), user.tz, with_targets=True, chat_titles=await _titles())
+    p = await _own(pid, user)
+    return poll_out(p, user.tz, with_targets=True, chat_titles=await _titles([p.chat_id]))
 
 
 @router.post("/polls/{pid}/remind")
@@ -242,7 +244,7 @@ async def remind(pid: int, user: User = Depends(teacher_user)):
 async def close(pid: int, user: User = Depends(teacher_user)):
     await _own(pid, user)
     p = await polls.close_poll(pid)
-    return poll_out(p, user.tz, with_targets=True, chat_titles=await _titles())
+    return poll_out(p, user.tz, with_targets=True, chat_titles=await _titles([p.chat_id]))
 
 
 @router.delete("/polls/{pid}")
@@ -300,9 +302,11 @@ async def export_csv(pid: int, sig: str = Query(max_length=64), exp: int = 0):
 @router.get("/my/polls")
 async def my_polls(user: User = Depends(current_user)):
     out = []
-    titles = await _titles()
-    for p in await polls.pending_for_user(user.user_id):
-        teacher = await chats.get_user(p.teacher_id)
+    pending = await polls.pending_for_user(user.user_id)
+    titles = await _titles(p.chat_id for p in pending)
+    teachers = await chats.get_users({p.teacher_id for p in pending})
+    for p in pending:
+        teacher = teachers.get(p.teacher_id)
         tz = teacher.tz if teacher else user.tz
         d = poll_out(p, tz, chat_titles=titles)
         d.pop("missing", None)
@@ -347,10 +351,10 @@ async def ask(q: str = Query(min_length=2, max_length=500), user: User = Depends
     from ..services import answers
 
     a = await answers.answer(user.user_id, q, user.tz)
-    titles = await _titles()
     mats = a.materials
     if not mats and a.kind in ("faq", "suggest", "none"):
         mats = await shelf.find(user.user_id, q, teacher_view=not a.chat_ids, limit=5)
+    titles = await _titles(h.item.chat_id for h in mats)
     answer = faq_out(a.entry) if a.kind == "faq" and a.entry else None
     return {
         "answer": answer,
@@ -469,7 +473,6 @@ async def test_faq(q: str, user: User = Depends(teacher_user)):
 # ====================================================================== «Полка»
 @router.get("/materials")
 async def list_materials(q: str = "", user: User = Depends(current_user)):
-    titles = await _titles()
     r = await school.roles(user.user_id)
     if r.is_class_teacher or r.is_subject_teacher:
         items = await shelf.list_for_teacher(user.user_id, q)
@@ -477,6 +480,7 @@ async def list_materials(q: str = "", user: User = Depends(current_user)):
         items = [h.item for h in await shelf.find(user.user_id, q, teacher_view=False, limit=30)]
     else:
         items = sorted(await shelf.visible_materials(user.user_id, False), key=lambda m: m.sent_at, reverse=True)[:50]
+    titles = await _titles(m.chat_id for m in items)
     return [material_out(m, titles, user.tz) for m in items]
 
 
@@ -490,7 +494,7 @@ async def edit_material(mid: int, body: MaterialIn, user: User = Depends(staff_u
     m = await shelf.update(mid, user.user_id, body.title, body.tags)
     if not m:
         raise HTTPException(404, "Материал не найден")
-    return material_out(m, await _titles(), user.tz)
+    return material_out(m, await _titles([m.chat_id]), user.tz)
 
 
 @router.delete("/materials/{mid}")
@@ -577,7 +581,7 @@ async def upload_material(request: Request, user: User = Depends(staff_user)):
     m, _ = await shelf.save(user.user_id, {"type": kind, "payload": payload, "filename": file.filename or "Файл",
                                            "url": None, "size": len(content), "key": key},
                             caption, source="upload")
-    return material_out(m, await _titles(), user.tz)
+    return material_out(m, await _titles([m.chat_id]), user.tz)
 
 
 # ====================================================================== настройки, классы, польза
@@ -683,8 +687,8 @@ async def list_board(user: User = Depends(current_user)):
     r = await school.roles(user.user_id)
     staff = [c.chat_id for c, _ in r.board_chats()]
     member = [c.chat_id for c in await chats.member_chats(user.user_id)]
-    titles = await _titles()
     items = await board.list_for_chats(list(dict.fromkeys(staff + member)), days=30)
+    titles = await _titles(a.chat_id for a in items)
     out = []
     for a in items:
         if a.chat_id not in staff and not board.is_visible(a):
@@ -716,7 +720,7 @@ async def add_board(body: BoardIn, user: User = Depends(staff_user)):
         raise HTTPException(400, "Укажите предмет")
     for_date = board.parse_for_date(body.for_date or "", user.tz) if body.kind == "hw" else None
     a = await board.create(body.chat_id, user.user_id, body.kind, body.text, subject, for_date, body.publish_mode)
-    return board_out(a, await _titles(), user.tz)
+    return board_out(a, await _titles([a.chat_id]), user.tz)
 
 
 @router.delete("/board/{aid}")
@@ -978,4 +982,5 @@ async def mark_paid(pid: int, body: PaidIn, user: User = Depends(teacher_user)):
         raise HTTPException(400, "Это не сбор денег")
     if not await polls.set_paid(pid, body.target_id, body.paid):
         raise HTTPException(404, "Участник не найден")
-    return poll_out(await polls.get_poll(pid), user.tz, with_targets=True, chat_titles=await _titles())
+    p = await polls.get_poll(pid)
+    return poll_out(p, user.tz, with_targets=True, chat_titles=await _titles([p.chat_id]))

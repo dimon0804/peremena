@@ -35,6 +35,32 @@ class Settings(BaseSettings):
     # --- Хранилища ---
     database_url: str = f"sqlite+aiosqlite:///{(BASE_DIR / 'data' / 'peremena.db').as_posix()}"
     redis_url: str = ""
+    # Пул соединений PostgreSQL на один процесс (воркер uvicorn). Итог на базу: экземпляры × воркеры ×
+    # (DB_POOL_SIZE + DB_MAX_OVERFLOW) — должен оставаться меньше max_connections сервера.
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+    db_pool_timeout: float = 30.0
+    # Проверка соединения перед каждой выдачей из пула (лишний запрос SELECT на каждую сессию).
+    # Выключено: оборванное соединение SQLAlchemy и так выбрасывает из пула при первой ошибке,
+    # а pool_recycle обновляет соединения раз в 30 минут.
+    db_pre_ping: bool = False
+
+    # --- Масштабирование ---
+    # all — всё в одном процессе (как раньше); web — только HTTP (вебхук, API, сайт);
+    # worker — планировщик и long polling (HTTP остаётся только для /health).
+    # Планировщик и long polling работают ровно в одном процессе — лидере (замок в Redis или PostgreSQL).
+    role: str = "all"
+    # Процессов uvicorn в одном контейнере. Больше одного — только с Redis или PostgreSQL (нужен общий замок)
+    web_concurrency: int = 1
+    # Общий потолок запросов к MAX API в секунду на бота — один на все экземпляры (через Redis)
+    max_rps: float = 25.0
+    # Сколько событий MAX один процесс обрабатывает одновременно; остальные ждут очереди в памяти.
+    # Без потолка пик в тысячи событий выбирает весь пул базы, и обработчики падают по таймауту пула.
+    handler_concurrency: int = 64
+    # Очередь событий: auto — Redis Streams, если Redis подключён; redis — только очередь; local — обработка
+    # в процессе, принявшем вебхук (как раньше). С очередью вебхук отвечает сразу, а обрабатывают все
+    # процессы с ROLE=all/worker (app/events.py).
+    event_queue: str = "auto"
 
     # --- Мини-приложение ---
     # Публичный https-адрес сервиса (тот же домен, что у вебхука). Нужен для ссылок на выгрузку.
@@ -58,6 +84,9 @@ class Settings(BaseSettings):
     # и внутренние сети Docker, где живёт Caddy. «*» — верить всем, тогда любой подделает свой IP.
     forwarded_allow_ips: str = "127.0.0.1,::1,172.16.0.0/12"
     log_level: str = "INFO"
+    # Журнал каждого HTTP-запроса от uvicorn. На пике тысяч вебхуков в секунду это заметная доля процессора;
+    # за nginx/Caddy журнал запросов обычно уже есть — тогда можно выключить.
+    access_log: bool = True
     # Ключ подписей сервиса. Пусто — выводится из MAX_BOT_TOKEN (а без токена — случайный при каждом запуске)
     secret_key: str = ""
 
@@ -66,6 +95,11 @@ class Settings(BaseSettings):
         if self.updates_mode in ("webhook", "polling"):
             return self.updates_mode
         return "webhook" if self.webhook_url else "polling"
+
+    @property
+    def runs_background(self) -> bool:
+        """Этот процесс претендует на роль лидера: планировщик и long polling."""
+        return self.role.strip().lower() in ("all", "worker", "")
 
     @property
     def miniapp(self) -> bool:

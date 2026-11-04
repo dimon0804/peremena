@@ -1,0 +1,62 @@
+{
+  "label": "до: исходный код, 3 экземпляра",
+  "instances": 3,
+  "workers": 0,
+  "project": "C:\\Users\\Dmitry\\AppData\\Local\\Temp\\claude\\C--Users-Dmitry\\d753697c-a71f-4e5f-a216-cd7fe06ade52\\scratchpad\\baseline",
+  "started": "Wed Nov  4 18:46:47 2026",
+  "a": {
+    "dispatch_s": 13.79,
+    "answers_s": 185.5,
+    "total_s": 199.29,
+    "all_processed": false,
+    "parents_messaged": 300,
+    "parents_expected": 300,
+    "parents_with_duplicate_poll_message": 0,
+    "group_posts": 10,
+    "db_polls": 10,
+    "db_targets": 300,
+    "db_answered": 300,
+    "callbacks_sent": 315,
+    "callbacks_unique": 300,
+    "max_answers_unique": 249,
+    "max_answers_dup": 0,
+    "teacher_all_answered_msgs": 10,
+    "max_429": 323,
+    "max_peak_rps": 30,
+    "max_calls": {
+      "GET /chats/{id}/members": 10,
+      "POST /messages": 330,
+      "POST /answers": 249
+    },
+    "webhook_codes": {
+      "200": 315
+    },
+    "webhook_latency_ms": {
+      "p50": 3.5,
+      "p95": 7.3,
+      "p99": 34.9,
+      "max": 43.2
+    },
+    "leaders": 0,
+    "logs": {
+      "bot0-a3": {
+        "errors": 1,
+        "tracebacks": 1,
+        "pool_timeouts": 0,
+        "leader": 0
+      },
+      "bot1-a3": {
+        "errors": 2,
+        "tracebacks": 2,
+        "pool_timeouts": 0,
+        "leader": 0
+      },
+      "bot2-a3": {
+        "errors": 2,
+        "tracebacks": 2,
+        "pool_timeouts": 0,
+        "leader": 0
+      }
+    }
+  }
+}

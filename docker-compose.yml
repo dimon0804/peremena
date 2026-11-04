@@ -1,7 +1,10 @@
-# Полный стек: бот + PostgreSQL + Redis.
+# Полный стек: бот + PostgreSQL + Redis + внутренний балансировщик.
 #   docker compose up -d --build
 # С HTTPS-прокси (нужен для вебхука и мини-приложения — домен должен смотреть на сервер):
 #   docker compose --profile https up -d --build
+# Несколько экземпляров бота (планировщик работает только у одного — лидера, остальные принимают HTTP):
+#   docker compose up -d --scale bot=3
+# Раздельные web и worker — docker-compose.scale.yml (см. README, «Масштабирование»).
 services:
   bot:
     build: .
@@ -17,13 +20,28 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://peremena:${POSTGRES_PASSWORD:-peremena}@db:5432/peremena
       REDIS_URL: redis://redis:6379/0
-    ports:
-      - "127.0.0.1:${BOT_PORT:-8080}:8080"
+    # Порт на хост публикует lb: у bot своего порта нет, поэтому его можно масштабировать (--scale bot=N)
+    expose:
+      - "8080"
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
+
+  # Балансировщик перед экземплярами бота: раз в 5 с перечитывает адреса bot из DNS Docker и раздаёт
+  # запросы по кругу. Снаружи всё как раньше: 127.0.0.1:${BOT_PORT} — туда ходит хостовый nginx или Caddy.
+  lb:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "127.0.0.1:${BOT_PORT:-8080}:8080"
+    volumes:
+      - ./deploy/Caddyfile.lb:/etc/caddy/Caddyfile:ro
+    depends_on:
+      - bot
 
   db:
     image: postgres:16-alpine

@@ -47,6 +47,15 @@ async def get_user(user_id: int) -> User | None:
         return await s.get(User, user_id)
 
 
+async def get_users(user_ids) -> dict[int, User]:
+    """Несколько пользователей одним запросом (вместо get_user в цикле)."""
+    ids = list({i for i in user_ids if i})
+    if not ids:
+        return {}
+    async with session() as s:
+        return {u.user_id: u for u in (await s.scalars(select(User).where(User.user_id.in_(ids)))).all()}
+
+
 async def register_chat(chat_id: int, teacher: dict | None) -> ClassChat:
     title = ""
     try:

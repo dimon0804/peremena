@@ -1,0 +1,176 @@
+{
+  "label": "до: исходный код, 1 экземпляр",
+  "instances": 1,
+  "workers": 0,
+  "project": "C:\\Users\\Dmitry\\AppData\\Local\\Temp\\claude\\C--Users-Dmitry\\d753697c-a71f-4e5f-a216-cd7fe06ade52\\scratchpad\\baseline",
+  "started": "Wed Nov  4 18:22:21 2026",
+  "a": {
+    "dispatch_s": 13.86,
+    "answers_s": 12.73,
+    "total_s": 26.59,
+    "all_processed": true,
+    "parents_messaged": 300,
+    "parents_expected": 300,
+    "parents_with_duplicate_poll_message": 0,
+    "group_posts": 10,
+    "db_polls": 10,
+    "db_targets": 300,
+    "db_answered": 300,
+    "callbacks_sent": 315,
+    "callbacks_unique": 300,
+    "max_answers_unique": 300,
+    "max_answers_dup": 0,
+    "teacher_all_answered_msgs": 10,
+    "max_429": 0,
+    "max_peak_rps": 25,
+    "max_calls": {
+      "GET /chats/{id}/members": 10,
+      "POST /messages": 330,
+      "POST /answers": 300
+    },
+    "webhook_codes": {
+      "200": 315
+    },
+    "webhook_latency_ms": {
+      "p50": 3.0,
+      "p95": 7.9,
+      "p99": 13.0,
+      "max": 36.9
+    },
+    "leaders": 0,
+    "logs": {
+      "bot0-a1": {
+        "errors": 0,
+        "tracebacks": 0,
+        "pool_timeouts": 0,
+        "leader": 0
+      }
+    }
+  },
+  "b_leaders": {
+    "leaders": 0,
+    "queue": null
+  },
+  "b": [
+    {
+      "rate_target": 500.0,
+      "events": 5000,
+      "sent_s": 13.88,
+      "rate_achieved": 360.3,
+      "webhook_codes": {
+        "200": 5000
+      },
+      "webhook_latency_ms": {
+        "p50": 701.8,
+        "p95": 790.5,
+        "p99": 2495.7,
+        "max": 3794.1
+      },
+      "send_lag_ms": {
+        "p50": 0.0,
+        "p95": 9.3,
+        "p99": 17.9,
+        "max": 27.8
+      },
+      "all_processed": false,
+      "drain_after_send_s": 240.7,
+      "processed_rate": 19.6,
+      "callbacks_unique": 728,
+      "max_answers_unique": 725,
+      "max_answers_dup": 0,
+      "db_answers": 725,
+      "questions_unique": 387,
+      "db_open_questions": 381,
+      "max_429": 0,
+      "max_peak_rps": 48
+    },
+    {
+      "rate_target": 1000.0,
+      "events": 10000,
+      "sent_s": 32.7,
+      "rate_achieved": 305.8,
+      "webhook_codes": {
+        "200": 10000
+      },
+      "webhook_latency_ms": {
+        "p50": 851.5,
+        "p95": 1122.6,
+        "p99": 1857.4,
+        "max": 4544.0
+      },
+      "send_lag_ms": {
+        "p50": 0.0,
+        "p95": 8.1,
+        "p99": 16.9,
+        "max": 29.5
+      },
+      "all_processed": false,
+      "drain_after_send_s": 240.6,
+      "processed_rate": 36.6,
+      "callbacks_unique": 1478,
+      "max_answers_unique": 1036,
+      "max_answers_dup": 4,
+      "db_answers": 970,
+      "questions_unique": 810,
+      "db_open_questions": 498,
+      "max_429": 0,
+      "max_peak_rps": 53
+    },
+    {
+      "rate_target": 2000.0,
+      "events": 20000,
+      "sent_s": 84.32,
+      "rate_achieved": 237.2,
+      "webhook_codes": {
+        "200": 20000
+      },
+      "webhook_latency_ms": {
+        "p50": 1145.1,
+        "p95": 1553.0,
+        "p99": 1717.7,
+        "max": 4209.2
+      },
+      "send_lag_ms": {
+        "p50": 0.0,
+        "p95": 9.3,
+        "p99": 17.4,
+        "max": 28.5
+      },
+      "all_processed": false,
+      "drain_after_send_s": 240.1,
+      "processed_rate": 61.6,
+      "callbacks_unique": 2936,
+      "max_answers_unique": 924,
+      "max_answers_dup": 3,
+      "db_answers": 754,
+      "questions_unique": 1587,
+      "db_open_questions": 434,
+      "max_429": 0,
+      "max_peak_rps": 61
+    }
+  ],
+  "c": {
+    "users": 200,
+    "duration_s": 30.1,
+    "requests": 200,
+    "rps": 6.7,
+    "codes": {
+      "0": 200
+    },
+    "latency_ms": {
+      "p50": 30047.8,
+      "p95": 30059.3,
+      "p99": 30060.4,
+      "max": 30060.5
+    },
+    "polls_per_response": []
+  },
+  "b_logs": {
+    "bot0-b1": {
+      "errors": 17565,
+      "tracebacks": 17604,
+      "pool_timeouts": 17585,
+      "leader": 0
+    }
+  }
+}

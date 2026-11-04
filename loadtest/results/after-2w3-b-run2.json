@@ -1,0 +1,144 @@
+{
+  "label": "после: 2 web + 3 worker, вебхук мимо middleware",
+  "instances": 2,
+  "workers": 3,
+  "project": "C:\\Users\\Dmitry\\AppData\\Local\\Temp\\claude\\C--Users-Dmitry\\d753697c-a71f-4e5f-a216-cd7fe06ade52\\scratchpad\\review\\peremena\\.claude\\worktrees\\agent-a14daaa6389541f84",
+  "started": "Wed Nov  4 18:54:54 2026",
+  "b_leaders": {
+    "leaders": 1,
+    "queue": {
+      "pending": 0,
+      "lag": 0
+    }
+  },
+  "b": [
+    {
+      "rate_target": 500.0,
+      "events": 5000,
+      "sent_s": 10.0,
+      "rate_achieved": 500.0,
+      "webhook_codes": {
+        "200": 5000
+      },
+      "webhook_latency_ms": {
+        "p50": 4.2,
+        "p95": 7.4,
+        "p99": 11.1,
+        "max": 41.7
+      },
+      "send_lag_ms": {
+        "p50": 0.0,
+        "p95": 14.9,
+        "p99": 20.3,
+        "max": 24.6
+      },
+      "all_processed": true,
+      "drain_after_send_s": 4.3,
+      "processed_rate": 349.0,
+      "callbacks_unique": 740,
+      "max_answers_unique": 740,
+      "max_answers_dup": 0,
+      "db_answers": 740,
+      "questions_unique": 407,
+      "db_open_questions": 407,
+      "max_429": 0,
+      "max_peak_rps": 77
+    },
+    {
+      "rate_target": 1000.0,
+      "events": 10000,
+      "sent_s": 10.01,
+      "rate_achieved": 999.1,
+      "webhook_codes": {
+        "200": 10000
+      },
+      "webhook_latency_ms": {
+        "p50": 8.2,
+        "p95": 15.7,
+        "p99": 42.3,
+        "max": 79.1
+      },
+      "send_lag_ms": {
+        "p50": 0.0,
+        "p95": 11.3,
+        "p99": 17.6,
+        "max": 30.2
+      },
+      "all_processed": true,
+      "drain_after_send_s": 17.1,
+      "processed_rate": 368.6,
+      "callbacks_unique": 1493,
+      "max_answers_unique": 1493,
+      "max_answers_dup": 0,
+      "db_answers": 1493,
+      "questions_unique": 839,
+      "db_open_questions": 839,
+      "max_429": 0,
+      "max_peak_rps": 72
+    },
+    {
+      "rate_target": 2000.0,
+      "events": 20000,
+      "sent_s": 10.0,
+      "rate_achieved": 1999.3,
+      "webhook_codes": {
+        "200": 20000
+      },
+      "webhook_latency_ms": {
+        "p50": 16.1,
+        "p95": 38.4,
+        "p99": 87.3,
+        "max": 168.8
+      },
+      "send_lag_ms": {
+        "p50": 0.0,
+        "p95": 12.8,
+        "p99": 20.3,
+        "max": 29.8
+      },
+      "all_processed": true,
+      "drain_after_send_s": 42.7,
+      "processed_rate": 379.2,
+      "callbacks_unique": 3036,
+      "max_answers_unique": 3036,
+      "max_answers_dup": 0,
+      "db_answers": 3036,
+      "questions_unique": 1582,
+      "db_open_questions": 1582,
+      "max_429": 0,
+      "max_peak_rps": 70
+    }
+  ],
+  "b_logs": {
+    "bot0-b2": {
+      "errors": 0,
+      "tracebacks": 0,
+      "pool_timeouts": 0,
+      "leader": 0
+    },
+    "bot1-b2": {
+      "errors": 0,
+      "tracebacks": 0,
+      "pool_timeouts": 0,
+      "leader": 0
+    },
+    "bot2-b2": {
+      "errors": 0,
+      "tracebacks": 0,
+      "pool_timeouts": 0,
+      "leader": 0
+    },
+    "bot3-b2": {
+      "errors": 0,
+      "tracebacks": 0,
+      "pool_timeouts": 0,
+      "leader": 0
+    },
+    "bot4-b2": {
+      "errors": 0,
+      "tracebacks": 0,
+      "pool_timeouts": 0,
+      "leader": 0
+    }
+  }
+}

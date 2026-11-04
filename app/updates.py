@@ -17,6 +17,32 @@ log = logging.getLogger(__name__)
 _tasks: set[asyncio.Task] = set()
 
 
+# Очередь событий в Redis (app/events.py) или None — обработка в этом процессе
+queue = None
+
+
+async def enqueue(update: dict) -> bool:
+    """Кладёт событие в общую очередь. False — очереди нет или Redis недоступен: обработаем сами,
+    чтобы не потерять событие."""
+    if queue is None:
+        return False
+    try:
+        await queue.publish(update)
+        return True
+    except Exception as e:
+        log.warning("Очередь событий недоступна (%s) — обрабатываю событие в этом процессе", e)
+        return False
+
+
+def submit(update: dict) -> asyncio.Task:
+    """Принять событие: в очередь (если она есть) или в обработку здесь же. Задача завершается, когда
+    событие надёжно принято (в очереди) или обработано — на это смотрит маркер long polling."""
+    async def run():
+        if not await enqueue(update):
+            await handle_update(update)
+    return spawn(run())
+
+
 def spawn(coro) -> asyncio.Task:
     """Обработка в фоне: вебхук должен сразу вернуть 200, иначе MAX будет повторять доставку."""
     task = asyncio.create_task(coro)
@@ -74,7 +100,7 @@ async def polling_loop(c: Ctx) -> None:
         try:
             data = await c.api.get_updates(marker, timeout=30)
             started_from = marker
-            tasks = {spawn(handle_update(upd)) for upd in data.get("updates") or []}
+            tasks = {submit(upd) for upd in data.get("updates") or []}
             if tasks:
                 batches.append((started_from, tasks))
             new_marker = data.get("marker")
@@ -116,17 +142,80 @@ async def ensure_webhook(c: Ctx, force: bool = False) -> None:
         log.error("Не удалось подписать вебхук %s: %s", url, e)
 
 
+# Лидер этого процесса (app/leader.py): задачи планировщика выполняются, только пока процесс — лидер.
+# Планировщик и так ставится на паузу при потере лидерства; проверка в самой задаче страхует от
+# прохода, который начался за миг до смены лидера.
+current_leader = None
+
+
+def leader_only(fn):
+    async def job(*args, **kwargs):
+        if current_leader is not None and not current_leader.is_leader:
+            return None
+        return await fn(*args, **kwargs)
+
+    job.__name__ = getattr(fn, "__name__", "job")
+    job.__qualname__ = getattr(fn, "__qualname__", job.__name__)
+    return job
+
+
+JOB_OPTS = {"max_instances": 1, "coalesce": True, "misfire_grace_time": 120}
+
+
 def make_scheduler(c: Ctx) -> AsyncIOScheduler:
     sched = AsyncIOScheduler(timezone="UTC")
-    opts = {"max_instances": 1, "coalesce": True, "misfire_grace_time": 120}
-    sched.add_job(polls.tick, "interval", seconds=60, id="polls", **opts)
-    sched.add_job(quiet.morning_tick, "interval", seconds=60, id="morning", **opts)
-    sched.add_job(board.tick, "interval", seconds=60, id="board", **opts)
-    sched.add_job(websession.cleanup, "interval", hours=1, id="sessions", **opts)
-    sched.add_job(demo.cleanup, "interval", hours=1, id="demo", **opts)
-    sched.add_job(retention.cleanup, "interval", hours=24, id="retention", **opts)  # сроки хранения данных
+    opts = JOB_OPTS
+    sched.add_job(leader_only(polls.tick), "interval", seconds=60, id="polls", **opts)
+    sched.add_job(leader_only(quiet.morning_tick), "interval", seconds=60, id="morning", **opts)
+    sched.add_job(leader_only(board.tick), "interval", seconds=60, id="board", **opts)
+    sched.add_job(leader_only(websession.cleanup), "interval", hours=1, id="sessions", **opts)
+    sched.add_job(leader_only(demo.cleanup), "interval", hours=1, id="demo", **opts)
+    sched.add_job(leader_only(retention.cleanup), "interval", hours=24, id="retention", **opts)  # сроки хранения
     if hasattr(c.kv, "cleanup"):  # состояние в базе — устаревшие записи удаляем сами (Redis делает это сам)
-        sched.add_job(c.kv.cleanup, "interval", hours=1, id="kv", **opts)
+        sched.add_job(leader_only(c.kv.cleanup), "interval", hours=1, id="kv", **opts)
     if c.settings.mode == "webhook":
-        sched.add_job(ensure_webhook, "interval", minutes=30, args=[c], id="webhook", **opts)
+        sched.add_job(leader_only(ensure_webhook), "interval", minutes=30, args=[c], id="webhook", **opts)
     return sched
+
+
+class Background:
+    """Фоновая часть процесса: планировщик и long polling. Работает, только пока процесс — лидер;
+    при потере лидерства планировщик встаёт на паузу, long polling останавливается."""
+
+    def __init__(self, c: Ctx, sched: AsyncIOScheduler, polling: bool, subscribe_webhook: bool) -> None:
+        self.c = c
+        self.sched = sched
+        self.polling = polling
+        self.subscribe_webhook = subscribe_webhook
+        self.polling_task: asyncio.Task | None = None
+        self.sched.start(paused=True)
+
+    async def on_elected(self) -> None:
+        if self.subscribe_webhook:
+            await ensure_webhook(self.c, force=True)
+        self.sched.resume()
+        if self.polling and (self.polling_task is None or self.polling_task.done()):
+            self.polling_task = asyncio.create_task(polling_loop(self.c))
+
+    async def on_demoted(self) -> None:
+        if self.sched.running:
+            self.sched.pause()
+        task, self.polling_task = self.polling_task, None
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    def polling_ok(self) -> bool | None:
+        """None — long polling не должен работать в этом процессе (не лидер или вебхук)."""
+        if self.polling_task is None:
+            return None
+        return not self.polling_task.done()
+
+    def shutdown(self) -> None:
+        if self.polling_task is not None:
+            self.polling_task.cancel()
+        if self.sched.running:
+            self.sched.shutdown(wait=False)

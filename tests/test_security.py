@@ -151,10 +151,11 @@ def test_open_questions_key_belongs_to_teacher(env):
     assert not run(loop, faq_learning.clusters(TEACHER["user_id"]))
 
 
-def test_not_that_requires_access_and_is_limited(env):
+def test_not_that_requires_access_and_is_limited(env, monkeypatch):
     from app.services import faq
 
     loop, fake, c = env
+    monkeypatch.setattr("app.services.quiet.in_work_window", lambda user: True)  # не зависеть от часов
     teacher, teacher2 = _two_classes(loop)
     # участник чата 9Б (класс TEACHER) с «разметкой» в имени
     parent = run(loop, chats.upsert_user({"user_id": PARENTS[0]["user_id"], "first_name": "<b>Анна</b>"}))
@@ -280,6 +281,21 @@ def test_webhook_non_ascii_secret_is_403_not_500(web):
     with web(MAX_BOT_TOKEN="test-token") as client:
         r = client.post("/webhook", json={}, headers={"X-Max-Bot-Api-Secret": "секрет".encode()})
         assert r.status_code == 403
+
+
+def test_webhook_fast_path_codes_and_headers(web):
+    """Вебхук идёт в обход стека middleware — коды и заголовки ответа те же, что у остального сервиса."""
+    import hashlib
+
+    with web(MAX_BOT_TOKEN="test-token") as client:
+        secret = {"X-Max-Bot-Api-Secret": hashlib.sha256(b"wh:test-token").hexdigest()[:40]}
+        ok = client.post("/webhook", json={"update_type": "bot_started", "user": {"user_id": 5}}, headers=secret)
+        assert ok.status_code == 200 and ok.json() == {"ok": True}
+        assert ok.headers["x-content-type-options"] == "nosniff" and "frame-ancestors" in ok.headers["content-security-policy"]
+        assert client.post("/webhook", content=b"{not json", headers=secret).status_code == 400
+        assert client.post("/webhook", content=b"x" * (1024 * 1024 + 1), headers=secret).status_code == 413
+        assert client.post("/webhook", json={}, headers={"X-Max-Bot-Api-Secret": "wrong"}).status_code == 403
+        assert client.get("/webhook").status_code in (404, 405)  # не POST — обычный путь FastAPI
 
 
 def test_dev_auth_ignored_on_public_deploy(web):
@@ -414,9 +430,11 @@ def test_health_checks_and_hides_details(web, monkeypatch):
         assert r.status_code == 200 and r.json() == {"status": "ok"}
 
         async def kill_polling():
-            for t in client.app.state.background:
-                if isinstance(t, asyncio.Task):
-                    t.cancel()
+            from app.updates import Background
+
+            for b in client.app.state.background:
+                if isinstance(b, Background) and b.polling_task is not None:  # long polling живёт у лидера
+                    b.polling_task.cancel()
             await asyncio.sleep(0.05)
         client.portal.call(kill_polling)
         r = client.get("/health")
