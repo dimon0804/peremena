@@ -261,7 +261,14 @@ docker compose --profile https up -d --build   # Caddy сам получит с�
   в PostgreSQL. Лидер упал — через ≤30 с его место занимает другой; остановился штатно — сразу.
 - **Очередь событий** (`EVENT_QUEUE=auto`, при Redis). Вебхук кладёт событие в Redis Stream и сразу отвечает
   MAX «200»; обрабатывают все процессы `all`/`worker` группой потребителей. События упавшего обработчика
-  подбирает другой. Повторные доставки MAX отсекает общая дедупликация.
+  подбирает другой. Повторные доставки MAX отсекает общая дедупликация. Событие, обработка которого упала
+  `EVENT_MAX_ATTEMPTS` раз (5), уходит в dead-letter `pm:events:dead` с причиной и не крутится по кругу —
+  посмотреть и вернуть: `python -m app events [--replay-dead]`. Очередь длиннее `EVENT_BACKLOG_WARN` —
+  вебхук всё равно отвечает 200 (MAX не повторяет), но пишет предупреждение и метрику.
+- **Наблюдаемость.** `/metrics` — метрики Prometheus всей установки (принято, обработано, упало, dead-letter,
+  время обработки, длина очереди и lag, запросы к MAX и 429, пул базы); открыт с приватных адресов,
+  снаружи — только с `Authorization: Bearer <METRICS_TOKEN>`. `/health` — живость (для Docker и балансировщика),
+  `/health/ready` — готовность: база, Redis, обработчики и длина очереди (`EVENT_READY_BACKLOG`).
 - **Общий лимит MAX API** (`MAX_RPS`, по умолчанию 25 запросов/с на бота) — один на все экземпляры,
   считается в Redis; без Redis — лимит процесса.
 - **Замки** «по одному на человека» и «рассылка сбора идёт в одном месте» — в Redis, общие для всех экземпляров.
@@ -290,6 +297,12 @@ docker compose -f docker-compose.yml -f docker-compose.scale.yml up -d --scale b
 | `DB_POOL_TIMEOUT` | `30` | сколько ждать свободное соединение, с |
 | `DB_PRE_PING` | `false` | проверять соединение перед каждой выдачей из пула |
 | `ACCESS_LOG` | `true` | журнал HTTP-запросов uvicorn |
+| `EVENT_MAX_ATTEMPTS` | `5` | доставок события обработчикам до dead-letter `pm:events:dead` |
+| `EVENT_RECLAIM_S` | `120` | через сколько секунд неподтверждённое событие берётся снова |
+| `EVENT_BACKLOG_WARN` | `5000` | очередь длиннее — предупреждение в логе и метрика backpressure (вебхук всё равно 200) |
+| `EVENT_READY_BACKLOG` | `20000` | очередь длиннее — `/health/ready` отвечает 503 |
+| `EVENT_STREAM_MAXLEN` | `1000000` | потолок длины потока событий в Redis (~0,7 КБ на событие) |
+| `METRICS_TOKEN` | пусто | токен для `/metrics` снаружи; с приватных адресов — без токена |
 
 Соединений с базой: `(экземпляры × WEB_CONCURRENCY) × (DB_POOL_SIZE + DB_MAX_OVERFLOW)` — держите меньше
 `max_connections` PostgreSQL. `SECRET_KEY` (или токен) обязателен при нескольких экземплярах: случайный
@@ -310,6 +323,8 @@ python -m app commands               # обновить меню команд б
 python -m app init-db                # создать таблицы
 python -m app digest 123456          # отправить учителю утреннюю сводку прямо сейчас
 python -m app copy-data <адрес базы> # перенести данные из другой базы (SQLite → PostgreSQL)
+python -m app events                 # очередь событий: длина, pending, lag, dead-letter
+python -m app events --replay-dead   # вернуть события из dead-letter в очередь (после исправления причины)
 ```
 
 Те же команды из контейнера:
@@ -423,10 +438,12 @@ alembic revision --autogenerate -m "что изменилось"   # адрес 
 
 ```
 app/
-  main.py            FastAPI: /webhook, /health, /api, /app
+  main.py            FastAPI: /webhook, /health, /health/ready, /metrics, /api, /app
   __main__.py        командная строка
   max_api.py         клиент MAX Bot API
-  updates.py         long polling, вебхук, планировщик
+  updates.py         long polling, вебхук, планировщик, переподписка вебхука
+  events.py          очередь событий в Redis Streams, повторы и dead-letter
+  metrics.py         метрики Prometheus без внешних зависимостей
   bot/               маршрутизатор событий, личка, чат класса, кнопки
   services/          перекличка, справочник, полка, тихий режим, польза, поиск,
                      answers.py — общий ответ родителю (бот и мини-приложение), retention.py — сроки хранения
@@ -439,6 +456,8 @@ certs/               сертификаты Минцифры для platform-api
 scripts/seed_demo.py  демо-данные для показа без MAX
 tests/               офлайн-тесты
 deploy/Caddyfile     HTTPS-прокси
+docker-compose.vps.yml  профиль «один VPS 2 vCPU / 4 ГБ»: лимиты и настройки
+loadtest/            нагрузочные прогоны и стенд профиля VPS
 .github/workflows/   тесты, сборка и публикация Docker-образа
 ```
 
