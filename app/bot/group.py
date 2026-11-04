@@ -75,6 +75,8 @@ async def on_admin_changed(update: dict) -> None:
                 user_id=chat.teacher_id,
                 text=f"✅ Теперь я администратор в «{html.escape(chat.title)}»: вижу список класса и вопросы в чате.",
             )
+            # без прав администратора историю читать нельзя — подтягиваем файлы учителя сейчас
+            await shelf.import_history(chat_id, chat.teacher_id, pages=3)
 
 
 async def on_user_added(update: dict) -> None:

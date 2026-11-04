@@ -287,9 +287,11 @@ class MaxClient:
         return await self.request("DELETE", "/messages", params={"message_id": message_id})
 
     async def get_messages(self, chat_id: int, *, count: int = 100, before: int | None = None) -> dict:
+        """История чата, новые первыми. Параметра before у MAX нет: верхняя граница времени (мс)
+        передаётся в from — «сообщения до этого времени» (https://dev.max.ru/docs-api/methods/GET/messages)."""
         if is_demo(chat_id):
             return {"messages": []}
-        return await self.request("GET", "/messages", params={"chat_id": chat_id, "count": count, "before": before})
+        return await self.request("GET", "/messages", params={"chat_id": chat_id, "count": count, "from": before})
 
     async def answer_callback(self, callback_id: str, *, notification: str | None = None,
                               message: dict | None = None) -> dict:

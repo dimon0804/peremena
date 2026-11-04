@@ -197,6 +197,7 @@ async def import_history(chat_id: int, teacher_id: int, pages: int = 5) -> int:
 
     added = 0
     before = None
+    seen: set[str] = set()
     for _ in range(pages):
         try:
             data = await ctx().api.get_messages(chat_id, count=100, before=before)
@@ -204,8 +205,12 @@ async def import_history(chat_id: int, teacher_id: int, pages: int = 5) -> int:
             log.info("История чата %s недоступна: %s", chat_id, e)
             break
         msgs = data.get("messages") or []
-        if not msgs:
+        # страница не сдвинулась (те же сообщения) — дальше листать бессмысленно
+        fresh = [m for m in msgs if ((m.get("body") or {}).get("mid") or id(m)) not in seen]
+        if not fresh:
             break
+        seen.update((m.get("body") or {}).get("mid") or id(m) for m in fresh)
+        msgs = fresh
         for msg in msgs:
             sender = (msg.get("sender") or {}).get("user_id")
             if sender != teacher_id:
@@ -217,7 +222,7 @@ async def import_history(chat_id: int, teacher_id: int, pages: int = 5) -> int:
                                         source="history", sent_at=sent_at)
                 added += int(created)
         oldest = min((m.get("timestamp") or 0) for m in msgs)
-        if not oldest or len(msgs) < 100:
+        if not oldest or len(msgs) < 100 or (before is not None and oldest - 1 >= before):
             break
         before = oldest - 1
     return added
