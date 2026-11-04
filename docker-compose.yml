@@ -5,8 +5,12 @@
 services:
   bot:
     build: .
-    image: peremena:latest
+    image: peremena:${PEREMENA_TAG:-local}
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     env_file:
       - path: .env
         required: false
@@ -24,6 +28,8 @@ services:
   db:
     image: postgres:16-alpine
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     environment:
       POSTGRES_DB: peremena
       POSTGRES_USER: peremena
@@ -39,6 +45,8 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     command: ["redis-server", "--save", "60", "1", "--appendonly", "no"]
     volumes:
       - redisdata:/data
