@@ -21,6 +21,7 @@ from typing import Any
 import certifi
 import httpx
 
+from . import metrics
 from .demo_ids import is_demo, is_demo_mid
 
 log = logging.getLogger(__name__)
@@ -214,6 +215,11 @@ def _retry_after(resp: httpx.Response, attempt: int) -> float:
     return float(min(2 ** attempt, 8))
 
 
+def _result(status: int) -> str:
+    """Метка исхода запроса к MAX для /metrics: 2xx, 4xx, 429, 5xx (без кодов поштучно — меньше рядов)."""
+    return "429" if status == 429 else f"{status // 100}xx"
+
+
 class MaxClient:
     def __init__(self, token: str, base_url: str, extra_ca_file: str | None = None, rps: float = 25.0):
         self.token = token
@@ -265,12 +271,14 @@ class MaxClient:
                     timeout=timeout if timeout is not None else httpx.USE_CLIENT_DEFAULT,
                 )
             except (httpx.TransportError, httpx.TimeoutException) as e:
+                metrics.inc("peremena_max_requests_total", result="network")
                 attempt += 1
                 if attempt > retries or not (idempotent or isinstance(e, NOT_SENT_ERRORS)):
                     raise MaxApiError(0, "network", f"{type(e).__name__}: {e}") from e
                 await asyncio.sleep(min(2 ** (attempt - 1), 4))
                 continue
 
+            metrics.inc("peremena_max_requests_total", result=_result(resp.status_code))
             if resp.status_code == 429:
                 attempt += 1
                 self._limiter.pause(_retry_after(resp, attempt))
@@ -384,7 +392,10 @@ class MaxClient:
             if message.get("text") and len(message["text"]) > TEXT_LIMIT:
                 message = {**message, "text": message["text"][:TEXT_LIMIT - 1] + "…"}
             body["message"] = message
-        return await self.request("POST", "/answers", params={"callback_id": callback_id}, json=body)
+        # Повтор после обрыва безопасен: это ответ на одно и то же нажатие (то же уведомление, та же правка),
+        # нового сообщения родителю он не создаёт. Без повтора кнопка остаётся «нажатой» — так было
+        # на стенде нагрузки: 1 из 3750 ответов потерян на ReadError переиспользованного соединения.
+        return await self.request("POST", "/answers", params={"callback_id": callback_id}, json=body, idempotent=True)
 
     # ------------------------------------------------------------------ chats
     async def get_chat(self, chat_id: int) -> dict:

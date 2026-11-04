@@ -3,19 +3,21 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import ipaddress
 import json
 import logging
 import mimetypes
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exception_handlers import http_exception_handler
 from fastapi.openapi.docs import get_swagger_ui_html
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import __version__, db, updates
+from . import __version__, db, metrics, updates
 from .bot.common import COMMANDS
 from .bot.router import handle_update
 from .config import BASE_DIR, get_settings
@@ -82,9 +84,14 @@ async def startup() -> tuple[Ctx, list]:
     mode = settings.event_queue.strip().lower()
     updates.queue = None
     if kv.redis is not None and mode in ("auto", "redis"):
-        updates.queue = EventQueue(kv.redis)
+        updates.queue = EventQueue(kv.redis, max_attempts=settings.event_max_attempts,
+                                   reclaim_idle_ms=int(settings.event_reclaim_s * 1000),
+                                   backlog_warn=settings.event_backlog_warn,
+                                   maxlen=settings.event_stream_maxlen)
     elif mode == "redis":
         log.error("EVENT_QUEUE=redis, но Redis не подключён — события обрабатываются в принявшем процессе")
+    if kv.redis is not None:  # снимок метрик процесса — в Redis, чтобы /metrics любого процесса видел все
+        background.append(asyncio.create_task(metrics.pusher(kv.redis), name="metrics"))
     role = settings.role.strip().lower() or "all"
     if role not in ("all", "web", "worker"):
         log.error("ROLE=%s не поддерживается (all | web | worker) — работаю как all", settings.role)
@@ -186,7 +193,7 @@ async def api_docs():
 
 
 def _is_api(path: str) -> bool:
-    return path.startswith(("/api/", "/webhook", "/health"))
+    return path.startswith(("/api/", "/webhook", "/health", "/metrics"))
 
 
 def _revalidate(path: str) -> bool:
@@ -278,9 +285,12 @@ async def accept_webhook(secret: bytes | None, raw: bytes) -> tuple[int, dict]:
     except ValueError:
         return 400, {"detail": "bad json"}
     if isinstance(update, dict) and update.get("update_type"):
-        # с очередью — только XADD в Redis: 200 уходит сразу, а событие уже не потеряется при падении процесса
+        metrics.inc("peremena_events_received_total", source="webhook")
+        # с очередью — только XADD в Redis: 200 уходит сразу, а событие уже не потеряется при падении процесса.
+        # Очередь длиннее EVENT_BACKLOG_WARN — всё равно 200 (повтор доставки MAX только добавил бы нагрузки),
+        # предупреждение и метрику пишет сама очередь.
         if not await updates.enqueue(update):
-            spawn(handle_update(update))
+            spawn(updates.handle_local(update))
     return 200, {"ok": True}
 
 
@@ -323,7 +333,9 @@ class WebhookFastPath:
                 chunks.append(chunk)
                 more = msg.get("more_body", False)
             if size <= BODY_LIMIT:
+                t0 = time.perf_counter()
                 status, body = await accept_webhook(secret, b"".join(chunks))
+                metrics.observe("peremena_webhook_seconds", time.perf_counter() - t0)
         raw = json.dumps(body, ensure_ascii=False).encode()
         await send({"type": "http.response.start", "status": status,
                     "headers": self.HEADERS + [(b"content-length", str(len(raw)).encode())]})
@@ -374,6 +386,81 @@ async def health():
                  "queue": (await updates.queue.backlog()) if updates.queue is not None else None,
                  "processed": updates.queue.processed if updates.queue is not None else None}
     return JSONResponse(body, status_code=200 if ok else 503)
+
+
+async def _queue_stats() -> dict | None:
+    if updates.queue is None:
+        return None
+    try:
+        return await asyncio.wait_for(updates.queue.stats(), timeout=3)
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/health/ready")
+async def health_ready():
+    """Готовность принимать и обрабатывать события: база, Redis, обработчики очереди живы и очередь
+    не длиннее EVENT_READY_BACKLOG. 503 — сигнал мониторингу и выкатке (новая версия не готова или обработчики
+    не успевают). Балансировщику — /health: очередь общая, и по длинной очереди он снял бы все экземпляры сразу."""
+    c = app.state.ctx
+    checks: dict = {"db": await _db_ok(), "kv": await _kv_ok(c)}
+    background = getattr(app.state, "background", [])
+    consumers = [b for b in background if isinstance(b, asyncio.Task) and b.get_name() == "event-queue"]
+    if consumers:
+        checks["consumers"] = not any(t.done() for t in consumers)
+    q = await _queue_stats()
+    backlog = None
+    if q is not None:
+        if q.get("error"):
+            checks["queue"] = False
+        else:
+            backlog = (q.get("pending") or 0) + (q.get("lag") or 0)
+            checks["queue"] = backlog <= c.settings.event_ready_backlog
+    ok = all(checks.values())
+    body: dict = {"status": "ready" if ok else "not_ready", "checks": checks}
+    if backlog is not None:
+        body["backlog"] = backlog
+    return JSONResponse(body, status_code=200 if ok else 503)
+
+
+def _client_private(request: Request) -> bool:
+    """Адрес клиента после разбора X-Forwarded-For доверенных прокси (uvicorn proxy_headers): запрос из
+    интернета через Caddy/nginx получает публичный адрес родителя, внутри сети — приватный."""
+    host = request.client.host if request.client else ""
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return ip.is_private or ip.is_loopback
+
+
+def _metrics_allowed(request: Request) -> bool:
+    token = get_settings().metrics_token
+    if token:
+        got = request.headers.get("x-metrics-token") or ""
+        auth = request.headers.get("authorization") or ""
+        if auth.lower().startswith("bearer "):
+            got = got or auth[7:].strip()
+        if got and hmac.compare_digest(got.encode(), token.encode()):
+            return True
+    return _client_private(request)
+
+
+@app.get("/metrics", include_in_schema=False)
+async def metrics_endpoint(request: Request):
+    """Метрики Prometheus: события (принято, обработано, упало, dead-letter), время обработки, очередь и lag,
+    запросы к MAX и 429, пул базы. Снаружи — только с METRICS_TOKEN; для чужих — 404, как будто адреса нет."""
+    if not _metrics_allowed(request):
+        raise HTTPException(404, "Not Found")
+    c = app.state.ctx
+    redis = getattr(c.kv, "redis", None)
+    snaps = await metrics.collect(redis)
+    q = await _queue_stats()
+    gauges = {}
+    if q is not None and not q.get("error"):
+        gauges = {"peremena_queue_length": q.get("length"), "peremena_queue_pending": q.get("pending"),
+                  "peremena_queue_lag": q.get("lag"), "peremena_queue_dead": q.get("dead")}
+    return PlainTextResponse(metrics.render(snaps, gauges), media_type="text/plain; version=0.0.4; charset=utf-8")
 
 
 SITE_DIR = BASE_DIR / "site"

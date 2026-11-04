@@ -12,6 +12,9 @@
     python -m app copy-data <url>  — перенести данные из другой базы (SQLite → PostgreSQL)
     python -m app embeddings reindex [--all] — посчитать векторы карточек (нужно EMBEDDINGS=on)
     python -m app embeddings status — сколько карточек с векторами, есть ли pgvector
+
+    python -m app events           — состояние очереди событий: длина, pending, lag, dead-letter
+    python -m app events --replay-dead — вернуть события из dead-letter в очередь
 """
 from __future__ import annotations
 
@@ -189,6 +192,35 @@ async def _embeddings(action: str, all_: bool) -> int:
     finally:
         await db.close_db()
 
+async def _events(replay: bool, count: int | None, show: int) -> int:
+    """Очередь событий в Redis: состояние, последние события в dead-letter, возврат их в работу."""
+    import redis.asyncio as redis
+
+    from .bot.router import _dedup_key
+    from .events import EventQueue
+
+    s = get_settings()
+    if not s.redis_url:
+        sys.exit("Очередь событий живёт в Redis — задайте REDIS_URL")
+    r = redis.from_url(s.redis_url, decode_responses=True)
+    try:
+        q = EventQueue(r, max_attempts=s.event_max_attempts, maxlen=s.event_stream_maxlen)
+        if replay:
+            async def forget(update: dict) -> None:  # иначе дедупликация отбросит событие как уже обработанное
+                await r.delete("pm:dd:" + _dedup_key(update))
+            moved = await q.replay_dead(count, forget=forget)
+            print(f"Возвращено в очередь {q.stream}: {moved}")
+        st = await q.stats()
+        st["max_attempts"] = q.max_attempts
+        print(json.dumps(st, ensure_ascii=False, indent=2))
+        if show and st.get("dead"):
+            print(f"Последние в {q.dead}:")
+            for row in await q.dead_entries(show):
+                print(json.dumps(row, ensure_ascii=False))
+        return 1 if st.get("error") else 0
+    finally:
+        await r.aclose()
+
 
 def _workers(n: int, s) -> int:
     """Несколько процессов uvicorn — только с общим хранилищем: им нужны общий замок лидера,
@@ -220,6 +252,10 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("init-db", help="создать таблицы")
     cp = sub.add_parser("copy-data", help="перенести данные из другой базы в DATABASE_URL")
     cp.add_argument("source", help="адрес исходной базы, например sqlite:////srv/data/peremena.db")
+    ev = sub.add_parser("events", help="очередь событий: состояние и dead-letter")
+    ev.add_argument("--replay-dead", action="store_true", help="вернуть события из dead-letter в очередь")
+    ev.add_argument("--count", type=int, default=None, help="сколько вернуть (по умолчанию все)")
+    ev.add_argument("--show", type=int, default=10, help="сколько последних записей dead-letter показать")
     d = sub.add_parser("digest", help="утренняя сводка учителю сейчас")
     d.add_argument("user_id", type=int)
     em = sub.add_parser("embeddings", help="семантический поиск: пересчёт векторов и состояние")
@@ -258,6 +294,9 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_copy_data(args.source))
     if args.cmd == "embeddings":
         return asyncio.run(_embeddings(args.action, args.all))
+
+    if args.cmd == "events":
+        return asyncio.run(_events(args.replay_dead, args.count, args.show))
     if args.cmd == "digest":
         return asyncio.run(_digest(args.user_id))
     p.print_help()

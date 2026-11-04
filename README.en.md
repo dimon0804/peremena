@@ -197,6 +197,18 @@ docker compose -f docker-compose.yml -f docker-compose.embeddings.yml run --rm -
   loadtest/eval_semantic.py --sweep --verbose > loadtest/results/semantic_eval.txt
 ```
 
+Single 2 vCPU / 4 GB VPS: `docker compose -f docker-compose.yml -f docker-compose.vps.yml up -d --build` —
+CPU and memory limits for the bot, PostgreSQL, Redis and the balancer plus tuned settings. Measured on a stand with
+these limits: an evening peak of 100 classes takes a quarter of a core and 345 MiB; the ceiling is about
+1000 classes without queue growth.
+
+An event whose processing fails `EVENT_MAX_ATTEMPTS` times (5) goes to the dead-letter stream `pm:events:dead`
+with the reason instead of looping forever: `python -m app events` shows the queue, `--replay-dead` puts the events
+back. `/metrics` exposes Prometheus metrics for the whole installation (events received/processed/failed/dead,
+handling time, queue length and lag, MAX API requests and 429s, DB pool) — open to private addresses, from outside
+only with `Authorization: Bearer <METRICS_TOKEN>`. `/health/ready` checks the database, Redis, queue consumers
+and the queue backlog.
+
 ### Command line
 
 ```bash
@@ -207,6 +219,8 @@ python -m app commands               # update the bot command menu
 python -m app copy-data <db url>     # copy data from another database (SQLite → PostgreSQL)
 python -m app embeddings reindex     # compute FAQ card vectors (EMBEDDINGS=on; --all recomputes everything)
 python -m app embeddings status      # how many cards have vectors, is pgvector available
+
+python -m app events [--replay-dead] # event queue status, replay the dead-letter stream
 docker run --rm -e MAX_BOT_TOKEN=<token> ghcr.io/dimon0804/peremena check
 ```
 

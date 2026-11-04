@@ -1,0 +1,42 @@
+# Стенд нагрузки поверх профиля VPS: бот ходит в поддельный MAX, генератор — отдельный контейнер.
+# Поддельный MAX и генератор работают ВНЕ лимитов профиля (их на настоящем VPS нет).
+#
+#   P="docker compose -p peremena-stress -f docker-compose.yml -f docker-compose.vps.yml -f loadtest/docker-compose.stress.yml"
+#   PEREMENA_TAG=stress BOT_PORT=18090 $P up -d --build
+#   loadtest/vps_stress.sh <метка> 100 300 1000 3000
+#   $P down -v
+services:
+  bot:
+    environment:
+      MAX_BOT_TOKEN: load-test-token
+      MAX_API_URL: http://fakemax:59100
+      UPDATES_MODE: webhook
+      WEBHOOK_URL: ""
+      PUBLIC_URL: ""
+      DEV_AUTH: "true"
+      BOT_USERNAME: peremena_load_bot
+      LOG_LEVEL: WARNING
+      DEMO_ENABLED: "false"
+      SECRET_KEY: load-secret
+      MAX_RPS: ${STRESS_MAX_RPS:-25}
+    depends_on:
+      fakemax:
+        condition: service_started
+
+  fakemax:
+    image: peremena:${PEREMENA_TAG:-stress}
+    pull_policy: never
+    entrypoint: ["python", "/srv/loadtest/fake_max.py"]
+    command: ["--host", "0.0.0.0", "--port", "59100", "--limit", "${FAKE_LIMIT:-30}", "--latency", "0.01"]
+    volumes:
+      - ./loadtest:/srv/loadtest:ro
+
+  loadgen:
+    image: peremena:${PEREMENA_TAG:-stress}
+    pull_policy: never
+    profiles: ["load"]
+    user: "0"
+    working_dir: /srv
+    entrypoint: ["python"]
+    volumes:
+      - ./loadtest:/srv/loadtest

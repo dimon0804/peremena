@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
+from . import metrics
 from .bot.router import handle_update
 from .core import Ctx
 from .max_api import MaxApiError
@@ -34,12 +36,29 @@ async def enqueue(update: dict) -> bool:
         return False
 
 
+async def handle_local(update: dict) -> None:
+    """Обработка в принявшем процессе (без очереди) — с теми же метриками, что у обработчика очереди."""
+    t0 = time.perf_counter()
+    try:
+        await handle_update(update)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        metrics.inc("peremena_events_failed_total")
+        log.exception("Обработка события в процессе")
+        return
+    metrics.inc("peremena_events_processed_total")
+    metrics.observe("peremena_event_handle_seconds", time.perf_counter() - t0)
+
+
 def submit(update: dict) -> asyncio.Task:
-    """Принять событие: в очередь (если она есть) или в обработку здесь же. Задача завершается, когда
-    событие надёжно принято (в очереди) или обработано — на это смотрит маркер long polling."""
+    """Принять событие (long polling): в очередь (если она есть) или в обработку здесь же. Задача завершается,
+    когда событие надёжно принято (в очереди) или обработано — на это смотрит маркер long polling."""
+    metrics.inc("peremena_events_received_total", source="polling")
+
     async def run():
         if not await enqueue(update):
-            await handle_update(update)
+            await handle_local(update)
     return spawn(run())
 
 
@@ -134,8 +153,10 @@ async def ensure_webhook(c: Ctx, force: bool = False) -> None:
     try:
         if not force:
             subs = await c.api.get_subscriptions()
-            if any(s.get("url") == url for s in subs):
+            if any((s.get("url") or "").rstrip("/") == url.rstrip("/") for s in subs):
                 return
+            log.warning("Вебхук-подписки на %s нет (есть: %s) — подписываюсь заново", url,
+                        ", ".join(s.get("url", "") for s in subs) or "ни одной")
         await c.api.subscribe(url, c.settings.effective_webhook_secret)
         log.info("Вебхук подписан: %s", url)
     except MaxApiError as e:
