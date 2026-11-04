@@ -274,6 +274,9 @@ async def my_polls(user: User = Depends(current_user)):
         tz = teacher.tz if teacher else user.tz
         d = poll_out(p, tz, chat_titles=titles)
         d.pop("missing", None)
+        if p.amount:  # родителю — только сумма и его собственный статус, без чужих имён
+            mine = next((t for t in p.targets if t.user_id == user.user_id), None)
+            d["money"] = {"amount": p.amount, "paid": bool(mine and mine.paid)}
         d["my_answer"] = await polls.user_answer(p, user.user_id)
         d["teacher"] = teacher.display_name if teacher else ""
         out.append(d)

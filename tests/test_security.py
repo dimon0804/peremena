@@ -122,6 +122,22 @@ def test_not_that_requires_access_and_is_limited(env):
     assert len(fake.sent) == n
 
 
+def test_parent_sees_only_own_money_status(env):
+    loop, fake, c = env
+    teacher, _ = _two_classes(loop)
+    res = run(loop, api.create_poll(api.PollIn(chat_id=CHAT_ID, template="money", text="Сбор на экскурсию",
+                                               amount=300), teacher))
+    pid = res["poll"]["id"]
+    target = next(t for t in res["poll"]["targets"] if t["user_id"] == PARENTS[1]["user_id"])
+    run(loop, api.mark_paid(pid, api.PaidIn(target_id=target["id"], paid=True), teacher))
+    parent = run(loop, chats.upsert_user(PARENTS[0]))
+    mine = next(p for p in run(loop, api.my_polls(parent)) if p["id"] == pid)
+    assert mine["money"] == {"amount": 300, "paid": False}
+    dump = str(mine)
+    for other in PARENTS[1:]:
+        assert other["last_name"] not in dump
+
+
 def test_demo_and_real_schools_do_not_mix_and_join_is_limited(env):
     from app.services import demo, school
 
