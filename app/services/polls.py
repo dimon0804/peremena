@@ -235,6 +235,8 @@ async def _send_poll(poll_id: int) -> dict:
         p.dispatched = True
         p.send_at = None
 
+    if not poll.dispatched:  # первая рассылка — сообщаем внешним системам (вебхук poll.created)
+        await _webhook("on_poll_created", await get_poll(poll.id))
     total = len(members) if members else delivered + failed
     return {"total": total, "delivered": delivered, "failed": failed, "synced": synced,
             "group_posted": bool(gmsg or poll.group_message_id)}
@@ -304,8 +306,17 @@ async def record_answer(poll_id: int, user: dict, option: int, chat_id_hint: int
     return poll, status
 
 
+async def _webhook(name: str, *args) -> None:
+    """Событие для внешних систем (app/integrations/webhooks.py); ошибка интеграции сбор не ломает."""
+    from ..integrations import webhooks
+
+    await webhooks.safe(getattr(webhooks, name)(*args))
+
+
 async def after_answer(poll: Poll, uid: int, opt: int, status: str) -> None:
     """«Нужно уточнить» — сразу учителю (с учётом тихого режима); все ответили — сообщаем итог."""
+    if status in ("ok", "changed"):
+        await _webhook("on_poll_answered", poll, uid, opt, status)
     if poll.clarify_option is not None and opt == poll.clarify_option and status != "same":
         name = await chats.member_name(poll.chat_id, uid)
         option = poll.options[opt]
@@ -487,6 +498,12 @@ async def status_card(poll: Poll) -> tuple[str, list[list[dict]]]:
     else:
         buttons.append([kb.cb("Список", f"pl:{poll.id}"), kb.cb("🔁 Повторить", f"prp:{poll.id}")])
         buttons.append([kb.cb("🗑 Удалить сбор", f"pd:{poll.id}")])
+    from ..integrations import printing, tokens
+
+    base = tokens.public_base()
+    if base.startswith("https://"):  # ведомость для подписи и бланки с QR (ссылки на сутки)
+        buttons.append([kb.link("🖨 Ведомость", base + printing.url(poll, "sheet")),
+                        kb.link("📝 Бланки с QR", base + printing.url(poll, "blanks"))])
     if c.bot_username:
         buttons.append([kb.app("Открыть в приложении", c.bot_username, f"poll_{poll.id}")])
     return "\n".join(lines), buttons
@@ -594,6 +611,7 @@ async def close_poll(poll_id: int, by_deadline: bool = False) -> Poll | None:
     if not won or poll is None:
         return poll
     await stats.add(poll.teacher_id, "poll_done")
+    await _webhook("on_poll_closed", poll)
     if poll.group_message_id:
         try:
             answered, total, _ = counts(poll)

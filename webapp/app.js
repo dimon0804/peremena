@@ -334,6 +334,8 @@
           <div class="card"><div class="card-title">Текст сбора</div><div class="bubble" style="margin-top:8px">${esc(p.text)}</div></div>
           <div class="row actions-row">
             <button type="button" class="btn ghost" data-act="export" data-url="${esc(p.export_url)}" data-id="${p.id}"><svg class="i" aria-hidden="true"><use href="#i-download"/></svg>Скачать таблицу</button>
+            <button type="button" class="btn ghost" data-act="print" data-kind="sheet" data-id="${p.id}">Ведомость для подписи</button>
+            <button type="button" class="btn ghost" data-act="print" data-kind="${p.missing.length ? "blanks_missing" : "blanks"}" data-id="${p.id}">Бланки с QR${p.missing.length ? " для " + p.missing.length : ""}</button>
             ${p.closed ? "" : `<button type="button" class="btn danger" data-act="closePoll" data-id="${p.id}">Закрыть сбор</button>`}
           </div>`);
       } catch (e) { fail(e); }
@@ -458,6 +460,7 @@
         const pending = inbox.filter((i) => !i.delivered);
         render(`<h1>Польза и настройки</h1>
           <button type="button" class="btn ghost block link-card" data-act="goSchool"><svg class="i" aria-hidden="true"><use href="#i-school"/></svg><span>${S.me.school ? esc(S.me.school.name) : "Школа: общая база ответов и сводка"}</span><svg class="i chev" aria-hidden="true"><use href="#i-chev"/></svg></button>
+          <button type="button" class="btn ghost block link-card" data-act="goIntegrations"><svg class="i" aria-hidden="true"><use href="#i-list"/></svg><span>Интеграции: календарь, API, вебхуки</span><svg class="i chev" aria-hidden="true"><use href="#i-chev"/></svg></button>
           <div class="card">
             <div class="overline">Бот сэкономил вам за 7 дней</div>
             <div class="stat-big" style="margin:8px 0">${fmtMinutes(st.week.minutes)}</div>
@@ -508,7 +511,7 @@
     async my() {
       loading();
       try {
-        const [items, abs] = await Promise.all([api("/api/my/polls"), api("/api/my/absences")]);
+        const [items, abs, wk] = await Promise.all([api("/api/my/polls"), api("/api/my/absences"), api("/api/my/week").catch(() => null)]);
         S.myAbs = abs;
         const marks = abs.items.length ? `<div class="card absent"><div class="card-title">Вы отметили, что ребёнок не придёт</div>
             <ul class="list">${abs.items.map((a) => `<li><span>${esc(a.who)} — ${esc(a.day_text)}, ${esc(a.reason_text)}</span><button type="button" class="btn sm ghost" data-act="absCancel" data-id="${a.id}">Отменить</button></li>`).join("")}</ul></div>` : "";
@@ -518,6 +521,7 @@
         render(`<h1>Сборы</h1>
           ${abs.classes.length ? `<button type="button" class="btn outline block" data-act="absNew" style="margin-bottom:12px">Ребёнок не придёт в школу</button>` : ""}
           ${marks}
+          ${wk ? weekCard(wk) : ""}
           ${items.length ? `<p class="muted lead-in">Учитель ждёт вашего ответа. Нажмите подходящую кнопку — ответ сразу увидит учитель.</p>` : empty}
           ${items.map((p) => {
             const body = p.text.split("\n").slice(1).join("\n").trim();
@@ -1136,6 +1140,213 @@
       haptic("success");
       el.outerHTML = `<p class="ok">${say("Передано учителю. Ответ придёт вам в личку с ботом.", "Вопрос записан. В настоящем боте его увидел бы учитель, а ответ пришёл бы вам в личку.")}</p>`;
     } catch (e) { toast(e.message, true); el.disabled = false; }
+  };
+
+  // ------------------------------------------------------------------ интеграции: календарь, API, вебхуки, печать
+  // ссылка наружу: внутри MAX — штатным окном мессенджера, в браузере — новая вкладка
+  function openUrl(url, win) {
+    if (IN_MAX && WA?.openLink) { try { WA.openLink(url); if (win) win.close(); return; } catch (_) { /* старые версии MAX */ } }
+    if (win) { win.location.href = url; return; }
+    window.open(url, "_blank", "noopener");
+  }
+  // вкладку открываем сразу по нажатию, адрес подставляем после запроса — иначе браузер сочтёт её всплывающим окном
+  const blankTab = () => { if (IN_MAX) return null; const w = window.open("", "_blank"); if (w) w.opener = null; return w; };
+  const absUrl = (u) => (/^https?:/.test(u) ? u : location.origin + u);
+  const when = (iso) => (iso ? new Date(iso).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—");
+
+  function calendarCard(cal, teacher) {
+    return `<div class="card">
+      <div class="card-title">Календарь</div>
+      <p class="muted small">${teacher ? "Сроки сборов с числом ответивших и домашка ваших классов" : "Сборы, где ждут вашего ответа (с напоминанием за 3 часа), и домашние задания"} появятся в вашем календаре и будут обновляться сами.</p>
+      <div class="bubble small link-box">${esc(cal.url)}</div>
+      <div class="row tools">
+        <button type="button" class="btn sm" data-act="calCopy">Скопировать ссылку</button>
+        <button type="button" class="btn sm outline" data-act="openUrl" data-url="${esc(cal.google)}">Google Календарь</button>
+        <button type="button" class="btn sm ghost" data-act="openUrl" data-url="${esc(cal.webcal)}">Apple и Outlook</button>
+      </div>
+      <p class="muted small">Яндекс Календарь: «Подписаться на календарь» → «По ссылке» → вставьте ссылку. Ссылка личная: по ней виден ваш календарь.</p>
+      <button type="button" class="btn sm ghost" data-act="calRotate">Сменить ссылку (старая перестанет работать)</button>
+    </div>`;
+  }
+
+  function weekCard(w) {
+    const hw = w.homework.slice(0, 10);
+    if (!hw.length && !w.news.length) return "";
+    let day = null;
+    const hwHtml = hw.map((h) => {
+      const head = h.day !== day ? `<li><b>${esc(h.day_text)}</b><span></span></li>` : "";
+      day = h.day;
+      return `${head}<li><span>${esc(h.subject)}: ${esc(h.text)}</span></li>`;
+    }).join("");
+    return `<div class="card">
+      <div class="card-title">На этой неделе</div>
+      ${hwHtml ? `<ul class="list">${hwHtml}</ul>` : ""}
+      ${w.news.length ? `<h2>Объявления</h2><ul class="list">${w.news.map((n) => `<li><span>${esc(n.text)}</span><span class="muted small">${esc(n.date)}</span></li>`).join("")}</ul>` : ""}
+      <button type="button" class="btn sm ghost" data-act="calOpen" style="margin-top:10px">Сроки и домашка — в мой календарь</button>
+    </div>`;
+  }
+
+  Object.assign(VIEWS, {
+    async integrations() {
+      loading();
+      try {
+        const d = await api("/api/integrations");
+        S.integ = d;
+        const keys = d.api_keys.map((k) => `<li><span><b>${esc(k.name)}</b><br><span class="muted small">${esc(k.prefix)}… · ${k.can_write ? "чтение и запуск сборов" : "только чтение"} · запросов: ${k.uses}${k.last_used_at ? " · последний " + when(k.last_used_at) : ""}</span></span>
+          <button type="button" class="btn sm ghost" data-act="keyRevoke" data-id="${k.id}">Отозвать</button></li>`).join("");
+        const hooks = d.webhooks.map((h) => `<div class="class-row">
+            <div class="card-head"><b class="name">${esc(h.url)}</b><span class="chip ${h.active ? "done" : "warn"}">${h.active ? "включён" : "выключен"}</span></div>
+            <div class="muted small">${h.events.map((e) => esc(d.events[e] || e)).join(" · ")}</div>
+            <div class="muted small">${h.last_status ? `${esc(h.last_status)} · ${when(h.last_at)}` : "доставок ещё не было"}</div>
+            <div class="row tools">
+              <button type="button" class="btn sm" data-act="hookTest" data-id="${h.id}">Проверить</button>
+              <button type="button" class="btn sm ghost" data-act="hookLog" data-id="${h.id}">Журнал</button>
+              <button type="button" class="btn sm ghost" data-act="hookSecret" data-id="${h.id}">Секрет подписи</button>
+              <button type="button" class="btn sm ghost" data-act="hookToggle" data-id="${h.id}" data-on="${h.active ? 0 : 1}">${h.active ? "Выключить" : "Включить"}</button>
+              <button type="button" class="btn sm ghost icon-btn" data-act="hookDel" data-id="${h.id}" aria-label="Удалить вебхук"><svg class="i" aria-hidden="true"><use href="#i-trash"/></svg></button>
+            </div></div>`).join("");
+        render(`<h1>Интеграции</h1>
+          <p class="muted lead-in">«Перемена» сама отдаёт данные класса туда, где с ними уже работают: в календарь, на школьный портал, в электронный журнал или таблицу. Переносить вручную ничего не нужно.</p>
+          ${calendarCard(d.calendar, true)}
+          ${d.can_integrate ? `<div class="card">
+            <div class="card-title">Открытый API</div>
+            <p class="muted small">Школьный портал, электронный журнал или 1С забирают сборы, ответы, отсутствующих и домашку по ключу. Ключ видит только ваши классы${S.me.is_admin ? " (у администрации — всю школу)" : ""}; с правом записи — может запускать сборы.</p>
+            <div class="bubble small link-box">${esc(d.api_base)}</div>
+            ${keys ? `<ul class="list">${keys}</ul>` : '<p class="muted small">Ключей пока нет.</p>'}
+            <div class="row tools"><button type="button" class="btn sm" data-act="keyNew">Создать ключ</button>
+              <button type="button" class="btn sm ghost" data-act="openUrl" data-url="${esc(d.docs_url)}">Описание API (OpenAPI)</button></div>
+          </div>
+          <div class="card">
+            <div class="card-title">Вебхуки</div>
+            <p class="muted small">«Перемена» сама сообщает вашей системе о событиях: родитель ответил на сбор, сбор закрыт, ребёнок не придёт. Каждое сообщение подписано (HMAC-SHA256) — подделать его нельзя.</p>
+            ${hooks || '<p class="muted small">Вебхуков пока нет.</p>'}
+            <button type="button" class="btn sm" data-act="hookNew" style="margin-top:10px">Добавить вебхук</button>
+          </div>` : ""}`);
+      } catch (e) { fail(e); }
+    },
+  });
+  TAB_OF.integrations = "more";
+
+  ACTIONS.goIntegrations = () => go("integrations");
+  ACTIONS.openUrl = (el) => openUrl(absUrl(el.dataset.url));
+  ACTIONS.calCopy = async () => {
+    const url = S.integ?.calendar?.url;
+    if (url && await copyText(url)) toast("Ссылка скопирована — вставьте её в календарь");
+    else toast("Не удалось скопировать — выделите ссылку и скопируйте вручную", true);
+  };
+  ACTIONS.calRotate = () => modal(`<h2 class="modal-title">Сменить ссылку на календарь?</h2>
+      <p class="muted">Календари, подписанные по старой ссылке, перестанут обновляться — подпишитесь заново по новой.</p>
+      <div class="btns"><button class="btn ghost" value="cancel" formnovalidate>Отмена</button><button class="btn" value="ok">Сменить</button></div>`,
+    async () => {
+      S.integ.calendar = await api("/api/integrations/calendar/rotate", { method: "POST" });
+      toast("Ссылка заменена");
+      if (S.route?.name === "integrations") VIEWS.integrations(); else ACTIONS.calOpen();
+    });
+  ACTIONS.calOpen = async () => {
+    try {
+      S.integ = await api("/api/integrations");
+      modal(`<h2 class="modal-title">Сроки в мой календарь</h2>${calendarCard(S.integ.calendar, false)}
+        <div class="btns one"><button class="btn ghost" value="cancel" formnovalidate>Закрыть</button></div>`, () => {});
+      // кнопки внутри окна обрабатываем так же, как на странице
+      $modalBody.querySelectorAll("[data-act]").forEach((b) => b.addEventListener("click", (ev) => { ev.preventDefault(); ACTIONS[b.dataset.act]?.(b, ev); }));
+    } catch (e) { toast(e.message, true); }
+  };
+
+  // ключи API: показываем один раз и сразу даём проверить настоящим запросом
+  ACTIONS.keyNew = () => modal(`<h2 class="modal-title">Новый ключ API</h2>
+      <label class="field"><span>Для чего ключ</span><input type="text" name="name" maxlength="100" placeholder="Электронный журнал" required></label>
+      <label class="switch"><span>Разрешить запускать сборы</span><input type="checkbox" name="write"></label>
+      <p class="muted small">Ключ покажу один раз — сохраните его в настройках вашей системы. В «Перемене» хранится только его отпечаток.</p>
+      <div class="btns"><button class="btn ghost" value="cancel" formnovalidate>Отмена</button><button class="btn" value="ok">Создать</button></div>`,
+    async (fd) => {
+      const k = await api("/api/integrations/keys", { method: "POST", body: { name: String(fd.get("name") || "").trim(), can_write: fd.get("write") === "on" } });
+      haptic("success");
+      S.newKey = k.key;
+      const curl = `curl -H "Authorization: Bearer ${k.key}" ${S.integ.api_base}/polls?status=open`;
+      modal(`<h2 class="modal-title">Ключ создан</h2>
+        <div class="bubble small link-box">${esc(k.key)}</div>
+        <p class="muted small">Пример запроса — открытые сборы с числом ответивших:</p>
+        <div class="bubble small link-box">${esc(curl)}</div>
+        <div id="key-try" aria-live="polite"></div>
+        <div class="btns"><button class="btn ghost" value="copy">Скопировать ключ</button><button class="btn" value="try">Проверить запрос</button></div>
+        <div class="btns one"><button class="btn ghost" value="cancel" formnovalidate>Готово</button></div>`,
+      async (_fd, action) => {
+        if (action === "copy") { toast(await copyText(S.newKey) ? "Ключ скопирован" : "Выделите ключ и скопируйте вручную"); return true; }
+        const out = document.getElementById("key-try");
+        out.innerHTML = '<p class="muted small">Запрашиваю…</p>';
+        const r = await fetch("/api/v1/polls?status=open&limit=3", { headers: { Authorization: "Bearer " + S.newKey } });
+        const data = await r.json();
+        out.innerHTML = `<p class="small ${r.ok ? "ok" : "err"}">GET /api/v1/polls → HTTP ${r.status}</p><div class="bubble small pre">${esc(JSON.stringify(data, null, 2).slice(0, 1500))}</div>`;
+        return true;
+      });
+      if (S.route?.name === "integrations") VIEWS.integrations();
+      return true;
+    });
+  ACTIONS.keyRevoke = (el) => modal(`<h2 class="modal-title">Отозвать ключ?</h2><p class="muted">Система, которая им пользуется, сразу потеряет доступ.</p>
+      <div class="btns"><button class="btn ghost" value="cancel" formnovalidate>Отмена</button><button class="btn danger" value="ok">Отозвать</button></div>`,
+    async () => { await api(`/api/integrations/keys/${el.dataset.id}`, { method: "DELETE" }); toast("Ключ отозван"); VIEWS.integrations(); });
+
+  // вебхуки
+  function secretModal(secret, fresh) {
+    modal(`<h2 class="modal-title">${fresh ? "Вебхук добавлен" : "Секрет подписи"}</h2>
+      <p class="muted small">Каждый запрос подписан: заголовок <b>X-Peremena-Signature</b> = sha256=HMAC-SHA256(секрет, «X-Peremena-Timestamp» + «.» + тело). Сверьте подпись — и вы знаете, что сообщение от «Перемены».</p>
+      <div class="bubble small link-box">${esc(secret)}</div>
+      <div class="btns"><button class="btn ghost" value="cancel" formnovalidate>Готово</button><button class="btn" value="copy">Скопировать секрет</button></div>`,
+    async () => { toast(await copyText(secret) ? "Секрет скопирован" : "Выделите секрет и скопируйте вручную"); return true; });
+  }
+  ACTIONS.hookNew = () => {
+    const ev = S.integ.events;
+    modal(`<h2 class="modal-title">Новый вебхук</h2>
+      <label class="field"><span>Адрес вашей системы <em class="hint">только https://</em></span><input type="url" name="url" required maxlength="1000" placeholder="https://portal.school.ru/hooks/peremena"></label>
+      <fieldset class="field"><legend>О чём сообщать</legend>${Object.entries(ev).map(([k, l]) => `<label class="switch"><span>${esc(l)}</span><input type="checkbox" name="ev" value="${esc(k)}" checked></label>`).join("")}</fieldset>
+      ${isDemo() ? '<p class="muted small">В демо вебхук никуда не отправляет — в журнале будет видно, что ушло бы.</p>' : ""}
+      <div class="btns"><button class="btn ghost" value="cancel" formnovalidate>Отмена</button><button class="btn" value="ok">Добавить</button></div>`,
+    async (fd) => {
+      const r = await api("/api/integrations/webhooks", { method: "POST", body: { url: String(fd.get("url") || "").trim(), events: fd.getAll("ev") } });
+      haptic("success");
+      VIEWS.integrations();
+      secretModal(r.secret, true);
+      return true;
+    });
+  };
+  ACTIONS.hookTest = async (el) => {
+    el.disabled = true;
+    try {
+      const r = await api(`/api/integrations/webhooks/${el.dataset.id}/test`, { method: "POST" });
+      if (r.status === "ok") toast(`Доставлено: ваша система ответила HTTP ${r.code}`);
+      else if (r.status === "demo") toast("Демо: запрос с подписью сформирован, но наружу не уходил — откройте «Журнал»");
+      else toast(`Не доставлено: ${r.error || "HTTP " + r.code}`, true);
+      VIEWS.integrations();
+    } catch (e) { toast(e.message, true); el.disabled = false; }
+  };
+  ACTIONS.hookLog = async (el) => {
+    try {
+      const items = await api(`/api/integrations/webhooks/${el.dataset.id}/deliveries`);
+      const label = { ok: '<span class="chip done">доставлено</span>', demo: '<span class="chip">демо</span>', error: '<span class="chip warn">ошибка</span>' };
+      modal(`<h2 class="modal-title">Журнал доставок</h2>
+        ${items.length ? `<ul class="list">${items.map((d) => `<li class="inbox-li"><div class="muted small">${when(d.created_at)} · ${esc(S.integ.events[d.event] || d.event)} ${label[d.status] || ""}${d.code ? " · HTTP " + d.code : ""}${d.error ? " · " + esc(d.error) : ""}</div>
+          <details><summary class="small">Что ушло</summary><div class="bubble small pre">${esc(d.payload)}</div></details></li>`).join("")}</ul>` : '<p class="muted small">Доставок ещё не было. Нажмите «Проверить».</p>'}
+        <div class="btns one"><button class="btn ghost" value="cancel" formnovalidate>Закрыть</button></div>`, () => {});
+    } catch (e) { toast(e.message, true); }
+  };
+  ACTIONS.hookSecret = async (el) => {
+    try { secretModal((await api(`/api/integrations/webhooks/${el.dataset.id}/secret`)).secret, false); } catch (e) { toast(e.message, true); }
+  };
+  ACTIONS.hookToggle = async (el) => {
+    try { await api(`/api/integrations/webhooks/${el.dataset.id}`, { method: "PUT", body: { active: el.dataset.on === "1" } }); VIEWS.integrations(); }
+    catch (e) { toast(e.message, true); }
+  };
+  ACTIONS.hookDel = (el) => modal(`<h2 class="modal-title">Удалить вебхук?</h2><p class="muted">Система перестанет получать события, журнал доставок удалится.</p>
+      <div class="btns"><button class="btn ghost" value="cancel" formnovalidate>Отмена</button><button class="btn danger" value="ok">Удалить</button></div>`,
+    async () => { await api(`/api/integrations/webhooks/${el.dataset.id}`, { method: "DELETE" }); toast("Удалено"); VIEWS.integrations(); });
+
+  // печать: ведомость для подписи и бланки согласия с QR на онлайн-ответ
+  ACTIONS.print = async (el) => {
+    const win = blankTab();
+    try {
+      const links = await api(`/api/polls/${el.dataset.id}/print-links`);
+      openUrl(absUrl(links[el.dataset.kind]), win);
+    } catch (e) { if (win) win.close(); toast(e.message, true); }
   };
 
   // ------------------------------------------------------------------ демо-режим

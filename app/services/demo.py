@@ -17,8 +17,9 @@ from sqlalchemy.exc import IntegrityError
 from ..db import session, utcnow
 from ..demo_ids import DEMO_BASE, DEMO_SPAN, SANDBOX_SIZE, SLOTS, is_demo, sandbox_base, sandbox_id_of
 from ..models import (
-    Absence, Announcement, Campaign, ClassChat, DemoSandbox, FaqEntry, InboxItem, Material, Member, Metric,
-    OpenQuestion, Poll, PollTarget, School, SchoolMember, SubjectTeacher, User, WebSession,
+    Absence, Announcement, Campaign, ClassChat, DemoSandbox, FaqEntry, InboxItem, IntegrationToken, Material,
+    Member, Metric, OpenQuestion, Poll, PollTarget, School, SchoolMember, SubjectTeacher, User, Webhook,
+    WebhookDelivery, WebSession,
 )
 from ..timeutil import local_now, to_utc
 from . import search
@@ -207,10 +208,53 @@ async def create_sandbox() -> DemoSandbox:
             s.add_all(Metric(teacher_id=teacher, kind=kind, minutes=MINUTES[kind],
                              created_at=now - timedelta(days=rnd.randint(0, 6))) for _ in range(n))
 
+        await _seed_integrations(s, sid, teacher, chat, excursion, PARENTS_9B, now)
+
         row = await s.get(DemoSandbox, sid)
         row.teacher_id, row.parent_id = teacher, parents[21]  # у этого «родителя» неотвеченные сборы
     async with session() as s:
         return await s.get(DemoSandbox, sid)
+
+
+DEMO_HOOK_URL = "https://journal.example-school.ru/hooks/peremena"
+
+
+async def _seed_integrations(s, sid: int, teacher: int, chat: int, poll: Poll, parents, now) -> None:
+    """Интеграции в демо: подключённый «электронный журнал» (вебхук с журналом доставок) и ключ API.
+    Вебхук из демо никуда не отправляет — доставки помечены «демо», но тело и подпись — настоящие."""
+    import json
+    import uuid
+
+    from ..integrations import tokens
+
+    s.add(IntegrationToken(owner_id=teacher, kind="api", name="Школьный портал (пример)",
+                           token_hash=tokens.digest(secrets.token_urlsafe(32)), prefix="prm_demo",
+                           created_at=now - timedelta(days=5), last_used_at=now - timedelta(hours=2), uses=214))
+    hook = Webhook(owner_id=teacher, url=DEMO_HOOK_URL, salt=secrets.token_urlsafe(24),
+                   events="poll.created,poll.answered,poll.closed,absence.created",
+                   last_status="демо: не отправлялось", last_at=now - timedelta(hours=1),
+                   created_at=now - timedelta(days=5))
+    s.add(hook)
+    await s.flush()
+    cls = {"id": chat, "title": "9Б · Родители"}
+    brief = {"id": poll.id, "title": poll.title, "template": "consent", "class": cls,
+             "options": ["Согласен", "Не согласен", "Нужно уточнить"]}
+    samples = [
+        ("absence.created", {"class": cls, "child": "Богданова Кира", "day": local_now(TZ).date().isoformat(),
+                             "reason": "sick", "reason_text": "болеет"}, 1),
+        ("poll.answered", {"poll": brief | {"answered": 19, "total": 24},
+                           "participant": {"name": _name(*parents[18][:2]), "child": parents[18][2]},
+                           "answer": {"index": 2, "text": "Нужно уточнить"}, "changed": False}, 3),
+        ("poll.answered", {"poll": brief | {"answered": 18, "total": 24},
+                           "participant": {"name": _name(*parents[17][:2]), "child": parents[17][2]},
+                           "answer": {"index": 1, "text": "Не согласен"}, "changed": False}, 5),
+        ("poll.created", {"poll": brief | {"answered": 0, "total": 24}}, 24),
+    ]
+    for event, data, hours in reversed(samples):  # старые раньше: журнал показывает свежие сверху
+        at = now - timedelta(hours=hours)
+        body = {"id": str(uuid.uuid4()), "event": event, "created_at": at.isoformat() + "Z", "data": data}
+        s.add(WebhookDelivery(webhook_id=hook.id, event=event, status="demo", created_at=at,
+                              payload=json.dumps(body, ensure_ascii=False, indent=2)))
 
 
 async def sandbox_for(user_id: int) -> DemoSandbox | None:
@@ -239,6 +283,8 @@ async def delete_sandbox(sid: int, keep_row: bool = False) -> None:
             (ClassChat, chats(ClassChat.chat_id)), (FaqEntry, users(FaqEntry.teacher_id)),
             (Material, users(Material.teacher_id)), (InboxItem, users(InboxItem.teacher_id)),
             (Metric, users(Metric.teacher_id)), (OpenQuestion, users(OpenQuestion.teacher_id)),
+            (WebhookDelivery, WebhookDelivery.webhook_id.in_(select(Webhook.id).where(users(Webhook.owner_id)))),
+            (Webhook, users(Webhook.owner_id)), (IntegrationToken, users(IntegrationToken.owner_id)),
             (Campaign, Campaign.school_id.in_(school_ids)), (SchoolMember, SchoolMember.school_id.in_(school_ids)),
             (School, users(School.created_by)), (WebSession, users(WebSession.user_id)), (User, users(User.user_id)),
             (DemoSandbox, DemoSandbox.id == sid),

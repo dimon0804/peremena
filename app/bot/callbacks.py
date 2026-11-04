@@ -164,6 +164,10 @@ async def on_menu(uid: int, action: str) -> None:
         await dialog.answer_text(uid, "что задали", False)
     elif action in mapping:
         await mapping[action](uid)
+    else:
+        from . import integrations  # календарь и «неделя»
+
+        await integrations.on_menu(uid, action)
 
 
 # ---------------------------------------------------------------- черновик сбора

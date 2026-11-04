@@ -330,3 +330,55 @@ class DemoSandbox(Base):
     teacher_id: Mapped[int] = mapped_column(BigInteger, index=True)
     parent_id: Mapped[int] = mapped_column(BigInteger)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+# ---------------------------------------------------------------- Интеграции с внешними системами
+class IntegrationToken(Base):
+    """Секрет для внешней системы: лента календаря (ical) или ключ открытого API (api).
+    В базе — только SHA-256 токена. Ссылку на календарь можно показать снова: токен выводится из salt
+    и ключа подписей сервиса (без ключа утечка таблицы ничего не даёт). Ключ API показывается один раз."""
+    __tablename__ = "integration_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    kind: Mapped[str] = mapped_column(String(10), default="api")        # ical | api
+    name: Mapped[str] = mapped_column(String(100), default="")
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    prefix: Mapped[str] = mapped_column(String(16), default="")         # начало ключа — узнать его в списке
+    salt: Mapped[str | None] = mapped_column(String(64), nullable=True)  # ical: из него выводится ссылка
+    can_write: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())  # api: создавать сборы
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    uses: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class Webhook(Base):
+    """Исходящий вебхук: «Перемена» сама сообщает внешней системе о событиях (ответ на сбор, отсутствие…).
+    Тело подписывается HMAC-SHA256; секрет выводится из salt и ключа подписей сервиса."""
+    __tablename__ = "webhooks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    url: Mapped[str] = mapped_column(Text)
+    events: Mapped[str] = mapped_column(String(300), default="")  # через запятую
+    salt: Mapped[str] = mapped_column(String(64))
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    failures: Mapped[int] = mapped_column(Integer, default=0, server_default="0")  # неудач подряд
+    last_status: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    last_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class WebhookDelivery(Base):
+    """Журнал доставок (последние 30 на вебхук, не старше 14 дней) — видно, что и когда ушло."""
+    __tablename__ = "webhook_deliveries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    webhook_id: Mapped[int] = mapped_column(Integer, index=True)
+    event: Mapped[str] = mapped_column(String(40))
+    status: Mapped[str] = mapped_column(String(10), default="ok")  # ok | error | demo
+    code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error: Mapped[str] = mapped_column(String(300), default="")
+    payload: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)

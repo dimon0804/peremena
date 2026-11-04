@@ -23,6 +23,8 @@ from .state import make_kv
 from .updates import drain, ensure_webhook, make_scheduler, polling_loop, spawn
 from .webapp.api import router as api_router
 from .webapp.site_api import router as site_api_router
+from .integrations.api_v1 import router as api_v1_router
+from .integrations.routes import router as integrations_router
 
 log = logging.getLogger("peremena")
 
@@ -111,6 +113,8 @@ app = FastAPI(title="Перемена", version=__version__, lifespan=lifespan, 
               openapi_url=None)
 app.include_router(api_router)
 app.include_router(site_api_router)
+app.include_router(integrations_router)  # календарь, ключи, вебхуки, печать
+app.include_router(api_v1_router)        # открытый API для школьных систем
 
 # Что разрешено грузить страницам сайта и мини-приложения: свои файлы и мост MAX (st.max.ru).
 # Инлайновые стили нужны интерфейсу (style="…" в разметке), инлайновых скриптов нет.
