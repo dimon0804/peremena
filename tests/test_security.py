@@ -191,6 +191,42 @@ def test_parent_sees_only_own_money_status(env):
         assert other["last_name"] not in dump
 
 
+def test_csv_export_escapes_formulas_and_link_expires(env, monkeypatch):
+    from urllib.parse import parse_qs, urlparse
+
+    from app.services import polls
+
+    loop, fake, c = env
+    teacher, _ = _two_classes(loop)
+    res = run(loop, api.create_poll(api.PollIn(chat_id=CHAT_ID, template="ack", text="Проверка выгрузки"), teacher))
+    pid = res["poll"]["id"]
+    from sqlalchemy import update
+
+    from app.db import session
+    from app.models import PollTarget
+
+    async def rename():  # имя из профиля MAX — его выбирает сам родитель
+        async with session() as s:
+            await s.execute(update(PollTarget).where(PollTarget.poll_id == pid,
+                                                     PollTarget.user_id == PARENTS[0]["user_id"])
+                            .values(name='=HYPERLINK("http://x")'))
+    run(loop, rename())
+    run(loop, polls.record_answer(pid, PARENTS[0], 0))
+
+    q = {k: v[0] for k, v in parse_qs(urlparse(res["poll"]["export_url"]).query).items()}
+
+    async def body(resp):
+        return b"".join([chunk async for chunk in resp.body_iterator]).decode("utf-8-sig")
+    text = run(loop, body(run(loop, api.export_csv(pid, q["sig"], int(q["exp"])))))
+    assert "'=HYPERLINK" in text and "=HYPERLINK" not in text.replace("'=HYPERLINK", "")
+    # старая бессрочная подпись и просроченная ссылка не работают
+    with pytest.raises(HTTPException):
+        run(loop, api.export_csv(pid, api._sign("poll", pid, TEACHER["user_id"]), 0))
+    monkeypatch.setattr("app.webapp.api.time.time", lambda: int(q["exp"]) + 1)
+    with pytest.raises(HTTPException):
+        run(loop, api.export_csv(pid, q["sig"], int(q["exp"])))
+
+
 def test_demo_and_real_schools_do_not_mix_and_join_is_limited(env):
     from app.services import demo, school
 

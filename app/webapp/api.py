@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import html
 import io
+import time
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
@@ -112,7 +113,7 @@ def poll_out(p, tz: str, with_targets: bool = False, chat_titles: dict | None = 
              "answered_at": t.answered_at.isoformat() + "Z" if t.answered_at else None, "reminders": t.reminders}
             for t in p.targets
         ]
-        out["export_url"] = f"/api/polls/{p.id}/export.csv?sig={_sign('poll', p.id, p.teacher_id)}"
+        out["export_url"] = export_url(p)
     return out
 
 
@@ -244,11 +245,28 @@ async def close(pid: int, user: User = Depends(teacher_user)):
     return poll_out(p, user.tz, with_targets=True, chat_titles=await _titles())
 
 
+EXPORT_TTL = 24 * 3600
+
+
+def export_url(p) -> str:
+    """Ссылка на выгрузку открывается без входа (в браузере телефона), поэтому подписана и живёт сутки."""
+    exp = int(time.time()) + EXPORT_TTL
+    return f"/api/polls/{p.id}/export.csv?exp={exp}&sig={_sign('poll', p.id, p.teacher_id, exp)}"
+
+
+def _csv_cell(value):
+    """Защита от CSV-инъекции: ячейку, которую Excel принял бы за формулу, начинаем с апострофа."""
+    if isinstance(value, str) and value and value[0] in "=+-@\t\r":
+        return "'" + value
+    return value
+
+
 @router.get("/polls/{pid}/export.csv")
-async def export_csv(pid: int, sig: str):
+async def export_csv(pid: int, sig: str = Query(max_length=64), exp: int = 0):
     p = await polls.get_poll(pid)
-    if p is None or not hmac.compare_digest(sig.encode(), _sign("poll", p.id, p.teacher_id).encode()):
-        raise HTTPException(404, "Не найдено")
+    if p is None or exp < time.time() or \
+            not hmac.compare_digest(sig.encode(), _sign("poll", p.id, p.teacher_id, exp).encode()):
+        raise HTTPException(404, "Ссылка устарела — откройте сбор и выгрузите заново")
     teacher = await chats.get_user(p.teacher_id)
     tz = teacher.tz if teacher else None
     buf = io.StringIO()
@@ -258,7 +276,8 @@ async def export_csv(pid: int, sig: str):
     for t in p.targets:
         ans = p.options[t.answer] if t.answer is not None and t.answer < len(p.options) else "не ответил"
         when = f"{to_local(t.answered_at, tz):%d.%m.%Y %H:%M}" if t.answered_at else ""
-        w.writerow([t.name, ans, when, t.reminders] + ([p.amount if t.paid else 0] if p.amount else []))
+        w.writerow([_csv_cell(x) for x in [t.name, ans, when, t.reminders]
+                    + ([p.amount if t.paid else 0] if p.amount else [])])
     data = buf.getvalue().encode("utf-8")
     fname = f"sbor_{p.id}.csv"
     return StreamingResponse(io.BytesIO(data), media_type="text/csv; charset=utf-8",
