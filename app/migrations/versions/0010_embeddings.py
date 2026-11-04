@@ -1,7 +1,7 @@
 """векторы карточек справочника для семантического поиска (опционально)
 
 Revision ID: 0010
-Revises: 0007
+Revises: 0009
 Create Date: 2026-11-04 21:00:00
 
 Таблица faq_embeddings: вектор карточки байтами (float32) — работает везде, включая SQLite.
@@ -15,7 +15,7 @@ import sqlalchemy as sa
 
 
 revision = '0010'
-down_revision = '0007'
+down_revision = '0009'
 branch_labels = None
 depends_on = None
 

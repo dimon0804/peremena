@@ -98,7 +98,11 @@ async def _teacher(poll: Poll) -> User | None:
 def parent_text(poll: Poll, tz: str, chat_title: str, teacher_name: str, selected: int | None = None,
                 reminder: bool = False) -> str:
     head = "⏰ <b>Напоминание</b>\n\n" if reminder else ""
+    if poll.origin:  # сбор сверху: родитель видит, от кого он на самом деле
+        head += f"🏛 <b>{html.escape(poll.origin)}</b>\n"
     parts = [head + f"📋 {html.escape(poll.text)}"]
+    if poll.note:
+        parts.append(f"✍️ <i>От классного руководителя:</i> {html.escape(poll.note)}")
     meta = []
     if poll.amount:
         meta.append(f"Сумма: <b>{rub(poll.amount)}</b>")
@@ -120,21 +124,27 @@ def rub(n: int) -> str:
     return f"{n:,}".replace(",", " ") + " ₽"
 
 
-async def create_poll(teacher_id: int, chat_id: int, template: str, text: str, options: list[str],
-                      deadline, amount: int | None = None, send_at=None) -> Poll:
+def build_poll(teacher_id: int, chat_id: int, template: str, text: str, options: list[str], deadline,
+               amount: int | None = None, send_at=None, **extra) -> Poll:
+    """Новый сбор, ещё не записанный в базу. extra — campaign_id и origin для сбора, спущенного сверху."""
     tpl = TEMPLATES.get(template, TEMPLATES["consent"])
     opts = [o.strip()[:60] for o in (options or tpl["options"]) if o.strip()][:10]
     clarify = tpl["clarify"]
     if template == "choice" or clarify is None:
         clarify = next((i for i, o in enumerate(opts) if o.lower().startswith(CLARIFY_WORDS)), None)
     title, body = _split_text(text)
+    return Poll(
+        teacher_id=teacher_id, chat_id=chat_id, template=template, title=title, text=body,
+        options=opts, clarify_option=clarify, deadline=deadline,
+        amount=amount if template == "money" and amount else None,
+        dispatched=False, send_at=send_at, **extra,
+    )
+
+
+async def create_poll(teacher_id: int, chat_id: int, template: str, text: str, options: list[str],
+                      deadline, amount: int | None = None, send_at=None) -> Poll:
     async with session() as s:
-        poll = Poll(
-            teacher_id=teacher_id, chat_id=chat_id, template=template, title=title, text=body,
-            options=opts, clarify_option=clarify, deadline=deadline,
-            amount=amount if template == "money" and amount else None,
-            dispatched=False, send_at=send_at,
-        )
+        poll = build_poll(teacher_id, chat_id, template, text, options, deadline, amount, send_at)
         s.add(poll)
         await s.flush()
         return poll
@@ -230,7 +240,9 @@ async def _send_poll(poll_id: int) -> dict:
     gmsg = None
     if not poll.group_message_id:
         group_text = (
-            f"📋 <b>Сбор от учителя</b>\n\n{html.escape(poll.text)}\n\n"
+            f"📋 <b>{'Сбор: ' + html.escape(poll.origin) if poll.origin else 'Сбор от учителя'}</b>\n\n"
+            f"{html.escape(poll.text)}\n\n"
+            + (f"✍️ От классного руководителя: {html.escape(poll.note)}\n\n" if poll.note else "")
             + (f"Сумма: <b>{rub(poll.amount)}</b>\n" if poll.amount else "")
             + (f"Срок: <b>{fmt_dt(poll.deadline, tz)}</b>\n" if poll.deadline else "")
             + "Ответьте кнопкой ниже — ответ засчитается лично вам, другим участникам он не виден."

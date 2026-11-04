@@ -141,11 +141,14 @@
     if (me.is_teacher || me.is_subject_teacher) t.push(["shelf", "folder", "Полка"]);
     // классному руководителю «Школа» открывается из «Ещё» — внизу не больше пяти вкладок, иначе подписи не помещаются на телефоне
     if (!me.is_teacher && (me.is_admin || me.is_subject_teacher)) t.push(["school", "school", "Школа"]);
+    if (me.region) t.push(["region", "school", "Регион"]);
+    // библиотека шаблонов: классному руководителю — из «Ещё» и из нового сбора, остальным сотрудникам — вкладкой
+    if (!me.is_teacher && (me.region || me.is_admin || me.is_subject_teacher)) t.push(["library", "book", "Библиотека"]);
     if (me.is_teacher) t.push(["more", "more", "Ещё"]);
     return t.length ? t : PARENT_TABS;
   }
   // нет ни одной роли и ни одного класса — человек только что открыл бота: сначала объясняем, что делать
-  const isNewcomer = (me) => !me.is_teacher && !me.is_subject_teacher && !me.is_admin && !me.member_chats.length && !me.demo;
+  const isNewcomer = (me) => !me.is_teacher && !me.is_subject_teacher && !me.is_admin && !me.member_chats.length && !me.demo && !me.region;
 
   function drawTabs(active) {
     if (isNewcomer(S.me)) { $tabbar.hidden = true; document.body.classList.add("no-tabs"); return; }
@@ -160,7 +163,8 @@
     if (b) { S.stack = []; go(b.dataset.tab, {}, false); }
   });
 
-  const TAB_OF = { pollDetail: "polls", newPoll: "polls", campaign: "school", newCampaign: "school" };
+  const TAB_OF = { pollDetail: "polls", newPoll: "polls", campaign: "school", newCampaign: "school",
+    regionCampaign: "region", newRegionCampaign: "region", libModeration: "library" };
 
   function go(name, args = {}, push = true) {
     if (push && S.route) S.stack.push(S.route);
@@ -332,6 +336,7 @@
           <div class="card">
             <div class="card-head"><h1 class="card-title lg">${esc(p.title)}</h1>${deadlineChip(p)}</div>
             <div class="muted small">${esc(p.chat_title)}</div>
+            ${p.origin ? originBlock(p) : ""}
             <div class="big" style="margin-top:18px">${p.answered}<small>/${p.total}</small></div>
             <div class="bar" role="img" aria-label="Ответили ${p.answered} из ${p.total}"><i style="width:${pct}%"></i></div>
             ${answeredLine}
@@ -360,6 +365,7 @@
           <div class="row actions-row">
             <button type="button" class="btn ghost" data-act="export" data-url="${esc(p.export_url)}" data-id="${p.id}"><svg class="i" aria-hidden="true"><use href="#i-download"/></svg>Скачать таблицу</button>
             <button type="button" class="btn ghost" data-act="print" data-kind="sheet" data-id="${p.id}">Ведомость для подписи</button>
+            ${p.origin || p.template === "money" ? "" : `<button type="button" class="btn ghost" data-act="libSharePoll" data-id="${p.id}"><svg class="i" aria-hidden="true"><use href="#i-book"/></svg>Поделиться в библиотеке</button>`}
             <button type="button" class="btn ghost" data-act="print" data-kind="${p.missing.length ? "blanks_missing" : "blanks"}" data-id="${p.id}">Бланки с QR${p.missing.length ? " для " + p.missing.length : ""}</button>
             ${p.closed ? `<button type="button" class="btn danger" data-act="deletePoll" data-id="${p.id}"><svg class="i" aria-hidden="true"><use href="#i-trash"/></svg>Удалить сбор</button>`
               : `<button type="button" class="btn danger" data-act="closePoll" data-id="${p.id}">Закрыть сбор</button>`}
@@ -373,10 +379,13 @@
         S.templates = S.templates || await api("/api/templates");
         const chats = S.me.chats;
         if (!chats.length) { render(noClassesHtml()); return; }
-        const draft = { template: "consent", deadline: "friday" };
+        // шаблон, взятый из библиотеки, открывается готовым черновиком: класс и срок учитель выбирает сам
+        const draft = Object.assign({ template: "consent", deadline: "friday" }, S.libDraft || {});
+        S.libDraft = null;
         const draw = () => {
           const tpl = S.templates.find((t) => t.key === draft.template);
           render(`<h1>Новый сбор</h1>
+            <button type="button" class="btn ghost block link-card" data-act="goLibrary"><svg class="i" aria-hidden="true"><use href="#i-book"/></svg><span>Взять готовый из библиотеки шаблонов</span><svg class="i chev" aria-hidden="true"><use href="#i-chev"/></svg></button>
             <label class="field"><span>Класс</span><select id="f-chat">${chats.map((c) => `<option value="${c.chat_id}">${esc(c.title || c.chat_id)}</option>`).join("")}</select></label>
             <fieldset class="field"><legend>Что собираем</legend>
               <div class="seg">${S.templates.map((t) => segBtn("tpl", t.key, esc(t.label), t.key === draft.template, "key")).join("")}</div></fieldset>
@@ -487,6 +496,7 @@
         const pilotHtml = pilotCard(st.pilot);
         render(`<h1>Польза и настройки</h1>
           <button type="button" class="btn ghost block link-card" data-act="goSchool"><svg class="i" aria-hidden="true"><use href="#i-school"/></svg><span>${S.me.school ? esc(S.me.school.name) : "Школа: общая база ответов и сводка"}</span><svg class="i chev" aria-hidden="true"><use href="#i-chev"/></svg></button>
+          <button type="button" class="btn ghost block link-card" data-act="goLibrary"><svg class="i" aria-hidden="true"><use href="#i-book"/></svg><span>Библиотека шаблонов: готовые сборы и ответы коллег</span><svg class="i chev" aria-hidden="true"><use href="#i-chev"/></svg></button>
           <button type="button" class="btn ghost block link-card" data-act="goIntegrations"><svg class="i" aria-hidden="true"><use href="#i-list"/></svg><span>Интеграции: календарь, API, вебхуки</span><svg class="i chev" aria-hidden="true"><use href="#i-chev"/></svg></button>
           <button type="button" class="btn ghost block link-card" data-act="goJournal"><svg class="i" aria-hidden="true"><use href="#i-file"/></svg><span>Электронный журнал: импорт и выгрузка</span><svg class="i chev" aria-hidden="true"><use href="#i-chev"/></svg></button>
           <div class="card">
@@ -742,8 +752,14 @@
             ${faqs.map((e) => `<div class="card faq"><div class="card-title">${esc(e.question)}</div><div>${esc(e.answer)}</div></div>`).join("") || '<p class="muted">Пока пусто.</p>'}`);
           return;
         }
-        const d = await api("/api/school");
+        const [d, pm] = await Promise.all([api("/api/school"), api("/api/platform/me")]);
+        const regionCard = pm.school_region
+          ? `<div class="card"><div class="card-title">Управление образования</div><p class="muted small">Школа подключена к «${esc(pm.school_region.name)}». Сборы оттуда приходят классным руководителям и видны здесь, в сборах на параллель. Методист видит только цифры по классам, без имён родителей.</p></div>`
+          : `<div class="card"><label class="card-title" for="rg-code">Подключить к управлению образования</label>
+            <p class="muted small">Код даёт методист. После подключения сборы управления будут сами приходить классным руководителям, а методист увидит только цифры по классам — без имён и ответов родителей.</p>
+            <form class="row search-row" data-form="rgJoin"><input type="text" id="rg-code" placeholder="Код для школ" autocapitalize="characters" autocomplete="off" style="text-transform:uppercase"><button type="submit" class="btn sm">Подключить</button></form></div>`;
         render(`<h1>${esc(me.school.name)}</h1>
+          ${regionCard}
           <div class="card">
             <div class="card-title">Пригласить коллег</div>
             <p class="muted small">Классные руководители вступают по коду <b class="code">${esc(me.school.code)}</b> или по ссылке.</p>
@@ -1555,6 +1571,297 @@
   }
 
   // ------------------------------------------------------------------ старт
+  // ================================================================== СБОР СВЕРХУ, РЕГИОН, БИБЛИОТЕКА
+  // сбор от управления или завуча: учитель видит, откуда он, и может добавить приписку, но не менять суть
+  function originBlock(p) {
+    return `<div class="origin" style="margin-top:10px"><span class="chip accent">пришло от: ${esc(p.origin)}</span>
+      <p class="muted small" style="margin-top:8px">${p.note ? `Ваша приписка: «${esc(p.note)}»` : "Текст и варианты ответа менять нельзя, но можно добавить свою приписку для родителей."}</p>
+      ${p.closed ? "" : `<button type="button" class="btn sm ghost" data-act="editNote" data-id="${p.id}" data-note="${esc(p.note || "")}">${p.note ? "Изменить приписку" : "Добавить приписку"}</button>`}</div>`;
+  }
+
+  function libCard(it) {
+    const body = it.kind === "poll" ? it.text.split("\n").slice(1).join("\n").trim() : it.text;
+    return `<div class="card">
+      <div class="card-head"><span class="card-title">${esc(it.title)}</span>${it.official ? '<span class="chip accent">от команды</span>' : ""}</div>
+      <div class="row chips"><span class="chip">${it.kind === "poll" ? esc(it.template_label || "Сбор") : "Ответ для справочника"}</span>${it.topic_label ? `<span class="chip">${esc(it.topic_label)}</span>` : ""}${it.grades ? `<span class="chip">${esc(it.grades_label)}</span>` : ""}${it.hidden ? '<span class="chip warn">скрыт</span>' : ""}</div>
+      ${body ? `<div class="bubble" style="margin-top:8px">${esc(body)}</div>` : ""}
+      ${it.kind === "poll" && it.options.length ? `<p class="muted small buttons-preview">Кнопки: ${it.options.map((o) => `<span class="chip">${esc(o)}</span>`).join(" ")}</p>` : ""}
+      <div class="row spread" style="margin-top:10px"><span class="muted small">${it.uses ? `взяли ${it.uses} ${plural(it.uses, "раз", "раза", "раз")}` : "ещё никто не брал"}</span>
+        <span class="row">${it.mine ? `<button type="button" class="btn sm ghost" data-act="libDelete" data-id="${it.id}">Удалить</button>` : `<button type="button" class="btn sm ghost" data-act="libReport" data-id="${it.id}">Пожаловаться</button>`}
+        ${S.me.is_teacher ? `<button type="button" class="btn sm" data-act="libTake" data-id="${it.id}">Взять к себе</button>` : ""}</span></div>
+    </div>`;
+  }
+
+  const rcCard = (c) => `<button type="button" class="card tap poll-card" data-act="openRegionCampaign" data-id="${c.id}">
+      <span class="card-title">${esc(c.title)}</span>
+      <span class="row spread poll-nums"><span class="big sm">${c.pct}<small>%</small></span><span class="muted small">${c.schools.length} ${plural(c.schools.length, "школа", "школы", "школ")} · ${c.classes} ${plural(c.classes, "класс", "класса", "классов")}</span></span>
+      <span class="bar" role="img" aria-label="Ответили ${c.pct}%"><i style="width:${c.pct}%"></i></span>
+      ${c.total && c.schools.length > 1 ? `<span class="muted small">Меньше всего ответили: ${esc(c.schools[0].name)} — ${c.schools[0].pct}%</span>` : ""}</button>`;
+
+  // публикация в библиотеку: телефоны и почту не пропускаем, возможные имена — показываем и спрашиваем.
+  // Возвращает true, если открыто окно с предупреждением (его нельзя закрывать как обычное).
+  async function publishToLibrary(body) {
+    const r = await api("/api/library", { method: "POST", body });
+    if (r.ok) { haptic("success"); toast("Опубликовано в библиотеке. Спасибо — коллегам пригодится"); return false; }
+    if (r.blocks.length) {
+      modal(`<h2 class="modal-title">Пока нельзя опубликовать</h2>${r.blocks.map((b) => `<p>${esc(b)}</p>`).join("")}
+        <div class="btns one"><button class="btn" value="cancel" formnovalidate>Понятно</button></div>`, async () => {});
+      return true;
+    }
+    modal(`<h2 class="modal-title">Проверьте текст</h2>${r.warnings.map((w) => `<p>${esc(w)}</p>`).join("")}
+      <p class="muted small">Шаблон увидят учителя других школ. Имена детей и родителей в нём лишние.</p>
+      <div class="btns"><button class="btn ghost" value="cancel" formnovalidate>Поправить</button><button class="btn" value="ok">Всё равно опубликовать</button></div>`,
+    async () => publishToLibrary({ ...body, confirm: true }));
+    return true;
+  }
+
+  Object.assign(VIEWS, {
+    async library() {
+      loading();
+      const f = S.lib || (S.lib = { q: "", kind: "", topic: "", sort: "popular" });
+      try {
+        const qs = new URLSearchParams({ q: f.q, sort: f.sort });
+        if (f.kind) qs.set("kind", f.kind);
+        if (f.topic) qs.set("topic", f.topic);
+        const d = await api(`/api/library?${qs}`);
+        const staff = S.me.is_teacher || S.me.is_subject_teacher;
+        render(`${pageHead("Библиотека шаблонов", staff ? '<button type="button" class="btn head-action" data-act="libPublish"><svg class="i" aria-hidden="true"><use href="#i-plus"/></svg>Поделиться</button>' : "")}
+          <p class="muted lead-in">Готовые сборы и ответы для справочника — от коллег и от нашей команды. ${S.me.is_teacher ? "Берите к себе в один тап и правьте под свой класс." : ""} Авторов не показываем, а имена и телефоны проверяем перед публикацией.</p>
+          <form class="row search-row" data-form="libSearch" role="search" style="margin-bottom:10px"><input type="search" id="lib-q" aria-label="Поиск по библиотеке" placeholder="Экскурсия, справка, подарок…" enterkeyhint="search" value="${esc(f.q)}"><button type="submit" class="btn sm">Найти</button></form>
+          <div class="seg" role="group" aria-label="Что показать">${[["", "Всё"], ["poll", "Сборы"], ["faq", "Ответы"]].map(([k, l]) => segBtn("libKind", k, l, f.kind === k)).join("")}</div>
+          <div class="row" style="margin:10px 0;gap:8px;flex-wrap:wrap"><label class="sr-only" for="lib-topic">Тема</label><select id="lib-topic" style="flex:1;min-width:160px"><option value="">Все темы</option>${d.topics.map((t) => `<option value="${esc(t.key)}" ${t.key === f.topic ? "selected" : ""}>${esc(t.label)}</option>`).join("")}</select>
+            <div class="seg" role="group" aria-label="Порядок">${segBtn("libSort", "popular", "Популярные", f.sort === "popular")}${segBtn("libSort", "new", "Новые", f.sort === "new")}</div></div>
+          ${d.moderator ? '<button type="button" class="btn ghost block link-card" data-act="libModeration"><span>Жалобы на шаблоны</span><svg class="i chev" aria-hidden="true"><use href="#i-chev"/></svg></button>' : ""}
+          ${d.items.length ? d.items.map(libCard).join("") : '<div class="empty"><b>Ничего не нашлось</b>Попробуйте другое слово или уберите фильтр темы.</div>'}`);
+        document.getElementById("lib-topic").addEventListener("change", (e) => { f.topic = e.target.value; VIEWS.library(); });
+      } catch (e) { fail(e); }
+    },
+
+    async libModeration() {
+      loading();
+      try {
+        const items = await api("/api/library/moderation");
+        render(`<h1>Жалобы на шаблоны</h1>
+          <p class="muted">После трёх жалоб шаблон скрывается сам и ждёт вашего решения. «Оставить» снимает жалобы.</p>
+          ${items.length ? items.map((it) => `<div class="card"><div class="card-head"><span class="card-title">${esc(it.title)}</span><span class="chip ${it.hidden ? "warn" : ""}">${it.hidden ? "скрыт" : "виден"} · жалоб: ${it.reports}</span></div>
+            <div class="bubble" style="margin-top:8px">${esc(it.text)}</div>
+            <div class="row tools" style="margin-top:10px"><button type="button" class="btn sm ghost" data-act="libMod" data-a="show" data-id="${it.id}">Оставить</button><button type="button" class="btn sm ghost" data-act="libMod" data-a="hide" data-id="${it.id}">Скрыть</button><button type="button" class="btn sm danger" data-act="libMod" data-a="delete" data-id="${it.id}">Удалить</button></div></div>`).join("")
+            : '<div class="empty"><b>Жалоб нет</b>Когда кто-то пожалуется на шаблон, он появится здесь, а вам придёт сообщение в боте.</div>'}`);
+      } catch (e) { fail(e); }
+    },
+
+    async region() {
+      loading();
+      try {
+        if (!S.me.region) {
+          const pm = await api("/api/platform/me");
+          render(`<h1>Управление образования</h1>
+            <p class="muted">Методист запускает сбор сразу на весь регион, выбранные школы или параллели. Каждый класс получает его от своего классного руководителя, а методист видит только цифры: «ответили 82 %, школа № 5 — 40 %».</p>
+            <div class="card"><label class="card-title" for="rg-code">Код от управления</label>
+              <form class="row search-row" data-form="rgJoin" style="margin-top:8px"><input type="text" id="rg-code" placeholder="Код" autocapitalize="characters" autocomplete="off" style="text-transform:uppercase"><button type="submit" class="btn sm">Подключиться</button></form>
+              <p class="muted small">Код для школ вводит администратор школы, код для сотрудников — методист.</p></div>
+            ${pm.can_create_region ? `<div class="card"><label class="card-title" for="rg-name">Создать регион</label>${isDemo() ? '<p class="muted small">В демо регион живёт только в вашей песочнице.</p>' : ""}
+              <form class="row search-row" data-form="rgCreate"><input type="text" id="rg-name" placeholder="Управление образования Энска" maxlength="300"><button type="submit" class="btn sm">Создать</button></form></div>` : ""}`);
+          return;
+        }
+        const d = await api("/api/region");
+        S.region = d;
+        render(`<h1>${esc(d.region.name)}</h1>
+          <div class="card"><div class="card-title">Коды приглашения</div>
+            <p class="muted small">Школы подключаются по коду <b class="code">${esc(d.codes.code)}</b> — его вводит завуч в разделе «Школа». Коллеги из управления — по коду <b class="code">${esc(d.codes.staff_code)}</b>; его в школы не пересылайте.</p></div>
+          ${pageHead("Сборы управления", d.schools.length ? '<button type="button" class="btn head-action" data-act="newRegionCampaign"><svg class="i" aria-hidden="true"><use href="#i-plus"/></svg>Сбор на регион</button>' : "", "h2")}
+          ${d.campaigns.length ? d.campaigns.map(rcCard).join("") : '<p class="muted">Сборов пока не было.</p>'}
+          <h2>Школы · ${d.schools.length}</h2>
+          ${d.schools.length ? `<div class="card"><ul class="list">${d.schools.map((s) => `<li><span class="name">${esc(s.name)}</span><span class="muted small">${s.classes} ${plural(s.classes, "класс", "класса", "классов")}</span></li>`).join("")}</ul></div>`
+            : '<p class="muted">Пока ни одна школа не подключилась. Отправьте завучам код для школ.</p>'}
+          ${d.region.kind === "region" ? `<h2>Округа</h2>
+            ${d.districts.length ? `<div class="card"><ul class="list">${d.districts.map((x) => `<li><span class="name">${esc(x.name)}</span><span class="muted small">код для школ <b class="code">${esc(x.code)}</b></span></li>`).join("")}</ul></div>` : ""}
+            <div class="card"><label class="card-title" for="rg-district">Новый округ (муниципалитет)</label>
+              <form class="row search-row" data-form="rgDistrict"><input type="text" id="rg-district" maxlength="300" placeholder="Октябрьский район"><button type="submit" class="btn sm">Создать</button></form></div>` : ""}`);
+      } catch (e) { fail(e); }
+    },
+
+    async newRegionCampaign() {
+      loading();
+      try {
+        S.templates = S.templates || await api("/api/templates");
+        const d = S.region || await api("/api/region");
+        const tpls = S.templates.filter((t) => ["consent", "certificate", "ack", "signup", "choice"].includes(t.key));
+        const grades = d.grades.length ? d.grades : [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+        const draft = { template: "consent", deadline: "friday", schools: new Set(d.schools.map((s) => s.id)), grades: new Set() };
+        const save = () => {
+          draft.text = document.getElementById("rc-text")?.value ?? draft.text;
+          draft.opts = document.getElementById("rc-opts")?.value ?? draft.opts;
+        };
+        const draw = () => {
+          const tpl = tpls.find((t) => t.key === draft.template);
+          render(`<h1>Сбор на регион</h1>
+            <p class="muted">Каждый класс получит сбор от своего классного руководителя. У учителя будет полчаса, чтобы добавить приписку, — суть он не меняет. Ночью родителям не пишем: рассылка уйдёт утром.</p>
+            <fieldset class="field"><legend>Что собираем</legend><div class="seg">${tpls.map((t) => segBtn("rcTpl", t.key, esc(t.label), t.key === draft.template, "key")).join("")}</div></fieldset>
+            <label class="field"><span>Текст <em class="hint">первая строка станет заголовком</em></span><textarea id="rc-text" maxlength="3000" placeholder="${esc(example(tpl.hint))}">${esc(draft.text || "")}</textarea></label>
+            ${draft.template === "choice" ? `<label class="field"><span>Варианты ответа <em class="hint">каждый с новой строки, от 2 до 10</em></span><textarea id="rc-opts" style="min-height:90px">${esc(draft.opts || "")}</textarea></label>`
+              : `<p class="muted small buttons-preview">Родители увидят кнопки: ${tpl.options.map((o) => `<span class="chip">${esc(o)}</span>`).join(" ")}</p>`}
+            <fieldset class="field"><legend>Параллели <em class="hint">ничего не выбрано — все классы</em></legend><div class="seg">${grades.map((g) => segBtn("rcGrade", g, String(g), draft.grades.has(g))).join("")}</div></fieldset>
+            <div class="card"><div class="card-title">Школы</div>
+              ${d.schools.map((s) => `<label class="switch"><span>${esc(s.name)} <span class="muted small">${s.classes} ${plural(s.classes, "класс", "класса", "классов")}</span></span><input type="checkbox" data-rc-school="${s.id}" ${draft.schools.has(s.id) ? "checked" : ""}></label>`).join("")}</div>
+            <fieldset class="field"><legend>Срок ответа</legend><div class="seg">${[["tomorrow", "Завтра 18:00"], ["friday", "Пятница 18:00"], ["week", "Через неделю"], ["", "Без срока"]].map(([k, l]) => segBtn("rcDl", k, l, draft.deadline === k)).join("")}</div></fieldset>
+            <button type="button" class="btn block" data-act="rcSend" ${draft.schools.size ? "" : "disabled"}>${draft.schools.size ? `Запустить в ${draft.schools.size} ${plural(draft.schools.size, "школе", "школах", "школах")}` : "Выберите хотя бы одну школу"}</button>`);
+          $view.querySelectorAll("[data-rc-school]").forEach((el) => el.addEventListener("change", () => {
+            save(); const id = Number(el.dataset.rcSchool); el.checked ? draft.schools.add(id) : draft.schools.delete(id); draw();
+          }));
+        };
+        ACTIONS.rcTpl = (el) => { save(); draft.template = el.dataset.key; draw(); };
+        ACTIONS.rcDl = (el) => { save(); draft.deadline = el.dataset.k; draw(); };
+        ACTIONS.rcGrade = (el) => { save(); const g = Number(el.dataset.k); draft.grades.has(g) ? draft.grades.delete(g) : draft.grades.add(g); draw(); };
+        ACTIONS.rcSend = async (el) => {
+          save();
+          if (!draft.text || draft.text.trim().length < 3) return invalid("rc-text", "Напишите текст сбора — хотя бы пару слов");
+          const options = draft.template === "choice" ? (draft.opts || "").split("\n").map((s) => s.trim()).filter(Boolean) : [];
+          if (draft.template === "choice" && (options.length < 2 || options.length > 10)) return invalid("rc-opts", "Нужно от 2 до 10 вариантов, каждый с новой строки");
+          const label = el.textContent;
+          el.disabled = true; el.textContent = "Запускаю…";
+          try {
+            const res = await api("/api/region/campaigns", { method: "POST", body: {
+              template: draft.template, text: draft.text, options, deadline: draft.deadline || null,
+              school_ids: [...draft.schools], grades: [...draft.grades] } });
+            haptic("success");
+            toast(`Запущено: ${res.classes} ${plural(res.classes, "класс", "класса", "классов")} в ${res.schools} ${plural(res.schools, "школе", "школах", "школах")}`);
+            S.stack = [{ name: "region", args: {} }];
+            S.route = null;
+            go("regionCampaign", { id: res.campaign.id }, false);
+            S.stack = [{ name: "region", args: {} }];
+            syncBack();
+          } catch (e) { toast(e.message, true); el.disabled = false; el.textContent = label; }
+        };
+        draw();
+      } catch (e) { fail(e); }
+    },
+
+    async regionCampaign({ id }) {
+      loading();
+      try {
+        const c = await api(`/api/region/campaigns/${id}`);
+        render(`<div class="card">
+            <h1 class="card-title lg">${esc(c.title)}</h1>
+            <div class="muted small">${c.schools.length} ${plural(c.schools.length, "школа", "школы", "школ")} · ${c.classes} ${plural(c.classes, "класс", "класса", "классов")}${c.deadline_text ? " · до " + esc(c.deadline_text) : ""}</div>
+            <div class="big" style="margin-top:18px">${c.pct}<small>%</small></div>
+            <div class="bar" role="img" aria-label="Ответили ${c.pct}%"><i style="width:${c.pct}%"></i></div>
+            <div class="small">Ответили ${c.answered} из ${c.total}${c.waiting_dispatch ? ` · ещё ждут рассылки: ${c.waiting_dispatch} ${plural(c.waiting_dispatch, "класс", "класса", "классов")}` : ""}</div>
+            <ul class="list">${c.options.map((o, i) => `<li><span>${esc(o)}</span><b>${c.per_option[i] || 0}</b></li>`).join("")}</ul>
+            <p class="muted small">Здесь только цифры. Кто именно не ответил, видят классный руководитель и завуч своей школы.</p>
+            <button type="button" class="btn ghost" data-act="rgExport" data-url="${esc(c.export_url)}" data-id="${c.id}"><svg class="i" aria-hidden="true"><use href="#i-download"/></svg>Скачать таблицу</button>
+          </div>
+          <h2>По школам</h2>
+          ${c.schools.map((s) => `<div class="card"><div class="card-head"><b class="name">${esc(s.name)}</b><span class="nums">${s.pct}% · ${s.answered}/${s.total}</span></div>
+            <div class="bar"><i style="width:${s.pct}%"></i></div>
+            <details><summary class="muted small">Классы · ${s.classes.length}</summary><ul class="list">${s.classes.map((k) => `<li><span>${esc(k.title)}</span><span class="muted small">${k.dispatched ? `${k.pct}% · ${k.answered}/${k.total}` : "ещё не разослан"}</span></li>`).join("")}</ul></details></div>`).join("")}`);
+      } catch (e) { fail(e); }
+    },
+  });
+
+  ACTIONS.goLibrary = () => go("library");
+  ACTIONS.libSearch = () => { S.lib.q = document.getElementById("lib-q").value.trim(); VIEWS.library(); };
+  ACTIONS.libKind = (el) => { S.lib.kind = el.dataset.k; VIEWS.library(); };
+  ACTIONS.libSort = (el) => { S.lib.sort = el.dataset.k; VIEWS.library(); };
+  ACTIONS.libModeration = () => go("libModeration");
+  ACTIONS.libTake = async (el) => {
+    el.disabled = true;
+    try {
+      const r = await api(`/api/library/${el.dataset.id}/take`, { method: "POST" });
+      haptic("success");
+      if (r.faq) { toast("Добавлено в ваш справочник — поправьте ответ под свою школу"); go("faq"); return; }
+      S.libDraft = { template: r.draft.template, text: r.draft.text, opts: (r.draft.options || []).join("\n") };
+      go("newPoll");
+    } catch (e) { toast(e.message, true); el.disabled = false; }
+  };
+  ACTIONS.libReport = (el) => modal(`<h2 class="modal-title">Пожаловаться на шаблон?</h2>
+      <label class="field"><span>Что не так <em class="hint">необязательно</em></span><input type="text" name="reason" maxlength="300" placeholder="Реклама, ошибка, чьи-то личные данные…"></label>
+      <p class="muted small">Модератор проверит шаблон. После нескольких жалоб он скрывается до проверки.</p>
+      <div class="btns"><button class="btn ghost" value="cancel" formnovalidate>Отмена</button><button class="btn danger" value="ok">Пожаловаться</button></div>`,
+  async (fd) => {
+    const r = await api(`/api/library/${el.dataset.id}/report`, { method: "POST", body: { reason: fd.get("reason") || "" } });
+    toast(r.status === "dup" ? "Вы уже жаловались на этот шаблон" : "Спасибо, передали модератору");
+    VIEWS.library();
+  });
+  ACTIONS.libDelete = (el) => modal(`<h2 class="modal-title">Убрать шаблон из библиотеки?</h2><p class="muted">Те, кто уже взял его к себе, свои копии сохранят.</p>
+      <div class="btns"><button class="btn ghost" value="cancel" formnovalidate>Отмена</button><button class="btn danger" value="ok">Убрать</button></div>`,
+  async () => { await api(`/api/library/${el.dataset.id}`, { method: "DELETE" }); toast("Убрано из библиотеки"); VIEWS.library(); });
+  ACTIONS.libMod = async (el) => {
+    try {
+      await api(`/api/library/${el.dataset.id}/moderate`, { method: "POST", body: { action: el.dataset.a } });
+      toast(el.dataset.a === "show" ? "Оставлено, жалобы сняты" : el.dataset.a === "hide" ? "Скрыто" : "Удалено");
+      VIEWS.libModeration();
+    } catch (e) { toast(e.message, true); }
+  };
+  ACTIONS.libSharePoll = async (el) => {
+    el.disabled = true;
+    try { await publishToLibrary({ poll_id: Number(el.dataset.id) }); } catch (e) { toast(e.message, true); }
+    el.disabled = false;
+  };
+  ACTIONS.libPublish = async () => {
+    try { S.templates = S.templates || await api("/api/templates"); } catch (_) { /* без списка — вид сбора по умолчанию */ }
+    const tpls = (S.templates || []).filter((t) => t.key !== "money");
+    modal(`<h2 class="modal-title">Поделиться в библиотеке</h2>
+      <label class="field"><span>Что публикуем</span><select name="kind"><option value="poll">Шаблон сбора</option><option value="faq">Ответ для справочника</option></select></label>
+      <label class="field"><span>Заголовок или вопрос</span><input type="text" name="title" maxlength="300" placeholder="Согласие на экскурсию"></label>
+      <label class="field"><span>Текст сбора или ответ</span><textarea name="text" maxlength="3500" required placeholder="Без имён детей и телефонов — шаблон увидят учителя других школ"></textarea></label>
+      ${tpls.length ? `<label class="field"><span>Вид сбора</span><select name="template">${tpls.map((t) => `<option value="${esc(t.key)}">${esc(t.label)}</option>`).join("")}</select></label>` : ""}
+      <label class="field"><span>Для каких классов</span><select name="grades"><option value="">Для любых</option><option value="1-4">1–4 классы</option><option value="5-9">5–9 классы</option><option value="10-11">10–11 классы</option></select></label>
+      <p class="muted small">Автора не покажем. Свой готовый сбор можно опубликовать и из его карточки — кнопкой «Поделиться в библиотеке».</p>
+      <div class="btns"><button class="btn ghost" value="cancel" formnovalidate>Отмена</button><button class="btn" value="ok">Опубликовать</button></div>`,
+    async (fd) => {
+      const text = String(fd.get("text") || "").trim();
+      if (text.length < 3) { toast("Напишите текст — хотя бы пару слов", true); return true; }
+      const keep = await publishToLibrary({ kind: fd.get("kind"), title: fd.get("title") || "", text,
+        template: fd.get("template") || "consent", grades: fd.get("grades") || "" });
+      if (!keep) VIEWS.library();
+      return keep;
+    });
+  };
+  ACTIONS.editNote = (el) => modal(`<h2 class="modal-title">Приписка для родителей</h2>
+      <label class="field"><span>Её увидят под текстом сбора</span><textarea name="note" maxlength="500" placeholder="Бумажное согласие можно сдать в кабинет 12">${esc(el.dataset.note || "")}</textarea></label>
+      <div class="btns"><button class="btn ghost" value="cancel" formnovalidate>Отмена</button><button class="btn" value="ok">Сохранить</button></div>`,
+  async (fd) => {
+    const r = await api(`/api/polls/${el.dataset.id}/note`, { method: "PUT", body: { note: fd.get("note") || "" } });
+    toast(r.status === "sent" ? "Сохранено. Сбор уже разослан — приписку увидят в напоминании" : "Сохранено");
+    VIEWS.pollDetail({ id: el.dataset.id });
+  });
+  ACTIONS.rgJoin = async () => {
+    const code = document.getElementById("rg-code").value.trim();
+    if (code.length < 4) return invalid("rg-code", "Введите код — это 6–8 букв и цифр");
+    try {
+      const r = await api("/api/region/join", { method: "POST", body: { code } });
+      await reloadMe();
+      toast(r.as === "methodist" ? `Вы методист: «${r.name}»` : `Школа подключена к «${r.name}»`);
+      if (r.as === "methodist") { S.stack = []; go("region", {}, false); } else VIEWS.school();
+    } catch (e) { toast(e.message, true); }
+  };
+  ACTIONS.rgCreate = async () => {
+    const name = document.getElementById("rg-name").value.trim();
+    if (name.length < 3) return invalid("rg-name", "Укажите название — хотя бы 3 буквы");
+    try { await api("/api/region", { method: "POST", body: { name } }); await reloadMe(); haptic("success"); toast("Регион создан"); S.stack = []; go("region", {}, false); }
+    catch (e) { toast(e.message, true); }
+  };
+  ACTIONS.rgDistrict = async () => {
+    const name = document.getElementById("rg-district").value.trim();
+    if (name.length < 3) return invalid("rg-district", "Укажите название — хотя бы 3 буквы");
+    try { await api("/api/region", { method: "POST", body: { name, district: true } }); toast("Округ создан"); VIEWS.region(); }
+    catch (e) { toast(e.message, true); }
+  };
+  ACTIONS.newRegionCampaign = () => go("newRegionCampaign");
+  ACTIONS.openRegionCampaign = (el) => go("regionCampaign", { id: el.dataset.id });
+  ACTIONS.rgExport = (el) => {
+    const url = location.origin + el.dataset.url;
+    const name = `region_${el.dataset.id}.csv`;
+    if (IN_MAX && WA?.downloadFile) {
+      try { WA.downloadFile(url, name); return; } catch (_) { /* старые версии MAX — обычная ссылка */ }
+    }
+    const a = document.createElement("a");
+    a.href = url; a.download = name; a.rel = "noopener";
+    document.body.appendChild(a); a.click(); a.remove();
+    toast("Таблица скачивается — её можно открыть в Excel");
+  };
+
   async function boot() {
     if (location.protocol === "file:") {
       render(`<div class="empty"><b>Кабинет открыт как файл</b>Откройте его по ссылке с сайта «Перемены» или из бота в MAX — данные приходят с сервера.
@@ -1591,7 +1898,7 @@
     }
     if (S.me.demo) demoBanner();
     const role = S.me.is_teacher ? "классный руководитель" : S.me.is_subject_teacher ? "учитель-предметник"
-      : S.me.is_admin ? "администрация" : S.me.member_chats.length ? "родитель" : "";
+      : S.me.is_admin ? "администрация" : S.me.region ? "методист" : S.me.member_chats.length ? "родитель" : "";
     const who = document.getElementById("who");
     who.textContent = S.me.user.name + (role ? " · " + role : "");
     who.title = who.textContent;
@@ -1608,7 +1915,8 @@
       go("pollDetail", { id: start.slice(5) });
       return;
     }
-    go(tabs.includes(start) ? start : tabs[0], {}, false);
+    // «Открыть библиотеку / сводку региона» из бота — даже если такой вкладки внизу нет
+    go(tabs.includes(start) || ["library", "region"].includes(start) ? start : tabs[0], {}, false);
   }
   boot();
 })();

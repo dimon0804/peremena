@@ -103,6 +103,11 @@ async def on_callback(update: dict) -> None:
         if head == "prp":
             await on_repeat_poll(cid, uid, tail)
             return
+        if head in ("rg", "lb"):  # регион (сбор сверху) и библиотека шаблонов
+            from . import platform
+
+            await (platform.on_rg_cb if head == "rg" else platform.on_lb_cb)(cid, uid, tail)
+            return
         await ack(cid, "Кнопка устарела")
     except Exception:
         log.exception("Ошибка обработки кнопки %s", payload)
@@ -170,6 +175,10 @@ async def on_menu(uid: int, action: str) -> None:
         await dialog.answer_text(uid, "что задали", False)
     elif action in mapping:
         await mapping[action](uid)
+    elif action in ("region", "library"):
+        from . import platform
+
+        await (platform.show_region if action == "region" else platform.show_library)(uid)
     else:
         from . import integrations  # календарь и «неделя»
 
@@ -190,6 +199,12 @@ async def on_poll_flow(cid: str, uid: int, tail: str) -> None:
         chat = await chats.get_chat(int(arg))
         if not chat or chat.teacher_id != uid:
             await send(uid, "Этот чат не привязан к вам.")
+            return
+        if st and st["flow"] == "poll" and st["data"].get("lib_text"):
+            # шаблон из библиотеки: класс выбран — показываем текст, шаблон уже известен
+            from . import platform
+
+            await platform.offer_lib_text(uid, {**st["data"], "chat_id": chat.chat_id})
             return
         await set_state(uid, "poll", "tpl", {"chat_id": chat.chat_id})
         await dialog.ask_template(uid)

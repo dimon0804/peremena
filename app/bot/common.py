@@ -32,6 +32,8 @@ COMMANDS = [
     ("chats", "Мои классы"),
     ("invite", "Пригласить предметника"),
     ("school", "Школа и сводка для завуча"),
+    ("library", "Библиотека шаблонов"),
+    ("region", "Управление образования: сбор сверху"),
     ("app", "Открыть приложение"),
     ("cancel", "Отменить текущее действие"),
     ("forget", "Удалить мои данные"),
@@ -61,6 +63,8 @@ ALIASES = {
     "board": "board", "доска": "board",
     "invite": "invite", "пригласить": "invite",
     "school": "school", "школа": "school",
+    "library": "library", "библиотека": "library", "шаблоны": "library",
+    "region": "region", "регион": "region", "управление": "region", "округ": "region",
     "week": "week", "неделя": "week",
     "calendar": "calendar", "календарь": "calendar", "cal": "calendar",
     "journal": "journal", "журнал": "journal", "дневник": "journal", "импорт": "journal", "выгрузка": "journal",
@@ -112,6 +116,7 @@ def teacher_menu() -> list[list[dict]]:
         [kb.cb("📚 Домашка", "bd:kind:hw"), kb.cb("📌 Доска", "m:board")],
         [kb.cb("🤒 Кто не придёт", "ab:list"), kb.cb("📖 Справочник", "m:faq")],
         [kb.cb("🗂 Полка", "m:shelf"), kb.cb("📒 Журнал", "m:journal")],
+        [kb.cb("📚 Библиотека", "lb:list")],
         [kb.cb("🌙 Тихий режим", "m:quiet"), kb.cb("⏱ Польза", "m:stats")],
         [kb.cb("🏫 Мои классы", "m:chats"), kb.cb("🏛 Школа", "m:school")],
         [kb.cb("🗓 Неделя", "m:week"), kb.cb("📆 В календарь", "m:cal")],
@@ -135,7 +140,8 @@ def subject_menu() -> list[list[dict]]:
 
 def admin_menu() -> list[list[dict]]:
     c = ctx()
-    rows = [[kb.cb("🏛 Сводка по школе", "m:school")]]
+    rows = [[kb.cb("🏛 Сводка по школе", "m:school")],
+            [kb.cb("🏛 Управление образования", "m:region"), kb.cb("📚 Библиотека", "lb:list")]]
     if c.bot_username:
         rows.append([kb.app("📊 Сборы на параллель", c.bot_username, "school")])
     return rows
@@ -169,7 +175,8 @@ TEACHER_HELP = (
     "🌙 <b>Тихий режим</b> — /quiet: вне рабочего времени копирую всё в утреннюю сводку. "
     "Срочное (слово «срочно») — сразу.\n"
     "⏱ <b>Польза</b> — /stats: сколько времени я вам сэкономил.\n"
-    "🏛 <b>Школа</b> — /school: общая база ответов для всех классов и сводка для завуча."
+    "🏛 <b>Школа</b> — /school: общая база ответов для всех классов и сводка для завуча.\n"
+    "📚 <b>Библиотека</b> — /library: готовые сборы и ответы от коллег, берёте к себе в один тап."
 )
 
 SUBJECT_HELP = (

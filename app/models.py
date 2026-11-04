@@ -116,6 +116,10 @@ class Poll(Base):
     # рассылка доведена до конца; False — ещё не начата (отложена до утра) или прервана перезапуском
     dispatched: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
     send_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # UTC: отложенная рассылка
+    # сбор пришёл сверху (управление образования, администрация школы): кто автор — видят родители и учитель
+    origin: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    # приписка классного руководителя к сбору сверху; суть (текст, варианты, срок) он не меняет
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     targets: Mapped[list["PollTarget"]] = relationship(
         back_populates="poll", cascade="all, delete-orphan", lazy="selectin", order_by="PollTarget.name"
@@ -242,6 +246,7 @@ class School(Base):
     admin_code: Mapped[str] = mapped_column(String(32), unique=True)       # код приглашения администрации
     created_by: Mapped[int] = mapped_column(BigInteger)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    region_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)  # округ или регион
 
 
 class SchoolMember(Base):
@@ -275,6 +280,90 @@ class Campaign(Base):
     school_id: Mapped[int] = mapped_column(Integer, index=True)
     author_id: Mapped[int] = mapped_column(BigInteger)
     title: Mapped[str] = mapped_column(String(300))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # школьная часть сбора, спущенного из управления образования
+    region_campaign_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+
+
+# ---------------------------------------------------------------- Регион и округ
+class Region(Base):
+    """Управление образования: регион или округ (муниципалитет) внутри региона.
+    Школы присоединяются по коду, методисты — по коду для сотрудников или назначаются админом платформы."""
+    __tablename__ = "regions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(300))
+    kind: Mapped[str] = mapped_column(String(20), default="region")  # region | district
+    parent_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)  # округ → регион
+    code: Mapped[str] = mapped_column(String(32), unique=True, index=True)  # код для школ
+    staff_code: Mapped[str] = mapped_column(String(32), unique=True)       # код для методистов
+    created_by: Mapped[int] = mapped_column(BigInteger)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class RegionMember(Base):
+    """Методист / сотрудник управления образования. Видит только цифры по школам и классам, без ФИО."""
+    __tablename__ = "region_members"
+    __table_args__ = (UniqueConstraint("region_id", "user_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    region_id: Mapped[int] = mapped_column(Integer, index=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    role: Mapped[str] = mapped_column(String(20), default="methodist")
+    joined_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class RegionCampaign(Base):
+    """Сбор или объявление от управления: раскладывается в школьные сборы, а те — в классные."""
+    __tablename__ = "region_campaigns"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    region_id: Mapped[int] = mapped_column(Integer, index=True)
+    author_id: Mapped[int] = mapped_column(BigInteger)
+    title: Mapped[str] = mapped_column(String(300))
+    text: Mapped[str] = mapped_column(Text)
+    template: Mapped[str] = mapped_column(String(32), default="consent")
+    options: Mapped[list] = mapped_column(JSON)
+    deadline: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    school_ids: Mapped[list] = mapped_column(JSON)  # пусто — все школы
+    grades: Mapped[list] = mapped_column(JSON)      # параллели; пусто — все
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+# ---------------------------------------------------------------- Открытая библиотека шаблонов
+class LibraryItem(Base):
+    """Шаблон сбора или карточка справочника в общей библиотеке. Публикуется обезличенно:
+    автор не показывается, текст проверяется на телефоны, почту и имена детей."""
+    __tablename__ = "library_items"
+    __table_args__ = (Index("ix_library_items_visible", "hidden", "kind", "uses"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(10), default="poll")  # poll | faq
+    author_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)  # None — команда
+    title: Mapped[str] = mapped_column(String(300))   # заголовок сбора или вопрос карточки
+    text: Mapped[str] = mapped_column(Text)           # текст сбора или ответ карточки
+    template: Mapped[str] = mapped_column(String(32), default="")
+    options: Mapped[list] = mapped_column(JSON)
+    keywords: Mapped[str] = mapped_column(String(500), default="")
+    topic: Mapped[str] = mapped_column(String(30), default="")
+    grades: Mapped[str] = mapped_column(String(20), default="")  # 1-4 | 5-9 | 10-11 | пусто — любой
+    official: Mapped[bool] = mapped_column(Boolean, default=False)
+    demo: Mapped[bool] = mapped_column(Boolean, default=False)
+    uses: Mapped[int] = mapped_column(Integer, default=0)
+    reports: Mapped[int] = mapped_column(Integer, default=0)
+    hidden: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class LibraryReport(Base):
+    """Жалоба на шаблон: один человек — одна жалоба."""
+    __tablename__ = "library_reports"
+    __table_args__ = (UniqueConstraint("item_id", "user_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    item_id: Mapped[int] = mapped_column(Integer, index=True)
+    user_id: Mapped[int] = mapped_column(BigInteger)
+    reason: Mapped[str] = mapped_column(String(300), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 

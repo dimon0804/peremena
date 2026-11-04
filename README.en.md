@@ -30,6 +30,8 @@ Built for the «Идея фикс» hackathon (“Teacher's Arsenal” track) by
 | 🌙 **Quiet hours** | Outside the working window the bot keeps answering what it knows and brings everything new in one morning digest. Messages marked “срочно” (urgent) go through immediately. |
 | 📚 **Class board** | Homework and announcements; “What's the algebra homework for tomorrow?” is answered by subject dictionary and date, with deferred morning publishing. |
 | 🏛 **School** | Classes join a school by code: a shared FAQ base and school-wide polls with a per-class breakdown for the deputy head. |
+| 🏛 **Education authority (region / district)** | `/region`: a school joins a district or region by code; methodologists join with a staff code or are appointed by a platform admin (`ADMIN_MAX_IDS`). A poll launched from above for the whole region, selected schools or grades is split into school-level and class-level polls; the homeroom teacher sees where it came from and may add a note, but cannot change the text. Delivery uses the regular poll dispatch within MAX rate limits. A bottom-up summary (“82 % answered, school No. 5 — 40 %”) with CSV export shows numbers only — no parents' names. |
+| 📚 **Template library** | `/library`: shared poll templates and FAQ cards, searchable by topic, type and grade, sorted by popularity, with a “taken N times” counter. One tap to take a template. Publishing is anonymous and checked for phone numbers, e-mails and children's names; reports and moderation by a platform admin; 20 starter templates from the team. Also in the mini app and `GET /api/v1/library`. |
 | 🤒 **Absences**, 💰 **money collection**, ⏱ **usefulness counter**, 📱 **mini app** | Absence notes in one tap, money collections with paid/pending tracking, weekly stats, and a mini app / web dashboard with the same features. |
 
 The core has no generative AI: buttons, member lists, a database and deterministic search (Snowball stemming + trigrams).
@@ -223,6 +225,7 @@ TEST_DATABASE_URL=postgresql://test:test@127.0.0.1:55432/test python -m pytest -
 - Mini app sign-in is verified by the MAX launch-data signature (HMAC-SHA256); webhooks by a secret header;
   website sign-in is bound to the browser that started it; rate limits on codes and PINs.
 - Demo sandboxes are isolated from real schools and chats and cannot send anything to MAX.
+- A regional methodologist sees aggregates only, never parents' names or answers.
 - Security headers (CSP, nosniff), request size limits, non-root container without extra capabilities.
 
 The full documentation — environment variables, bot commands, architecture, migrations — is in the [Russian README](README.md).

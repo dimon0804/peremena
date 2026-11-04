@@ -106,6 +106,7 @@ def poll_out(p, tz: str, with_targets: bool = False, chat_titles: dict | None = 
         "created_at": p.created_at.isoformat() + "Z", "answered": answered, "total": total, "per_option": per,
         "missing": [t.name for t in p.targets if t.answer is None],
         "amount": p.amount, "money": polls.money(p),
+        "origin": p.origin, "note": p.note, "dispatched": p.dispatched,
     }
     if with_targets:
         out["targets"] = [
@@ -149,8 +150,13 @@ async def me(user: User = Depends(current_user)):
             sch |= {"code": r.school.code, "admin_code": r.school.admin_code,
                     "teacher_link": c.start_link("school_" + r.school.code) if c.bot_username else "",
                     "admin_link": c.start_link("school_" + r.school.admin_code) if c.bot_username else ""}
+    from ..services import region
+
+    reg, _ = await region.membership(user.user_id)
     return {
         "user": {"id": user.user_id, "name": user.display_name, "first_name": user.first_name},
+        "region": {"id": reg.id, "name": reg.name, "kind": reg.kind} if reg else None,
+        "platform_admin": region.is_platform_admin(user.user_id),
         "is_teacher": bool(t_chats),
         "is_subject_teacher": r.is_subject_teacher,
         "is_admin": r.is_admin,
