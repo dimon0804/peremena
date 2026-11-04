@@ -65,9 +65,10 @@ async def handle_update(update: dict) -> None:
         async with c.kv.lock("actor:" + _actor_key(update), ttl=60, wait=60):
             async with gate():
                 await _dispatch(update)
-    except asyncio.CancelledError:
-        # остановка сервиса посреди обработки: снимаем отметку «обработано», чтобы повторная доставка
-        # после перезапуска не была отброшена как дубликат
+    except (asyncio.CancelledError, Exception):
+        # остановка сервиса посреди обработки или сбой до разбора события (замок, хранилище): снимаем
+        # отметку «обработано», чтобы повторная доставка (или повтор из очереди) не была отброшена как дубликат.
+        # Ошибки самих обработчиков сюда не доходят — их ловит и пишет в лог _dispatch.
         if key_dd:
             try:
                 await c.kv.delete(key_dd)
