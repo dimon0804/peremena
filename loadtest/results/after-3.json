@@ -2,7 +2,7 @@
   "label": "3 экземпляра ROLE=all",
   "instances": 3,
   "workers": 0,
-  "project": "C:\\Users\\Dmitry\\AppData\\Local\\Temp\\claude\\C--Users-Dmitry\\d753697c-a71f-4e5f-a216-cd7fe06ade52\\scratchpad\\review\\peremena\\.claude\\worktrees\\agent-a14daaa6389541f84",
+  "project": ".",
   "started": "Wed Nov  4 19:02:31 2026",
   "a": {
     "dispatch_s": 13.8,

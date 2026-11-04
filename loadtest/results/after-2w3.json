@@ -2,7 +2,7 @@
   "label": "2 web + 3 worker",
   "instances": 2,
   "workers": 3,
-  "project": "C:\\Users\\Dmitry\\AppData\\Local\\Temp\\claude\\C--Users-Dmitry\\d753697c-a71f-4e5f-a216-cd7fe06ade52\\scratchpad\\review\\peremena\\.claude\\worktrees\\agent-a14daaa6389541f84",
+  "project": ".",
   "started": "Wed Nov  4 19:05:15 2026",
   "a": {
     "dispatch_s": 14.1,

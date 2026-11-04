@@ -2,7 +2,7 @@
   "label": "до: исходный код, 1 экземпляр",
   "instances": 1,
   "workers": 0,
-  "project": "C:\\Users\\Dmitry\\AppData\\Local\\Temp\\claude\\C--Users-Dmitry\\d753697c-a71f-4e5f-a216-cd7fe06ade52\\scratchpad\\baseline",
+  "project": ".",
   "started": "Wed Nov  4 18:22:21 2026",
   "a": {
     "dispatch_s": 13.86,

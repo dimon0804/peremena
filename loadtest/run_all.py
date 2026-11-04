@@ -421,7 +421,7 @@ async def main() -> None:
     logdir = logdir.parent / (logdir.name + "-logs")
     logdir.mkdir(parents=True, exist_ok=True)
     scen = a.scenarios.split(",")
-    res: dict = {"label": a.label, "instances": a.instances, "workers": a.workers, "project": a.project, "started": time.ctime()}
+    res: dict = {"label": a.label, "instances": a.instances, "workers": a.workers, "project": os.path.basename(os.path.abspath(a.project)), "started": time.ctime()}
     stack = Stack(a, logdir)
     try:
         if "a" in scen:

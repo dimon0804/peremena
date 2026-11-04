@@ -2,7 +2,7 @@
   "label": "после: 2 web + 3 worker, вебхук мимо middleware",
   "instances": 2,
   "workers": 3,
-  "project": "C:\\Users\\Dmitry\\AppData\\Local\\Temp\\claude\\C--Users-Dmitry\\d753697c-a71f-4e5f-a216-cd7fe06ade52\\scratchpad\\review\\peremena\\.claude\\worktrees\\agent-a14daaa6389541f84",
+  "project": ".",
   "started": "Wed Nov  4 18:54:54 2026",
   "b_leaders": {
     "leaders": 1,
