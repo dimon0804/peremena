@@ -269,9 +269,10 @@
       pl.polls_closed ? `По ${pl.polls_closed} ${plural(pl.polls_closed, "закрытому сбору", "закрытым сборам", "закрытым сборам")}.` : "")
       + row("Вопросы, закрытые без вас", num(pl.self_pct), pl.self_goal,
         asked ? `Бот ответил сам на ${pl.answered_by_bot || 0} из ${asked}.` : "");
-    if (!rows) return "";
+    const answer = pl.answer && pl.answer.asked ? answerTimeHtml(pl.answer, "Время ответа родителю за 30 дней") : "";
+    if (!rows && !answer) return "";
     return `<div class="card pilot"><div class="card-title">Метрики пилота</div>
-      <p class="muted small">Считаются по тому, что видит сам бот: ответам на сборы и вопросам родителей. Опросов и ручного подсчёта здесь нет.</p>${rows}</div>`;
+      <p class="muted small">Считаются по тому, что видит сам бот: ответам на сборы и вопросам родителей. Опросов и ручного подсчёта здесь нет.</p>${rows}${answer}${pl.answer && pl.answer.demo ? '<p class="muted small">Время ответа посчитано на демо-данных — это не результат пилота.</p>' : ""}</div>`;
   }
 
   const pageHead = (title, action, tag = "h1") => `<div class="page-head ${tag}"><${tag}>${title}</${tag}>${action || ""}</div>`;
@@ -488,6 +489,8 @@
         render(`<h1>Польза и настройки</h1>
           <button type="button" class="btn ghost block link-card" data-act="goSchool"><svg class="i" aria-hidden="true"><use href="#i-school"/></svg><span>${S.me.school ? esc(S.me.school.name) : "Школа: общая база ответов и сводка"}</span><svg class="i chev" aria-hidden="true"><use href="#i-chev"/></svg></button>
           <button type="button" class="btn ghost block link-card" data-act="goIntegrations"><svg class="i" aria-hidden="true"><use href="#i-list"/></svg><span>Интеграции: календарь, API, вебхуки</span><svg class="i chev" aria-hidden="true"><use href="#i-chev"/></svg></button>
+          <button type="button" class="btn ghost block link-card" data-act="goMeetings"><svg class="i" aria-hidden="true"><use href="#i-list"/></svg><span>Запись на встречу с родителями</span><svg class="i chev" aria-hidden="true"><use href="#i-chev"/></svg></button>
+          ${S.me.can_metrics ? '<button type="button" class="btn ghost block link-card" data-act="goMetrics"><svg class="i" aria-hidden="true"><use href="#i-school"/></svg><span>Метрики пилота: время ответа и удержание</span><svg class="i chev" aria-hidden="true"><use href="#i-chev"/></svg></button>' : ""}
           <div class="card">
             <div class="overline">Бот сэкономил вам за 7 дней</div>
             <div class="stat-big" style="margin:8px 0">${fmtMinutes(st.week.minutes)}</div>
@@ -539,7 +542,7 @@
     async my() {
       loading();
       try {
-        const [items, abs, wk] = await Promise.all([api("/api/my/polls"), api("/api/my/absences"), api("/api/my/week").catch(() => null)]);
+        const [items, abs, wk, meets] = await Promise.all([api("/api/my/polls"), api("/api/my/absences"), api("/api/my/week").catch(() => null), api("/api/my/meetings").catch(() => [])]);
         S.myAbs = abs;
         const marks = abs.items.length ? `<div class="card absent"><div class="card-title">Вы отметили, что ребёнок не придёт</div>
             <ul class="list">${abs.items.map((a) => `<li><span>${esc(a.who)} — ${esc(a.day_text)}, ${esc(a.reason_text)}</span><button type="button" class="btn sm ghost" data-act="absCancel" data-id="${a.id}">Отменить</button></li>`).join("")}</ul></div>` : "";
@@ -549,6 +552,7 @@
         render(`<h1>Сборы</h1>
           ${abs.classes.length ? `<button type="button" class="btn outline block" data-act="absNew" style="margin-bottom:12px">Ребёнок не придёт в школу</button>` : ""}
           ${marks}
+          ${parentMeetingsHtml(meets)}
           ${wk ? weekCard(wk) : ""}
           ${items.length ? `<p class="muted lead-in">Учитель ждёт вашего ответа. Нажмите подходящую кнопку — ответ сразу увидит учитель.</p>` : empty}
           ${items.map((p) => {
@@ -743,6 +747,7 @@
         }
         const d = await api("/api/school");
         render(`<h1>${esc(me.school.name)}</h1>
+          <button type="button" class="btn ghost block link-card" data-act="goMetrics"><svg class="i" aria-hidden="true"><use href="#i-list"/></svg><span>Метрики пилота: время ответа родителям и удержание учителей</span><svg class="i chev" aria-hidden="true"><use href="#i-chev"/></svg></button>
           <div class="card">
             <div class="card-title">Пригласить коллег</div>
             <p class="muted small">Классные руководители вступают по коду <b class="code">${esc(me.school.code)}</b> или по ссылке.</p>
@@ -1383,6 +1388,158 @@
       const links = await api(`/api/polls/${el.dataset.id}/print-links`);
       openUrl(absUrl(links[el.dataset.kind]), win);
     } catch (e) { if (win) win.close(); toast(e.message, true); }
+  };
+
+  // ------------------------------------------------------------------ запись на встречу и метрики пилота
+  const dur = (sec) => {
+    if (sec === null || sec === undefined) return "—";
+    sec = Math.round(sec);
+    if (sec < 60) return `${sec} с`;
+    if (sec < 3600) return `${Math.floor(sec / 60)} мин`;
+    if (sec < 86400) { const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60); return m ? `${h} ч ${m} мин` : `${h} ч`; }
+    return `${Math.floor(sec / 86400)} дн`;
+  };
+
+  // «Время ответа родителю»: медиана, 9 из 10, кто ответил, сколько без ответа
+  function answerTimeHtml(a, label) {
+    if (!a || !a.asked) return `<p class="muted small">${label}: вопросов от родителей пока не было.</p>`;
+    const ok = a.median_sec !== null && a.median_sec < a.goal_sec;
+    return `<div class="pilot-row">
+      <div class="row spread"><span>${label}: медиана</span><b class="${ok ? "ok" : ""}">${dur(a.median_sec)}</b></div>
+      <div class="muted small">Цель пилота — меньше минуты. ${a.answered ? `9 из 10 ответов — не дольше ${dur(a.p90_sec)}. Быстрее минуты — ${a.under_minute_pct}%. Бот ответил сам на ${a.by_bot} из ${a.answered}${a.by_teacher ? `, учитель — на ${a.by_teacher} (медиана ${dur(a.teacher_median_sec)})` : ""}.` : ""}
+      ${a.unanswered ? ` Без ответа: ${a.unanswered}${a.unanswered_forwarded ? `, из них переданы учителю: ${a.unanswered_forwarded}` : ""} — в медиану не входят.` : ""}</div></div>`;
+  }
+
+  function slotGroups(slots, render1) {
+    const days = {};
+    slots.forEach((s) => { const [wd, d] = s.label.split(" "); (days[`${wd} ${d}`] = days[`${wd} ${d}`] || []).push(s); });
+    return Object.entries(days).map(([day, list]) => `<div class="small muted" style="margin-top:8px">${esc(day)}</div><div class="seg">${list.map(render1).join("")}</div>`).join("");
+  }
+  const slotTime = (s) => s.label.split(" ")[2] || s.label;
+
+  // родителю: открытые записи на встречу с кнопками свободного времени
+  function parentMeetingsHtml(list) {
+    if (!list || !list.length) return "";
+    return list.map((m) => {
+      const mine = m.slots.find((s) => s.mine);
+      const free = m.slots.filter((s) => !s.busy && !s.past);
+      return `<div class="card">
+        <div class="card-head"><span class="muted small">${esc(m.chat_title)}${m.teacher ? " · " + esc(m.teacher) : ""}</span><span class="chip">${esc(m.format_text)}</span></div>
+        <div class="card-title">Запись на встречу: ${esc(m.title)}</div>
+        ${mine ? `<p>Вы записаны: <b>${esc(mine.label)}</b>. ${say("За 2 часа бот напомнит в личке.", "")}</p>
+          <div class="row tools"><button type="button" class="btn sm ghost" data-act="meetCancel" data-id="${m.id}">Отменить запись</button></div>
+          ${free.length ? `<p class="muted small" style="margin-top:8px">Перенести на другое время:</p>` : ""}` : `<p class="muted small">Выберите удобное время — оно закрепится за вами.</p>`}
+        ${free.length ? slotGroups(free, (s) => `<button type="button" data-act="meetBook" data-id="${m.id}" data-slot="${s.id}">${esc(slotTime(s))}</button>`) : (mine ? "" : '<p class="muted small">Свободного времени не осталось.</p>')}
+      </div>`;
+    }).join("");
+  }
+
+  Object.assign(VIEWS, {
+    async meetings() {
+      loading();
+      try {
+        const chats = S.me.chats;
+        if (!chats.length) { render(noClassesHtml()); return; }
+        const list = await api("/api/meetings");
+        const draft = S.meetDraft || { format: "office", minutes: 15, start: "15:00", end: "17:00" };
+        S.meetDraft = draft;
+        const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+        const cards = list.map((m) => `<div class="card">
+          <div class="card-head"><b class="name">${esc(m.title)}</b><span class="chip ${m.closed ? "done" : "accent"}">${m.closed ? "закрыта" : `записались ${m.busy} из ${m.total}`}</span></div>
+          <div class="muted small">${esc(m.chat_title)} · ${esc(m.format_text)}</div>
+          ${slotGroups(m.slots, (s) => `<span class="chip ${s.busy ? "done" : ""}" title="${esc(s.label)}">${esc(slotTime(s))}${s.busy ? " · " + esc(s.name) : ""}</span>`)}
+          ${m.closed ? "" : `<div class="row tools" style="margin-top:10px"><button type="button" class="btn sm ghost" data-act="meetClose" data-id="${m.id}">Закрыть запись</button></div>`}
+        </div>`).join("");
+        render(`<h1>Запись на встречу</h1>
+          <p class="muted lead-in">Задайте окно для консультаций — бот нарежет его на встречи и разошлёт родителям класса кнопки со свободным временем. Записаться можно только на свободное время, отменить и перенести — в любой момент. За 2 часа бот напомнит родителю.</p>
+          <div class="card">
+            <div class="card-title">Новая запись</div>
+            <label class="field"><span>Класс</span><select id="mt-chat">${chats.map((c) => `<option value="${c.chat_id}">${esc(c.title || c.chat_id)}</option>`).join("")}</select></label>
+            <label class="field"><span>Тема</span><input type="text" id="mt-title" maxlength="300" placeholder="Консультации по итогам четверти" value="${esc(draft.title || "")}"></label>
+            <fieldset class="field"><legend>Формат</legend><div class="seg">${segBtn("meetFmt", "office", "Очно", draft.format === "office")}${segBtn("meetFmt", "call", "Звонок", draft.format === "call")}</div></fieldset>
+            <label class="field"><span>${draft.format === "call" ? "Как созвонимся" : "Где"} <em class="hint">необязательно</em></span><input type="text" id="mt-place" maxlength="300" placeholder="${draft.format === "call" ? "позвоню по номеру из чата" : "каб. 214"}" value="${esc(draft.place || "")}"></label>
+            <div class="row" style="gap:10px;flex-wrap:wrap">
+              <label class="field" style="flex:1 1 100%;margin:0"><span>День</span><input type="date" id="mt-date" value="${esc(draft.date || tomorrow)}"></label>
+              <label class="field" style="flex:1;min-width:90px;margin:0"><span>С</span><input type="time" id="mt-start" value="${esc(draft.start)}"></label>
+              <label class="field" style="flex:1;min-width:90px;margin:0"><span>До</span><input type="time" id="mt-end" value="${esc(draft.end)}"></label>
+              <label class="field" style="flex:1;min-width:90px;margin:0"><span>Минут</span><input type="number" id="mt-min" min="5" max="120" inputmode="numeric" value="${esc(draft.minutes)}"></label>
+            </div>
+            <button type="button" class="btn block" data-act="meetCreate" style="margin-top:12px">${say("Разослать родителям", "Создать (в демо никому не уйдёт)")}</button>
+          </div>
+          ${cards ? `<h2>Мои записи</h2>${cards}` : ""}`);
+        if (draft.chat_id) document.getElementById("mt-chat").value = draft.chat_id;
+      } catch (e) { fail(e); }
+    },
+
+    async metrics() {
+      loading();
+      try {
+        const d = await api(`/api/admin/metrics${S.metricsScope ? `?scope=${S.metricsScope}` : ""}`);
+        const r = d.retention;
+        const cell = (w) => (w.pct !== null ? `${w.pct}%` : (w.eligible ? "мало данных" : "рано"));
+        const win = (w, label, goal) => w.pct !== null
+          ? `<div class="pilot-row"><div class="row spread"><span>${label}</span><b class="${goal && w.pct >= goal ? "ok" : ""}">${w.pct}%</b></div>
+             <span class="bar pilot-bar" role="img" aria-label="${label}: ${w.pct}%"><i style="width:${w.pct}%"></i>${goal ? `<s style="left:${goal}%"></s>` : ""}</span>
+             <div class="muted small">${w.kept} из ${w.eligible}${goal ? `. Цель пилота — не меньше ${goal}%.` : ""}</div></div>`
+          : `<div class="pilot-row"><div class="row spread"><span>${label}</span><b>${w.eligible ? "мало данных" : "рано"}</b></div>
+             <div class="muted small">${w.eligible ? `${w.kept} из ${w.eligible} — процент покажем от ${r.min_cohort} человек.` : "Окно ещё не прошло ни у кого."}</div></div>`;
+        render(`<h1>Метрики пилота</h1>
+          ${d.scopes.length > 1 ? `<div class="seg" style="margin-bottom:12px">${segBtn("metricsScope", "platform", "Вся платформа", d.scope === "platform")}${segBtn("metricsScope", "school", "Моя школа", d.scope === "school")}</div>` : ""}
+          <p class="muted lead-in">${esc(d.title)}. Считается по тому, что видит сам бот: когда родитель спросил и когда получил первый ответ, и в какие дни учитель работал с ботом. Текста переписки здесь нет.</p>
+          ${d.demo ? '<div class="card" role="note" style="background:var(--warn-soft);color:var(--warn-ink)"><b>Это демо-данные.</b> Цифры ниже — проверка расчёта на вымышленной истории, а не результат пилота.</div>' : ""}
+          <div class="card pilot"><div class="card-title">Время ответа родителю</div>
+            ${answerTimeHtml(d.answer_7, "За 7 дней")}${answerTimeHtml(d.answer_30, "За 30 дней")}</div>
+          <div class="card pilot"><div class="card-title">Удержание учителей</div>
+            <p class="muted small">Учитель активен в день, если создал или закрыл сбор, добавил карточку, ответил на вопрос, записал домашку или открыл бота и кабинет. «Через неделю» — был активен на 7–13-й день после первого действия, «через 30 дней» — на 30–36-й.</p>
+            ${r.teachers ? win(r.d7, "Вернулись через неделю") + win(r.d30, "Вернулись через 30 дней", r.goal) : '<p class="muted small">Активных учителей пока нет.</p>'}
+            ${r.cohorts.length ? `<ul class="list" style="margin-top:12px">${r.cohorts.map((c) => `<li><span>С ${esc(c.week.slice(8, 10))}.${esc(c.week.slice(5, 7))}, ${c.size} чел.</span><span class="muted small">${cell(c.d7)} / ${cell(c.d30)}</span></li>`).join("")}</ul>
+              <p class="muted small">По неделе, когда учитель начал: через неделю / через 30 дней. Меньше ${r.min_cohort} человек — процент не считаем.</p>` : ""}
+          </div>`);
+      } catch (e) { fail(e); }
+    },
+  });
+  TAB_OF.meetings = "more";
+  TAB_OF.metrics = "more";
+
+  ACTIONS.goMeetings = () => go("meetings");
+  ACTIONS.goMetrics = () => go("metrics");
+  ACTIONS.metricsScope = (el) => { S.metricsScope = el.dataset.k; VIEWS.metrics(); };
+  const saveMeetDraft = () => {
+    const v = (id) => document.getElementById(id)?.value;
+    Object.assign(S.meetDraft, { chat_id: v("mt-chat"), title: v("mt-title"), place: v("mt-place"), date: v("mt-date"), start: v("mt-start"), end: v("mt-end"), minutes: Number(v("mt-min")) || 15 });
+  };
+  ACTIONS.meetFmt = (el) => { saveMeetDraft(); S.meetDraft.format = el.dataset.k; VIEWS.meetings(); };
+  ACTIONS.meetCreate = async (el) => {
+    saveMeetDraft();
+    const d = S.meetDraft;
+    if (!d.date) return invalid("mt-date", "Выберите день");
+    if (!d.start || !d.end || toMins(d.end) <= toMins(d.start)) return invalid("mt-end", "Конец должен быть позже начала");
+    if (!(d.minutes >= 5 && d.minutes <= 120)) return invalid("mt-min", "Длительность встречи — от 5 до 120 минут");
+    const label = el.textContent;
+    el.disabled = true; el.textContent = "Рассылаю…";
+    try {
+      const res = await api("/api/meetings", { method: "POST", body: { chat_id: Number(d.chat_id), title: d.title || "", format: d.format, place: d.place || "", windows: [{ date: d.date, start: d.start, end: d.end, minutes: d.minutes }] } });
+      haptic("success");
+      toast(say(`Встреч: ${res.total}. Приглашение дошло в личку ${res.dispatch.delivered} из ${res.dispatch.total}`, `Встреч: ${res.total}. В настоящем классе родители получили бы приглашение в личку`));
+      S.meetDraft = null;
+      VIEWS.meetings();
+    } catch (e) { toast(e.message, true); el.disabled = false; el.textContent = label; }
+  };
+  ACTIONS.meetClose = (el) => modal(`<h2 class="modal-title">Закрыть запись?</h2><p class="muted">Новые родители записаться не смогут. Те, кто уже записался, остаются в расписании.</p>
+    <div class="btns"><button class="btn ghost" value="cancel" formnovalidate>Не закрывать</button><button class="btn danger" value="ok">Закрыть запись</button></div>`,
+    async () => { await api(`/api/meetings/${el.dataset.id}/close`, { method: "POST" }); toast("Запись закрыта"); VIEWS.meetings(); });
+  ACTIONS.meetBook = async (el) => {
+    el.disabled = true;
+    try {
+      const res = await api(`/api/my/meetings/${el.dataset.id}/book`, { method: "POST", body: { slot_id: Number(el.dataset.slot) } });
+      haptic("success");
+      toast(res.status === "moved" ? "Запись перенесена" : "Вы записаны");
+    } catch (e) { toast(e.message, true); }
+    VIEWS.my();
+  };
+  ACTIONS.meetCancel = async (el) => {
+    try { await api(`/api/my/meetings/${el.dataset.id}/book`, { method: "DELETE" }); toast("Запись отменена"); } catch (e) { toast(e.message, true); }
+    VIEWS.my();
   };
 
   // ------------------------------------------------------------------ демо-режим

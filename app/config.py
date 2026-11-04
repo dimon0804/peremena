@@ -89,6 +89,13 @@ class Settings(BaseSettings):
     access_log: bool = True
     # Ключ подписей сервиса. Пусто — выводится из MAX_BOT_TOKEN (а без токена — случайный при каждом запуске)
     secret_key: str = ""
+    # Администраторы платформы (id пользователей MAX через запятую): видят метрики пилота по всем школам —
+    # /metrics в боте и /api/admin/metrics. Пусто — платформенных метрик не видит никто.
+    admin_max_ids: str = ""
+
+    @property
+    def admin_ids(self) -> set[int]:
+        return {int(x) for x in re.split(r"[,\s;]+", self.admin_max_ids or "") if x.strip().lstrip("-").isdigit()}
 
     @property
     def mode(self) -> str:

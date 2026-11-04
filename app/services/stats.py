@@ -4,8 +4,9 @@
 ответ на повторяющийся вопрос ≈ 2 мин, сбор с ручной сверкой ≈ 25 мин,
 поиск материала ≈ 4 мин, вечернее сообщение, отложенное до утра ≈ 3 мин.
 
-Плюс метрики пилота из анкеты проекта (``pilot``): доля ответивших до срока (цель ≥ 90 %)
-и доля вопросов, закрытых ботом без учителя (цель ≥ 60 %).
+Плюс метрики пилота из анкеты проекта (``pilot``): доля ответивших до срока (цель ≥ 90 %),
+доля вопросов, закрытых ботом без учителя (цель ≥ 60 %), и время ответа родителю (медиана < 1 минуты,
+замер — app/services/metrics.py).
 """
 from __future__ import annotations
 
@@ -88,11 +89,16 @@ async def pilot(teacher_id: int) -> dict:
     by_bot = int(kinds.get("faq_answer", 0))
     forwarded = int(kinds.get("question_forwarded", 0))
     asked = by_bot + forwarded
+    from . import metrics
+
+    answer = await metrics.answer_time(("teacher", teacher_id), 30)
     return {
         "polls_closed": len(closed),
         "on_time_pct": round(100 * on_time / total) if total else None, "on_time_goal": PILOT_ON_TIME_GOAL,
         "self_pct": round(100 * by_bot / asked) if asked else None, "self_goal": PILOT_SELF_GOAL,
         "answered_by_bot": by_bot, "forwarded": forwarded,
+        # время ответа родителю за 30 дней: медиана, p90, доля ответов ботом и «быстрее минуты»
+        "answer": answer, "answer_median_sec": answer["median_sec"], "answer_goal_sec": answer["goal_sec"],
     }
 
 
@@ -120,7 +126,7 @@ async def render(teacher_id: int) -> str:
     if not any(k in LABELS for k in total["by_kind"]):
         lines.append("Пока пусто — запустите первый сбор командой /poll.")
     p = await pilot(teacher_id)
-    if p["polls_closed"] or p["self_pct"] is not None:
+    if p["polls_closed"] or p["self_pct"] is not None or p["answer"]["asked"]:
         lines += ["", "📈 <b>Метрики пилота</b>"]
         if p["polls_closed"]:
             lines.append(f"• Сборов закрыто без ручного подсчёта: {p['polls_closed']} (100 %)")
@@ -130,4 +136,11 @@ async def render(teacher_id: int) -> str:
             lines.append(f"• Вопросов бот закрыл сам, без вас: {p['self_pct']} % "
                          f"({p['answered_by_bot']} из {p['answered_by_bot'] + p['forwarded']}; "
                          f"цель — не меньше {p['self_goal']} %)")
+        if p["answer"]["asked"]:
+            from . import metrics
+
+            lines += ["", "⏱ <b>Время ответа родителям, 30 дней</b>"]
+            if p["answer"]["demo"]:
+                lines.append("<i>Демо-данные, не результат пилота.</i>")
+            lines += metrics.answer_lines(p["answer"])
     return "\n".join(lines)

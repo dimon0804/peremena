@@ -3,7 +3,10 @@
 Бот держит переписку родителей ровно столько, сколько она нужна для дела:
 * «входящие» учителя, уже показанные в сводке, — 7 дней (недоставленные — 30);
 * вопросы без ответа для подсказок справочнику — 30 дней (дальше они и так не учитываются);
-* отметки «не придёт» — 14 дней (хватает на сводку за прошлую неделю).
+* отметки «не придёт» — 14 дней (хватает на сводку за прошлую неделю);
+* замеры времени ответа родителю (без текста и без того, кто спросил) — 180 дней;
+* активные дни учителя (одна строка в день, для удержания) — 400 дней;
+* запись на встречу — 30 дней после последнего слота.
 Закрытые сборы хранятся — это история класса, но в них только имя и факт ответа.
 """
 from __future__ import annotations
@@ -15,7 +18,8 @@ from sqlalchemy import delete, select, update
 
 from ..core import ctx
 from ..db import session, utcnow
-from ..models import Absence, InboxItem, Member, OpenQuestion, Poll, PollTarget, User
+from . import meetings, metrics
+from ..models import Absence, InboxItem, Member, OpenQuestion, Poll, PollTarget, QuestionTiming, TeacherActivity, User
 
 log = logging.getLogger(__name__)
 
@@ -38,6 +42,11 @@ async def cleanup() -> dict:
             OpenQuestion.created_at < now - timedelta(days=OPEN_QUESTION_DAYS)))).rowcount
         out["absences"] = (await s.execute(delete(Absence).where(
             Absence.created_at < now - timedelta(days=ABSENCE_DAYS)))).rowcount
+        out["timings"] = (await s.execute(delete(QuestionTiming).where(
+            QuestionTiming.asked_at < now - timedelta(days=metrics.TIMING_DAYS)))).rowcount
+        out["activity"] = (await s.execute(delete(TeacherActivity).where(
+            TeacherActivity.day < (now - timedelta(days=metrics.ACTIVITY_DAYS)).date().isoformat()))).rowcount
+    out["meetings"] = await meetings.cleanup(now)
     if any(out.values()):
         log.info("Очистка по срокам хранения: %s", out)
     return out
@@ -52,6 +61,7 @@ async def forget(user_id: int) -> dict:
         out["questions"] = (await s.execute(delete(OpenQuestion).where(OpenQuestion.user_id == user_id))).rowcount
         out["inbox"] = (await s.execute(delete(InboxItem).where(InboxItem.from_user_id == user_id))).rowcount
         out["absences"] = (await s.execute(delete(Absence).where(Absence.user_id == user_id))).rowcount
+        await s.execute(delete(TeacherActivity).where(TeacherActivity.user_id == user_id))
         await s.execute(update(Member).where(Member.user_id == user_id).values(child_name=None))
         closed = (await s.scalars(select(PollTarget).join(Poll, Poll.id == PollTarget.poll_id).where(
             PollTarget.user_id == user_id, Poll.closed.is_(True)))).all()
@@ -62,5 +72,6 @@ async def forget(user_id: int) -> dict:
         u = await s.get(User, user_id)
         if u:
             u.first_name, u.last_name, u.username = "", None, None
+    out["meetings"] = await meetings.forget(user_id)
     await ctx().kv.delete(f"q:{user_id}")
     return out

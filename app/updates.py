@@ -10,7 +10,7 @@ from .bot.router import handle_update
 from .core import Ctx
 from .max_api import MaxApiError
 from .timeutil import utcnow
-from .services import board, demo, polls, quiet, retention, websession
+from .services import board, demo, meetings, polls, quiet, retention, websession
 
 log = logging.getLogger(__name__)
 
@@ -168,6 +168,7 @@ def make_scheduler(c: Ctx) -> AsyncIOScheduler:
     sched.add_job(leader_only(polls.tick), "interval", seconds=60, id="polls", **opts)
     sched.add_job(leader_only(quiet.morning_tick), "interval", seconds=60, id="morning", **opts)
     sched.add_job(leader_only(board.tick), "interval", seconds=60, id="board", **opts)
+    sched.add_job(leader_only(meetings.remind_tick), "interval", seconds=60, id="meetings", **opts)  # за 2 часа
     sched.add_job(leader_only(websession.cleanup), "interval", hours=1, id="sessions", **opts)
     sched.add_job(leader_only(demo.cleanup), "interval", hours=1, id="demo", **opts)
     sched.add_job(leader_only(retention.cleanup), "interval", hours=24, id="retention", **opts)  # сроки хранения

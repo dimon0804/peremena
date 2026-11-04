@@ -8,7 +8,7 @@ import secrets
 from .. import keyboards as kb
 from ..core import ctx
 from ..models import User
-from ..services import answers, chats, faq, faq_learning, polls, quiet, school, search, shelf, stats
+from ..services import answers, chats, faq, faq_learning, metrics, polls, quiet, school, search, shelf, stats
 from ..timeutil import fmt_dt, fmt_minutes, local_now, parse_deadline, parse_hours, preset_deadline
 from . import absence, staff
 from .common import (
@@ -68,7 +68,7 @@ async def on_message(update: dict) -> None:
                             "передайте её учителю так, как он просил.")
         return
     if text:
-        await answer_text(uid, text, is_teacher)
+        await answer_text(uid, text, is_teacher, asked_at=metrics.asked_at_of(msg.get("timestamp")))
 
 
 async def run_command(uid: int, cmd: str, rest: str) -> None:
@@ -78,7 +78,18 @@ async def run_command(uid: int, cmd: str, rest: str) -> None:
         "stats": show_stats, "chats": show_chats, "app": show_app, "my": show_my_polls,
         "cancel": cancel, "forget": ask_forget, "absent": absence.show_list, "board": staff.show_board, "invite": staff.start_invite, "school": staff.show_school,
     }
+    await metrics.touch(uid, staff_only=True)  # учитель открыл бота по делу — активный день для удержания
     if cmd == "start" and rest and await staff.handle_start_payload(uid, rest):
+        return
+    if cmd == "meet":
+        from . import meet
+
+        await meet.start(uid)
+        return
+    if cmd == "metrics":
+        from . import pilot
+
+        await pilot.show_metrics(uid)
         return
     if cmd in ("hw", "news"):
         await staff.start_board(uid, cmd)
@@ -199,9 +210,13 @@ async def handle_state(uid: int, state: dict, text: str, msg: dict) -> bool:
     if flow == "ask":
         await clear_state(uid)
         if text:
-            await answer_text(uid, text, False)
+            await answer_text(uid, text, False, asked_at=metrics.asked_at_of(msg.get("timestamp")))
             return True
         return False
+    if flow == "meet":
+        from . import meet
+
+        return await meet.step(uid, step, data, text)
     if flow == "hours":
         parsed = parse_hours(text)
         if not parsed:
@@ -587,6 +602,8 @@ async def faq_reply_step(uid: int, data: dict, text: str) -> bool:
                    [[kb.cb("✍️ Ответить ещё раз", f"fr:{data['qid']}")]])
         return True
     await ctx().kv.delete(f"qq:{data['qid']}")
+    await metrics.close(q.get("tm"), "teacher")  # время ответа родителю — до этой минуты
+    await metrics.touch(uid)
     head = "✅ Ответ отправлен."
     if len(search.content_stems(q["text"])) < 2 or len(text.strip()) < 3:
         await send(uid, head)  # «срочно» → «?» в справочник не предлагаем
@@ -599,7 +616,7 @@ async def faq_reply_step(uid: int, data: dict, text: str) -> bool:
 
 
 # ====================================================================== вопросы
-async def answer_text(uid: int, text: str, is_teacher: bool) -> None:
+async def answer_text(uid: int, text: str, is_teacher: bool, asked_at=None) -> None:
     """Вопрос в личке. Сам поиск ответа — в services.answers (его же использует мини-приложение),
     здесь только отправка с кнопками."""
     low = text.lower()
@@ -607,7 +624,7 @@ async def answer_text(uid: int, text: str, is_teacher: bool) -> None:
         await shelf_search(uid, text.split(" ", 1)[1] if " " in text else "")
         return
 
-    a = await answers.answer(uid, text)
+    a = await answers.answer(uid, text, asked_at=asked_at)
     if a.kind == "onboard":
         await send(uid, ONBOARD_HELP)
     elif a.kind == "absence":
@@ -667,7 +684,15 @@ async def forward_question(uid: int, chat_id: int | None = None) -> None:
     await c.kv.delete(f"q:{uid}")
     name = await chats.member_name(chat_id, uid)
     qid = secrets.token_hex(5)
-    await c.kv.set(f"qq:{qid}", {"from_user_id": uid, "text": q["text"], "chat_id": chat_id}, 3600 * 24 * 7)
+    # замер времени ответа едет вместе с вопросом: ответ учителя его закроет
+    tm = q.get("tm")
+    if tm:
+        await metrics.reopen(tm)  # бот ответил не то (или предложил варианты) — ждём учителя
+    else:
+        tm = await metrics.opened(ch.teacher_id, chat_id, "dm")
+    await metrics.mark_forwarded(tm, ch.teacher_id, chat_id)
+    await c.kv.set(f"qq:{qid}", {"from_user_id": uid, "text": q["text"], "chat_id": chat_id, "tm": tm},
+                   3600 * 24 * 7)
     text = (f"❓ <b>Вопрос</b> от <a href=\"max://user/{uid}\">{html.escape(name)}</a> "
             f"({html.escape(ch.title or 'класс')}):\n\n{html.escape(q['text'])}\n\n"
             f"<i>Ответьте кнопкой — ответ уйдёт родителю, а сохранить его в справочник я предложу.</i>")

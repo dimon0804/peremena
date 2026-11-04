@@ -8,7 +8,7 @@ from .. import keyboards as kb
 from ..core import ctx
 from ..db import session
 from ..models import ClassChat, User
-from ..services import attendance, chats, faq, faq_learning, polls, quiet, school, shelf, stats
+from ..services import attendance, chats, faq, faq_learning, metrics, polls, quiet, school, shelf, stats
 from ..timeutil import fmt_dt
 from . import absence, dialog, staff
 from .common import ack, clear_state, get_state, send, set_state
@@ -97,6 +97,11 @@ async def on_callback(update: dict) -> None:
         if head == "prp":
             await on_repeat_poll(cid, uid, tail)
             return
+        if head == "mt":  # запись на встречу
+            from . import meet
+
+            await meet.on_cb(cid, uid, user, tail)
+            return
         await ack(cid, "Кнопка устарела")
     except Exception:
         log.exception("Ошибка обработки кнопки %s", payload)
@@ -155,6 +160,16 @@ async def on_menu(uid: int, action: str) -> None:
         "stats": dialog.show_stats, "chats": dialog.show_chats, "my": dialog.show_my_polls,
         "help": dialog.show_start, "board": staff.show_board, "school": staff.show_school,
     }
+    if action == "meet":
+        from . import meet
+
+        await meet.start(uid)
+        return
+    if action == "metrics":
+        from . import pilot
+
+        await pilot.show_metrics(uid)
+        return
     if action == "shelf":
         await dialog.ask_shelf(uid)
     elif action == "ask":
@@ -329,10 +344,15 @@ async def on_faq(cid: str, uid: int, tail: str) -> None:
             if e.teacher_id != uid:
                 await faq.mark_hit(e.id)
                 await stats.add(e.teacher_id, "faq_answer")
+                q = await c.kv.get(f"q:{uid}")
+                if q and q.get("tm"):  # родитель выбрал подсказку — бот ответил
+                    await metrics.close(q["tm"], "bot")
     elif action == "no":
         e = await faq.mark_miss(int(arg))
         await ack(cid, "Спасибо, учту")
         q = await c.kv.get(f"q:{uid}")
+        if q and q.get("tm"):  # ответ бота не помог — вопрос снова ждёт ответа
+            await metrics.reopen(q["tm"])
         if q and q.get("chats"):  # карточка не подошла — значит, вопрос остался без ответа
             await faq_learning.record(q["chats"], uid, q["text"])
         if e:

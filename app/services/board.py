@@ -137,6 +137,9 @@ def in_quiet_hours(user: User | None) -> bool:
 async def create(chat_id: int, author_id: int, kind: str, text: str, subject: str = "", for_date: str | None = None,
                  publish_mode: str = "now") -> Announcement:
     author = await _user(author_id)
+    from . import metrics
+
+    await metrics.touch(author_id)  # активный день учителя (удержание)
     publish_at = None
     if publish_mode == "later":
         publish_at = next_morning(author)

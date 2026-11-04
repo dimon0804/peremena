@@ -20,8 +20,10 @@ from ..core import ctx
 from ..db import session
 from ..max_api import MaxApiError
 from ..models import ClassChat, InboxItem, User
-from ..services import attendance, board, chats, faq, faq_learning, polls, quiet, school, shelf, stats, websession
-from ..timeutil import fmt_dt, local_now, parse_deadline, preset_deadline, to_local, to_utc, zone
+from ..services import (
+    attendance, board, chats, faq, faq_learning, meetings, metrics, polls, quiet, school, shelf, stats, websession,
+)
+from ..timeutil import fmt_dt, local_now, parse_deadline, preset_deadline, to_local, to_utc, utcnow, zone
 from ..demo_ids import is_demo
 from .auth import InitDataError, validate_init_data
 
@@ -140,6 +142,8 @@ async def _titles(chat_ids) -> dict[int, str]:
 async def me(user: User = Depends(current_user)):
     c = ctx()
     r = await school.roles(user.user_id)
+    if r.is_staff:
+        await metrics.touch(user.user_id)  # учитель открыл кабинет — активный день (удержание)
     t_chats = r.class_chats
     m_chats = await chats.member_chats(user.user_id)
     sch = None
@@ -162,6 +166,8 @@ async def me(user: User = Depends(current_user)):
         "bot_link": c.start_link() if c.bot_username else "",
         "settings": settings_out(user),
         "demo": is_demo(user.user_id),
+        # метрики пилота: администратор платформы (ADMIN_MAX_IDS) и завуч
+        "can_metrics": user.user_id in c.settings.admin_ids or r.is_admin,
     }
 
 
@@ -350,7 +356,7 @@ async def ask(q: str = Query(min_length=2, max_length=500), user: User = Depends
     shelf | absence | onboard | none), text (HTML, только <b>/<i>), text_plain, can_forward."""
     from ..services import answers
 
-    a = await answers.answer(user.user_id, q, user.tz)
+    a = await answers.answer(user.user_id, q, user.tz, channel="app")
     mats = a.materials
     if not mats and a.kind in ("faq", "suggest", "none"):
         mats = await shelf.find(user.user_id, q, teacher_view=not a.chat_ids, limit=5)
@@ -379,7 +385,10 @@ async def ask_forward(body: ForwardIn, user: User = Depends(current_user)):
     chat_ids = [c.chat_id for c in await chats.member_chats(user.user_id)]
     if not chat_ids:
         raise HTTPException(400, "Вы пока не состоите в чате класса с ботом")
-    await ctx().kv.set(f"q:{user.user_id}", {"text": body.text, "chats": chat_ids}, 3600)
+    # замер времени ответа: тот же вопрос, что только что задан в «Спросить», — продолжаем его замер
+    prev = await ctx().kv.get(f"q:{user.user_id}") or {}
+    tm = prev.get("tm") if prev.get("text") == body.text else None
+    await ctx().kv.set(f"q:{user.user_id}", {"text": body.text, "chats": chat_ids, "tm": tm}, 3600)
     await dialog.forward_question(user.user_id, body.chat_id if body.chat_id in chat_ids else None)
     return {"ok": True}
 
@@ -399,6 +408,9 @@ async def not_that(fid: int, user: User = Depends(current_user)):
             or not await ctx().kv.add_once(f"notthat:{user.user_id}:{fid}", ttl=24 * 3600):
         return {"ok": True}
     await faq.mark_miss(fid)
+    q = await ctx().kv.get(f"q:{user.user_id}")
+    if q and q.get("tm"):  # ответ бота не помог — в замере времени ответа вопрос снова ждёт
+        await metrics.reopen(q["tm"])
     if e.teacher_id != user.user_id:
         name = await chats.member_name(e.chat_id, user.user_id)
         q = e.question[:150]
@@ -984,3 +996,135 @@ async def mark_paid(pid: int, body: PaidIn, user: User = Depends(teacher_user)):
         raise HTTPException(404, "Участник не найден")
     p = await polls.get_poll(pid)
     return poll_out(p, user.tz, with_targets=True, chat_titles=await _titles([p.chat_id]))
+
+
+# ====================================================================== метрики пилота (завуч, администратор)
+@router.get("/admin/metrics")
+async def admin_metrics(scope: str = Query(default="", pattern="^(|platform|school)$"),
+                        user: User = Depends(current_user)):
+    """Время ответа родителю (7 и 30 дней) и когортное удержание учителей. platform — администратор
+    платформы (ADMIN_MAX_IDS), без демо-песочниц; school — завуч, по своей школе. Без scope — первое доступное.
+    demo=true в ответе — посчитано на демо-данных, это не результат пилота."""
+    allowed = await metrics.scopes_for(user.user_id)
+    pick = next(((sc, title) for sc, title in allowed if not scope or sc[0] == scope), None)
+    if pick is None:
+        raise HTTPException(403, "Метрики пилота видят завуч и администратор платформы")
+    rep = await metrics.report(pick[0])
+    return rep | {"title": pick[1], "scopes": [sc[0] for sc, _ in allowed],
+                  "demo": rep["answer_30"]["demo"] or rep["retention"]["demo"]}
+
+
+# ====================================================================== «Запись на встречу»
+class WindowIn(BaseModel):
+    date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    start: str = Field(pattern=r"^\d{1,2}:\d{2}$")
+    end: str = Field(pattern=r"^\d{1,2}:\d{2}$")
+    minutes: int = Field(default=meetings.DEFAULT_MINUTES, ge=meetings.MIN_MINUTES, le=meetings.MAX_MINUTES)
+
+
+class MeetingIn(BaseModel):
+    chat_id: int
+    title: str = Field(default="", max_length=300)
+    format: str = Field(default="office", pattern="^(office|call)$")
+    place: str = Field(default="", max_length=300)
+    windows: list[WindowIn] = Field(min_length=1, max_length=10)
+    send: bool = True  # сразу разослать родителям
+
+
+class BookIn(BaseModel):
+    slot_id: int
+
+
+def meeting_out(m, tz: str | None, titles: dict, me: int | None = None, teacher_view: bool = False) -> dict:
+    now = utcnow()
+    busy, total = meetings.counts(m)
+    slots = []
+    for x in m.slots:
+        if not teacher_view and x.starts_at <= now and x.user_id != me:
+            continue
+        slot = {"id": x.id, "start": x.starts_at.isoformat() + "Z", "label": meetings.fmt_slot(x.starts_at, tz),
+                "minutes": x.minutes, "busy": x.user_id is not None, "mine": me is not None and x.user_id == me,
+                "past": x.starts_at <= now}
+        if teacher_view:
+            slot["name"] = x.name if x.user_id else ""  # имена записавшихся видит только учитель
+        slots.append(slot)
+    return {"id": m.id, "title": m.title, "format": m.format, "format_text": meetings.fmt_format(m),
+            "place": m.place, "chat_id": m.chat_id, "chat_title": titles.get(m.chat_id, ""), "closed": m.closed,
+            "busy": busy, "total": total, "slots": slots}
+
+
+@router.get("/meetings")
+async def list_meetings(user: User = Depends(teacher_user)):
+    items = await meetings.for_teacher(user.user_id, with_closed=True)
+    titles = await _titles({m.chat_id for m in items})
+    return [meeting_out(m, user.tz, titles, user.user_id, teacher_view=True) for m in items]
+
+
+@router.post("/meetings")
+async def create_meeting(body: MeetingIn, user: User = Depends(teacher_user)):
+    from datetime import date
+
+    chat = await chats.get_chat(body.chat_id)
+    if not chat or chat.teacher_id != user.user_id:
+        raise HTTPException(404, "Класс не найден")
+    windows = []
+    for w in body.windows:
+        (h1, m1), (h2, m2) = map(int, w.start.split(":")), map(int, w.end.split(":"))
+        try:
+            day = date.fromisoformat(w.date)
+        except ValueError:
+            raise HTTPException(400, "Неверная дата")
+        if m1 > 59 or m2 > 59 or not (0 <= h1 * 60 + m1 < h2 * 60 + m2 <= 24 * 60):
+            raise HTTPException(400, "Конец окна должен быть позже начала")
+        windows.append(meetings.Window(day, h1 * 60 + m1, h2 * 60 + m2, w.minutes))
+    slots = meetings.build_slots(windows, user.tz)
+    if not slots:
+        raise HTTPException(400, "Ни одной встречи в будущем: проверьте дату, время и длительность")
+    m = await meetings.create(user.user_id, chat.chat_id, body.title or "Консультация с классным руководителем",
+                              body.format, body.place, slots)
+    rep = await meetings.dispatch(m.id) if body.send else {"total": 0, "delivered": 0}
+    return meeting_out(m, user.tz, {chat.chat_id: chat.title}, user.user_id, teacher_view=True) | {"dispatch": rep}
+
+
+@router.post("/meetings/{mid}/close")
+async def close_meeting(mid: int, user: User = Depends(teacher_user)):
+    if not await meetings.close(mid, user.user_id):
+        raise HTTPException(404, "Запись не найдена")
+    return {"ok": True}
+
+
+@router.get("/my/meetings")
+async def my_meetings(user: User = Depends(current_user)):
+    items = await meetings.for_parent(user.user_id)
+    titles = await _titles({m.chat_id for m in items})
+    teachers = await chats.get_users({m.teacher_id for m in items})
+    out = []
+    for m in items:
+        t = teachers.get(m.teacher_id)
+        out.append(meeting_out(m, t.tz if t else user.tz, titles, user.user_id)
+                   | {"teacher": t.display_name if t else ""})
+    return out
+
+
+BOOK_ERRORS = {"taken": (409, "Это время уже заняли — выберите другое"), "closed": (409, "Учитель закрыл запись"),
+               "past": (409, "Это время уже прошло"), "forbidden": (404, "Запись не найдена"),
+               "bad": (404, "Запись не найдена")}
+
+
+@router.post("/my/meetings/{mid}/book")
+async def book_meeting(mid: int, body: BookIn, user: User = Depends(current_user)):
+    m = await meetings.get(mid)
+    if m is None or not any(x.id == body.slot_id for x in m.slots):
+        raise HTTPException(404, "Запись не найдена")
+    status, slot, m = await meetings.book(body.slot_id, user.user_id)
+    if status in BOOK_ERRORS:
+        code, msg = BOOK_ERRORS[status]
+        raise HTTPException(code, msg)
+    teacher = await chats.get_user(m.teacher_id)
+    return {"status": status, "meeting": meeting_out(m, teacher.tz if teacher else user.tz,
+                                                     await _titles([m.chat_id]), user.user_id)}
+
+
+@router.delete("/my/meetings/{mid}/book")
+async def cancel_meeting(mid: int, user: User = Depends(current_user)):
+    return {"ok": bool(await meetings.cancel(mid, user.user_id))}
