@@ -34,6 +34,22 @@ Built for the «Идея фикс» hackathon (“Teacher's Arsenal” track) by
 
 The core has no generative AI: buttons, member lists, a database and deterministic search (Snowball stemming + trigrams).
 
+## Integrations
+
+Class data does not stay locked in the messenger. Each integration is a separate module in `app/integrations/`
+on top of the same services the bot uses, and all of them work in the demo sandbox too.
+
+| Integration | What it does |
+|---|---|
+| 📆 **Calendar (iCal)** | A personal secret link `…/cal/<token>.ics` for Yandex, Google, Apple or Outlook calendars: poll deadlines with live “answered 18/24” counters and homework for teachers; polls awaiting an answer (with a 3-hour alert) and homework for parents. `/calendar` in the bot. |
+| 🔌 **Open REST API v1** | API keys (`Authorization: Bearer prm_…`) for school portals, e-journals, 1C, spreadsheets: classes, polls with per-person answers, absences, homework; write-enabled keys can launch polls. Schema: `GET /api/v1/openapi.json`. 120 requests/min per key. |
+| 📡 **Outgoing webhooks** | `poll.created`, `poll.answered`, `poll.closed`, `absence.created` delivered as signed JSON (`X-Peremena-Signature: sha256=HMAC(secret, timestamp + "." + body)`), with a delivery log and a “Test” button. HTTPS to public addresses only (SSRF protection), no redirects, 3 attempts. |
+| 🖨 **Printable sheet and QR consent forms** | A signature sheet for the teacher's folder and tear-off consent forms with pre-filled names and a QR code that opens the poll in MAX. |
+| 🗓 **“This week”** | `/week`: deadlines, homework by day, announcements and absence notes in one card. |
+
+Tokens are generated with `secrets.token_urlsafe` and stored as SHA-256 hashes; keys can be revoked and calendar
+links rotated instantly. Calendar feeds contain no other people's names.
+
 ## Quick start
 
 ### Ready-made image
