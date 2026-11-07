@@ -468,6 +468,11 @@ section { padding-block: clamp(64px, 10vw, 128px); position: relative; }
 /* гуляющие едут по коридору через transform из buddies.js; до старта скрипта стоят у левого края дорожки */
 .squad .buddy[data-walk] { position: absolute; left: 0; bottom: 0; z-index: 2; }
 .squad .buddy[data-walk] + .buddy[data-walk] { z-index: 3; }
+/* пока скрипт не поставил гуляющего на его полосу, его не видно — без прыжка из угла */
+.squad .buddy[data-walk]:not(.is-placed) { opacity: 0; }
+.squad .buddy[data-walk] { transition: opacity .4s cubic-bezier(0.23, 1, 0.32, 1); }
+/* на узком экране коридор короткий — гуляет один ученик */
+@media (max-width: 559px) { .squad .buddy[data-walk][data-buddy="chemist"] { display: none; } }
 @media (max-width: 559px) { .squad { padding-inline: 4px; }
   .buddy-say { max-width: 150px; font-size: 13px; } .squad .buddy:first-child .buddy-say { left: 0; transform: translate(0, 6px); }
   .squad .buddy:first-child.is-talking .buddy-say { transform: none; }

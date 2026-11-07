@@ -15,6 +15,44 @@
   // где начинаются ноги (доля высоты спрайта): у учительницы длинная юбка — шагают только туфли
   const LEGS = { teacher: 0.93, chemist: 0.8, student: 0.75, coder: 0.76 };
   const NORMALS = [[-1, 0, 0], [1, 0, 0], [0, -1, 0], [0, 1, 0]];
+  // спрайт заранее увеличен в UP раз «по пикселю», а рисуется со сглаживанием: пиксели остаются чёткими,
+  // а края при повороте ровные, без ряби и лесенки
+  const UP = 4;
+
+  // соседние грани бока одного цвета склеиваем в полосу: меньше швов и пёстрой «нарезки» на боках
+  function mergeEdges(edges) {
+    const near = (a, b) => Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]) < 48;
+    const key = (e) => (e.side < 2 ? `${e.side}:${e.i}` : `${e.side}:${e.j}`);
+    const groups = new Map();
+    for (const e of edges) { const k = key(e); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(e); }
+    const out = [];
+    for (const list of groups.values()) {
+      const vertical = list[0].side < 2;
+      list.sort((a, b) => (vertical ? a.j - b.j : a.i - b.i));
+      let run = null;
+      for (const e of list) {
+        const pos = vertical ? e.j : e.i;
+        if (run && pos === run.end && near(run.rgb, e.rgb)) {
+          run.sum[0] += e.rgb[0]; run.sum[1] += e.rgb[1]; run.sum[2] += e.rgb[2]; run.n++; run.end++;
+          continue;
+        }
+        if (run) out.push(run);
+        run = { side: e.side, i: e.i, j: e.j, end: pos + 1, rgb: e.rgb, sum: [...e.rgb], n: 1 };
+      }
+      if (run) out.push(run);
+    }
+    for (const r of out) { r.rgb = r.sum.map((v) => Math.round(v / r.n)); r.len = r.end - (r.side < 2 ? r.j : r.i); delete r.sum; }
+    return out;
+  }
+
+  function upscale(src, w, h) {
+    const c = document.createElement("canvas");
+    c.width = w * UP; c.height = h * UP;
+    const g = c.getContext("2d");
+    g.imageSmoothingEnabled = false;
+    g.drawImage(src, 0, 0, w * UP, h * UP);
+    return c;
+  }
   const models = new Map();
 
   function norm(v) { const l = Math.hypot(...v); return v.map((c) => c / l); }
@@ -43,15 +81,36 @@
     const dark = (col) => col[0] + col[1] + col[2] < 150;
     // край силуэта — чёрный контур, и бока из него вышли бы чёрными (на тёмном фоне фигурка «плоская»).
     // Бок красим цветом того, что за контуром: одеждой, волосами, кожей.
+    // самый светлый из ближайших внутренних пикселей: тёмные волосы и куртка за контуром не дают чёрных полос
     const sideColor = (i, j, di, dj) => {
-      for (let n = 1; n <= 3; n++) {
+      let best = null, lum = -1;
+      for (let n = 1; n <= 5; n++) {
         const x = i + di * n, y = j + dj * n;
         if (!on(x, y)) break;
         const col = rgbAt(x, y);
         if (!dark(col)) return col;
+        const l = col[0] + col[1] + col[2];
+        if (l > lum) { lum = l; best = col; }
       }
-      return rgbAt(i, j);
+      return best ? best.map((v) => Math.min(255, v + 18)) : rgbAt(i, j);
     };
+    // расстояние до края силуэта: у края пиксели чуть темнее, к середине светлее — фигурка читается округлой
+    const dist = new Uint8Array(w * h).fill(255);
+    const queue = [];
+    for (let j = 0; j < h; j++) {
+      for (let i = 0; i < w; i++) {
+        if (!on(i, j)) continue;
+        if (!on(i - 1, j) || !on(i + 1, j) || !on(i, j - 1) || !on(i, j + 1)) { dist[j * w + i] = 1; queue.push(j * w + i); }
+      }
+    }
+    for (let q = 0; q < queue.length; q++) {
+      const v = queue[q], i = v % w, j = (v - i) / w, dv = dist[v];
+      for (const [x, y] of [[i - 1, j], [i + 1, j], [i, j - 1], [i, j + 1]]) {
+        if (on(x, y) && dist[y * w + x] > dv + 1) { dist[y * w + x] = dv + 1; queue.push(y * w + x); }
+      }
+    }
+    const ROUND = [1, 0.8, 0.88, 0.94, 0.98];   // множитель яркости по расстоянию до края: 1-й пиксель — контур
+    const lit = (j) => 1.06 - 0.1 * (j / h);     // свет сверху: голова чуть светлее ботинок
 
     // ноги делим по середине между ступнями (средний x нижнего ряда)
     const legTop = Math.round(h * legsFrom);
@@ -69,7 +128,9 @@
       for (let i = 0; i < w; i++) {
         if (!on(i, j)) continue;
         const p = parts[partOf(i, j)], k = (j * w + i) * 4;
-        p.data.data.set(d.subarray(k, k + 4), k);
+        const r = (ROUND[dist[j * w + i]] ?? 1.02) * lit(j);
+        p.data.data[k] = Math.min(255, d[k] * r); p.data.data[k + 1] = Math.min(255, d[k + 1] * r);
+        p.data.data[k + 2] = Math.min(255, d[k + 2] * r); p.data.data[k + 3] = d[k + 3];
         if (!on(i - 1, j)) p.edges.push({ i, j, side: 0, rgb: sideColor(i, j, 1, 0) });
         if (!on(i + 1, j)) p.edges.push({ i, j, side: 1, rgb: sideColor(i, j, -1, 0) });
         if (!on(i, j - 1)) p.edges.push({ i, j, side: 2, rgb: sideColor(i, j, 0, 1) });
@@ -85,7 +146,9 @@
       b.globalCompositeOperation = "source-atop";
       b.fillStyle = "rgba(20, 8, 40, .62)";
       b.fillRect(0, 0, w, h);
-      p.back = back;
+      p.big = upscale(p.canvas, w, h);
+      p.bigBack = upscale(back, w, h);
+      p.edges = mergeEdges(p.edges);
       p.data = null;
     }
     // порядок рисования плоскостей: сначала ноги, потом тело — тело перекрывает приподнятую ногу на стыке
@@ -147,38 +210,46 @@
       wake();
     }
 
-    // прогулка по дорожке: идёт несколько секунд, стоит, иногда что-то говорит, поворачивает обратно
-    walk(now, dt, track) {
+    // прогулка по своей полосе коридора: идёт, останавливается, иногда что-то говорит; у края полосы
+    // сначала встаёт и только потом поворачивает обратно — не бьётся о стену и не проходит сквозь соседа
+    walk(now, dt, lane) {
       const wk = this.walker;
-      if (!track || reduce) { this.walking = false; return; }
+      if (!lane || reduce) { this.walking = false; return; }
       if (!wk.placed) {
-        // гуляющие стартуют в разных концах коридора и навстречу друг другу
-        const all = [...this.el.parentElement.querySelectorAll(".buddy[data-walk]")], k = all.indexOf(this.el);
-        wk.x = track.min + ((k + 0.5) / all.length) * (track.max - track.min);
-        wk.dir = k % 2 ? -1 : 1;
+        wk.x = (lane.min + lane.max) / 2;
+        wk.dir = lane.k % 2 ? -1 : 1;
+        wk.rest = true; wk.until = now + 1200 + lane.k * 1100;   // на старте сначала стоят, потом по очереди трогаются
         wk.placed = true;
+        this.el.classList.add("is-placed");
       }
-      if (this.hover || this.spin) { this.walking = false; return; }
+      wk.x = Math.min(lane.max, Math.max(lane.min, wk.x));
+      if (this.hover || this.spin) { this.walking = false; this.place(); return; }
       if (now > wk.until) {
-        wk.rest = !wk.rest;
         if (wk.rest) {
-          wk.until = now + 1800 + Math.random() * 2600;
-          if (Math.random() < 0.45) { this.speak(true); this.hush(2600); }
+          wk.rest = false; wk.face = null;
+          wk.until = now + 3000 + Math.random() * 4000;
+          if (wk.turn) { wk.dir = -wk.dir; wk.turn = false; }
         } else {
-          wk.until = now + 3500 + Math.random() * 5000;
-          if (!wk.face && Math.random() < 0.35) wk.dir = -wk.dir;
+          wk.rest = true; wk.until = now + 1400 + Math.random() * 2000;
+          if (Math.random() < 0.4) { this.speak(true); this.hush(2400); }
         }
       }
-      this.walking = !wk.rest;
+      this.walking = !wk.rest && lane.max - lane.min > 4;
       if (this.walking) {
-        const speed = Math.max(36, this.cw / (window.devicePixelRatio || 1) * 0.55); // px/с: примерно полкорпуса
+        const speed = Math.min(58, Math.max(30, this.el.offsetWidth * 0.42)); // px/с: спокойный шаг
         wk.x += wk.dir * speed * dt;
-        if (wk.x <= track.min) { wk.x = track.min; wk.dir = 1; }
-        if (wk.x >= track.max) { wk.x = track.max; wk.dir = -1; }
-        this.stride += (speed * dt) / Math.max(18, speed * 0.42);  // примерно два шага в секунду
+        if ((wk.dir < 0 && wk.x <= lane.min) || (wk.dir > 0 && wk.x >= lane.max)) {
+          wk.x = Math.min(lane.max, Math.max(lane.min, wk.x));
+          wk.rest = true; wk.turn = true; wk.until = now + 500 + Math.random() * 900;
+          this.walking = false;
+        } else {
+          this.stride += (speed * dt) / Math.max(14, speed * 0.45);  // чуть больше двух шагов в секунду
+        }
       }
-      this.el.style.transform = `translate3d(${wk.x.toFixed(1)}px, 0, 0)`;
+      this.place();
     }
+
+    place() { if (this.walker) this.el.style.transform = `translate3d(${this.walker.x.toFixed(1)}px, 0, 0)`; }
 
     step(now, dt, pointer, track) {
       if (this.walker) this.walk(now, dt, track);
@@ -211,7 +282,8 @@
       const g = this.ctx, W = this.cw, H = this.ch;
       g.setTransform(1, 0, 0, 1, 0, 0);
       g.clearRect(0, 0, W, H);
-      g.imageSmoothingEnabled = false;
+      g.imageSmoothingEnabled = true;
+      g.imageSmoothingQuality = "high";
 
       const s = Math.min((H * 0.86) / m.h, (W * 0.94) / (m.w + DEPTH));
       const ox = W / 2, oy = H - s * 2.8;
@@ -258,22 +330,27 @@
         for (const e of part.edges) {
           const sh = shade[e.side];
           if (!sh.vis) continue;
-          const { i, j } = e;
+          const { i, j, len } = e;
           let a, b;
-          if (e.side === 0) { a = [i, j]; b = [i, j + 1]; }
-          else if (e.side === 1) { a = [i + 1, j]; b = [i + 1, j + 1]; }
-          else if (e.side === 2) { a = [i, j]; b = [i + 1, j]; }
-          else { a = [i, j + 1]; b = [i + 1, j + 1]; }
+          if (e.side === 0) { a = [i, j]; b = [i, j + len]; }
+          else if (e.side === 1) { a = [i + 1, j]; b = [i + 1, j + len]; }
+          else if (e.side === 2) { a = [i, j]; b = [i + len, j]; }
+          else { a = [i, j + 1]; b = [i + len, j + 1]; }
           const p1 = P(a[0], a[1], half, dy), p2 = P(b[0], b[1], half, dy), p3 = P(b[0], b[1], -half, dy), p4 = P(a[0], a[1], -half, dy);
-          quads.push({ z: (p1[2] + p3[2]) / 2, pts: [p1, p2, p3, p4], c: e.rgb, k: sh.k });
+          quads.push({ z: (p1[2] + p3[2]) / 2, pts: [p1, p2, p3, p4], c: e.rgb, k: sh.k, front: ca * cp > 0 });
         }
       });
       quads.sort((q1, q2) => q1.z - q2.z);
       g.lineWidth = 1;
       g.lineJoin = "round";
       for (const q of quads) {
-        const col = `rgb(${q.c[0] * q.k | 0},${q.c[1] * q.k | 0},${q.c[2] * q.k | 0})`;
-        g.fillStyle = col; g.strokeStyle = col;
+        // бок плавно темнеет от лица к спине — толщина читается формой, а не ступенькой
+        const near = `rgb(${q.c[0] * q.k | 0},${q.c[1] * q.k | 0},${q.c[2] * q.k | 0})`;
+        const far = `rgb(${q.c[0] * q.k * 0.55 | 0},${q.c[1] * q.k * 0.55 | 0},${q.c[2] * q.k * 0.6 | 0})`;
+        const fr = q.front ? q.pts[0] : q.pts[3], bk = q.front ? q.pts[3] : q.pts[0];
+        const grad = g.createLinearGradient(fr[0], fr[1], bk[0], bk[1]);
+        grad.addColorStop(0, near); grad.addColorStop(1, far);
+        g.fillStyle = grad; g.strokeStyle = grad;
         g.beginPath();
         g.moveTo(q.pts[0][0], q.pts[0][1]);
         for (let k = 1; k < 4; k++) g.lineTo(q.pts[k][0], q.pts[k][1]);
@@ -284,8 +361,8 @@
       const front = ca * cp > 0, z = front ? half : -half;
       m.parts.forEach((part, pi) => {
         const o = P(0, 0, z, offs[pi]);
-        g.setTransform(ca * s, sa * sp * s, 0, cp * s, o[0], o[1]);
-        g.drawImage(front ? part.canvas : part.back, 0, 0);
+        g.setTransform((ca * s) / UP, (sa * sp * s) / UP, 0, (cp * s) / UP, o[0], o[1]);
+        g.drawImage(front ? part.big : part.bigBack, 0, 0);
       });
       g.setTransform(1, 0, 0, 1, 0, 0);
     }
@@ -295,18 +372,22 @@
   const buddies = [...document.querySelectorAll(".buddy")].map((el) => new Buddy(el));
   if (!buddies.length) return;
 
-  // дорожка для гуляющих: между стоящими по краям коридора
-  const tracks = new Map();
+  // полосы для гуляющих: коридор между стоящими по краям делится поровну, у каждого гуляющего своя
+  const lanes = new Map();
   function measureTracks() {
-    tracks.clear();
+    lanes.clear();
     for (const sq of document.querySelectorAll(".squad")) {
       const still = [...sq.querySelectorAll(".buddy:not([data-walk])")];
-      const walkers = [...sq.querySelectorAll(".buddy[data-walk]")];
+      const walkers = [...sq.querySelectorAll(".buddy[data-walk]")].filter((el) => el.offsetWidth > 0);
       if (!walkers.length) continue;
-      const ww = walkers[0].offsetWidth;
-      const left = still.length ? still[0].offsetLeft + still[0].offsetWidth * 0.6 : 0;
-      const right = still.length > 1 ? still[still.length - 1].offsetLeft + still[still.length - 1].offsetWidth * 0.4 : sq.clientWidth;
-      tracks.set(sq, { min: left, max: Math.max(left, right - ww) });
+      const ww = walkers[0].offsetWidth, gapPx = 10;
+      const left = still.length ? still[0].offsetLeft + still[0].offsetWidth + gapPx : 0;
+      const right = still.length > 1 ? still[still.length - 1].offsetLeft - gapPx : sq.clientWidth;
+      const seg = Math.max(0, right - left) / walkers.length;
+      walkers.forEach((el, k) => {
+        const min = left + k * seg + (k ? 6 : 0), max = left + (k + 1) * seg - ww - (k < walkers.length - 1 ? 6 : 0);
+        lanes.set(el, { k, min, max: Math.max(min, max) });
+      });
     }
   }
   measureTracks();
@@ -318,26 +399,22 @@
     document.documentElement.addEventListener("pointerleave", () => { pointer = null; });
   }
 
-  // двое гуляющих сошлись лицом к лицу — останавливаются, здороваются и расходятся
+  // соседи сошлись на границе полос лицом к лицу — останавливаются, здороваются и расходятся обратно
   const GREET = { student: "Здравствуйте!", chemist: "Привет! Домашку видел?", teacher: "Добрый день!", coder: "Привет!" };
   function meetings(now) {
-    for (const sq of tracks.keys()) {
-      const ws = buddies.filter((b) => b.walker && b.walking && b.el.parentElement === sq);
-      for (let a = 0; a < ws.length; a++) {
-        for (let c = a + 1; c < ws.length; c++) {
-          const A = ws[a].walker, C = ws[c].walker, gap = C.x - A.x;
-          if (Math.abs(gap) > ws[a].el.offsetWidth * 0.85 || now < (A.metUntil || 0) || now < (C.metUntil || 0)) continue;
-          if (Math.sign(gap) !== A.dir || Math.sign(-gap) !== C.dir) continue;  // только если идут навстречу
-          for (const [b, w, to] of [[ws[a], A, Math.sign(gap)], [ws[c], C, -Math.sign(gap)]]) {
-            w.rest = true; w.until = now + 2600; w.face = to * 0.95; w.metUntil = now + 9000;
-          }
-          const first = Math.random() < 0.5 ? ws[a] : ws[c], second = first === ws[a] ? ws[c] : ws[a];
-          const hi = (b) => { if (!b.say) return; b.say.textContent = GREET[b.el.dataset.buddy] || "Привет!"; b.el.classList.add("is-talking"); b.hush(1500); };
-          hi(first);
-          setTimeout(() => hi(second), 900);
-          // после разговора идут каждый своей дорогой — мимо друг друга
-          setTimeout(() => { A.face = null; C.face = null; }, 2600);
-        }
+    const ws = buddies.filter((b) => b.walker && b.walking && lanes.has(b.el));
+    for (const a of ws) {
+      for (const c of ws) {
+        const la = lanes.get(a.el), lc = lanes.get(c.el);
+        if (lc.k !== la.k + 1 || a.el.parentElement !== c.el.parentElement) continue;
+        const A = a.walker, C = c.walker, near = a.el.offsetWidth * 0.35;
+        if (A.dir !== 1 || C.dir !== -1 || A.x < la.max - near || C.x > lc.min + near) continue;
+        for (const [w, to] of [[A, 1], [C, -1]]) { w.rest = true; w.turn = true; w.until = now + 2800; w.face = to * 0.95; }
+        a.walking = c.walking = false;
+        const first = Math.random() < 0.5 ? a : c, second = first === a ? c : a;
+        const hi = (b) => { if (!b.say) return; b.say.textContent = GREET[b.el.dataset.buddy] || "Привет!"; b.el.classList.add("is-talking"); b.hush(1500); };
+        hi(first);
+        setTimeout(() => hi(second), 1000);
       }
     }
   }
@@ -352,7 +429,7 @@
       any = true;
       // за курсором следят только те, рядом с кем он: иначе вся страница вертит головами
       const near = pointer && Math.abs(pointer.y - b.el.getBoundingClientRect().top) < 420 ? pointer : null;
-      b.step(now, dt, near, b.walker ? tracks.get(b.el.closest(".squad")) : null);
+      b.step(now, dt, near, b.walker ? lanes.get(b.el) : null);
     }
     raf = any && !document.hidden ? requestAnimationFrame(frame) : 0;
     if (!raf) last = 0;
@@ -376,11 +453,11 @@
   });
   buddies.forEach((b) => ro.observe(b.canvas));
 
-  // при «меньше движения» гуляющие просто стоят посреди коридора, на равном расстоянии
+  // при «меньше движения» гуляющие просто стоят посередине своих полос
   if (reduce) {
-    for (const [sq, t] of tracks) {
-      const ws = [...sq.querySelectorAll(".buddy[data-walk]")];
-      ws.forEach((el, k) => { el.style.transform = `translate3d(${(t.min + ((k + 1) / (ws.length + 1)) * (t.max - t.min)).toFixed(1)}px, 0, 0)`; });
+    for (const [el, l] of lanes) {
+      el.style.transform = `translate3d(${((l.min + l.max) / 2).toFixed(1)}px, 0, 0)`;
+      el.classList.add("is-placed");
     }
   }
 
