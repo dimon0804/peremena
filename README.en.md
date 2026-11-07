@@ -14,7 +14,7 @@ at hand. By our estimate this gives a homeroom teacher back about **3 h 15 min a
 
 | | |
 |---|---|
-| **Bot in MAX** | https://max.ru/ideya_fiks_35_bot |
+| **Bot in MAX** | https://max.ru/ideya_fiks_35_bot (the account was issued by the organizers, so in MAX it is called «35_Идея_фикс») |
 | **Website and no-sign-up demo** | https://peremena.clv-digital.tech |
 | **Docker image** | `docker pull ghcr.io/dimon0804/peremena:latest` |
 

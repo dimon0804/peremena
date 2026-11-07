@@ -13,7 +13,7 @@
 
 | | |
 |---|---|
-| **Бот в MAX** | https://max.ru/ideya_fiks_35_bot |
+| **Бот в MAX** | https://max.ru/ideya_fiks_35_bot (аккаунт выдали организаторы, в MAX он называется «35_Идея_фикс») |
 | **Сайт и демо без регистрации** | https://peremena.clv-digital.tech |
 | **Docker-образ** | `docker pull ghcr.io/dimon0804/peremena:latest` |
 
