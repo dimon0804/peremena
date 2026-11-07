@@ -16,7 +16,7 @@ at hand. By our estimate this gives a homeroom teacher back about **3 h 15 min a
 |---|---|
 | **Bot in MAX** | https://max.ru/ideya_fiks_35_bot (the account was issued by the organizers, so in MAX it is called «35_Идея_фикс») |
 | **Website and no-sign-up demo** | https://peremena.clv-digital.tech |
-| **Docker image** | `docker pull ghcr.io/dimon0804/peremena:latest` |
+| **Docker image** | `docker pull dimon0804/peremena:latest` (Docker Hub) or `docker pull ghcr.io/dimon0804/peremena:latest` |
 
 Built for the «Идея фикс» hackathon (“Teacher's Arsenal” track) by team СИЭЛВИ-ДИДЖИТАЛ, RKSI college, Rostov-on-Don.
 
@@ -131,8 +131,11 @@ docker run -d --name peremena -p 8080:8080 -e MAX_BOT_TOKEN=<token> \
 curl http://localhost:8080/health
 ```
 
-There is no image on Docker Hub yet: publishing there switches on by itself once the repository gets a
-`DOCKERHUB_TOKEN` secret.
+The same image is on Docker Hub; CI publishes it there on every commit to `main`:
+
+```bash
+docker pull dimon0804/peremena:latest
+```
 
 Each [release](https://github.com/dimon0804/peremena/releases) also carries the image as an archive:
 `gunzip -c peremena-image-v1.2.0.tar.gz | docker load`.

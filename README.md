@@ -15,7 +15,7 @@
 |---|---|
 | **Бот в MAX** | https://max.ru/ideya_fiks_35_bot (аккаунт выдали организаторы, в MAX он называется «35_Идея_фикс») |
 | **Сайт и демо без регистрации** | https://peremena.clv-digital.tech |
-| **Docker-образ** | `docker pull ghcr.io/dimon0804/peremena:latest` |
+| **Docker-образ** | `docker pull dimon0804/peremena:latest` (Docker Hub) или `docker pull ghcr.io/dimon0804/peremena:latest` |
 
 Хакатон «Идея фикс», направление «Арсенал мастера» · команда СИЭЛВИ-ДИДЖИТАЛ · ГБПОУ РО «РКСИ», Ростов-на-Дону.
 
@@ -235,7 +235,11 @@ docker pull ghcr.io/dimon0804/peremena:latest
 docker run -d --name peremena -p 8080:8080 -e MAX_BOT_TOKEN=<токен> -v peremena-data:/srv/data ghcr.io/dimon0804/peremena:latest
 ```
 
-В Docker Hub образа пока нет: публикация туда включится сама, когда в секретах репозитория появится `DOCKERHUB_TOKEN`.
+Тот же образ есть в Docker Hub, CI публикует его туда при каждом коммите в `main`:
+
+```bash
+docker pull dimon0804/peremena:latest
+```
 
 Архив образа приложен к каждому [релизу](https://github.com/dimon0804/peremena/releases) — запуск без доступа к реестру:
 
