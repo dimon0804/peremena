@@ -5,6 +5,7 @@ import html
 import logging
 
 from .. import keyboards as kb
+from .. import ratelimit
 from ..core import ctx
 from ..db import session
 from ..models import ClassChat, User
@@ -14,6 +15,15 @@ from . import absence, dialog, staff
 from .common import ack, clear_state, get_state, send, set_state
 
 log = logging.getLogger(__name__)
+
+
+async def _visible_entry(entry_id: int, uid: int):
+    """Карточка справочника, если её мог показать этому человеку бот: своя или из его классов."""
+    e = await faq.get_entry(entry_id)
+    if e is None or e.teacher_id == uid:
+        return e
+    visible = await faq.candidates_for_chats([c.chat_id for c in await chats.member_chats(uid)])
+    return e if e.id in {x.id for x in visible} else None
 
 
 async def on_callback(update: dict) -> None:
@@ -88,7 +98,7 @@ async def on_callback(update: dict) -> None:
             await journal.on_cb(uid, tail)
             return
         if head == "ab":
-            await absence.on_cb(cid, uid, user, tail)
+            await absence.on_cb(cid, uid, user, tail, recipient.get("chat_id"))
             return
         if head == "lg":
             await staff.on_login_cb(cid, uid, tail)
@@ -170,6 +180,7 @@ async def on_menu(uid: int, action: str) -> None:
         "poll": dialog.start_poll, "faq": dialog.show_faq, "quiet": dialog.show_quiet,
         "stats": dialog.show_stats, "chats": dialog.show_chats, "my": dialog.show_my_polls,
         "help": dialog.show_start, "board": staff.show_board, "school": staff.show_school,
+        "forget": dialog.ask_forget,
     }
     if action == "meet":
         from . import meet
@@ -358,7 +369,7 @@ async def on_faq(cid: str, uid: int, tail: str) -> None:
         ok = await faq.delete_entry(int(arg), uid)
         await ack(cid, "Удалено" if ok else "Уже удалено")
     elif action == "show":
-        e = await faq.get_entry(int(arg))
+        e = await _visible_entry(int(arg), uid)
         await ack(cid)
         if e:
             await send(uid, await faq.render_answer(e), [[kb.cb("Это не то", f"fq:no:{e.id}")]])
@@ -369,7 +380,12 @@ async def on_faq(cid: str, uid: int, tail: str) -> None:
                 if q and q.get("tm"):  # родитель выбрал подсказку — бот ответил
                     await metrics.close(q["tm"], "bot")
     elif action == "no":
-        e = await faq.mark_miss(int(arg))
+        e = await _visible_entry(int(arg), uid)
+        # одна отметка на карточку в сутки и не больше 20 в час, как в приложении
+        if not e or not await ratelimit.hit("notthat", uid, 20, 3600)                 or not await c.kv.add_once(f"notthat:{uid}:{e.id}", ttl=24 * 3600):
+            await ack(cid, "Спасибо, учту")
+            return
+        e = await faq.mark_miss(e.id)
         await ack(cid, "Спасибо, учту")
         q = await c.kv.get(f"q:{uid}")
         if q and q.get("tm"):  # ответ бота не помог — вопрос снова ждёт ответа

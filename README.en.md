@@ -24,20 +24,49 @@ Built for the «Идея фикс» hackathon (“Teacher's Arsenal” track) by
 
 | Module | What it does |
 |---|---|
-| 📋 **Roll call** | `/poll`: pick a template (consent, medical note, acknowledgement, event sign-up, choice, money collection), write the text and a deadline. The bot takes the chat member list and sends each parent buttons in a private message; answers are tied to a person. It reminds silent parents 24 h and 2 h before the deadline, closes the poll and reports “25 of 27 answered, missing: …”, with CSV export. |
-| 📖 **Class FAQ** | The bot answers only with what the teacher saved — it never makes things up. Parents ask in a private chat or right in the class chat by mentioning the bot. When the teacher replies to a question in the chat, the bot offers “Save this answer”. Unanswered questions go to the teacher; when three different parents ask the same thing, the bot suggests answering once for everyone. |
-| 🗂 **Shelf** | Files forwarded with a caption and `#tags` are stored and searchable; any file can be sent to any class in one tap. |
-| 🌙 **Quiet hours** | Outside the working window the bot keeps answering what it knows and brings everything new in one morning digest. Messages marked “срочно” (urgent) go through immediately. |
+| 📋 **Roll call** | `/poll`: pick a template (consent, medical note, acknowledgement, event sign-up, choice, money collection), write the text and a deadline. The bot takes the chat member list and sends each parent buttons in a private message; answers are tied to a person. It reminds silent parents 24 h and 2 h before the deadline (parents are only messaged between 8:00 and 21:00; a night reminder moves to 8:00), closes the poll and reports “25 of 27 answered, missing: …”, with CSV export. |
+| 📖 **Class FAQ** | The bot answers only with what the teacher saved — it never makes things up. Parents ask in a private chat or right in the class chat by mentioning the bot; answering questions without a mention is an option the teacher turns on. When the teacher replies to a question in the chat, the bot offers “Save this answer”. Unanswered questions go to the teacher; when three different parents ask the same thing, the bot suggests answering once for everyone. |
+| 🗂 **Shelf** | Files forwarded with a caption and `#tags` are stored; the teacher's files in the class chat are picked up automatically, and older ones are imported from the chat history on connect (again any time with “Файлы из истории” in `/chats`). Search by caption, file name, tags, class name and the month the file was sent; any file can be sent to any class in one tap. |
+| 🌙 **Quiet hours** | Outside the working window the bot keeps answering what it knows and brings everything new in one morning digest. Messages with the marker word “срочно” (urgent) reach the teacher at once, even at night: from the class chat the bot passes them on by itself, from a private chat as soon as the parent taps “Передать учителю” (“Pass to the teacher”). |
 | 📚 **Class board** | Homework and announcements; “What's the algebra homework for tomorrow?” is answered by subject dictionary and date, with deferred morning publishing. |
 | 🏛 **School** | Classes join a school by code: a shared FAQ base and school-wide polls with a per-class breakdown for the deputy head. |
 | 🏛 **Education authority (region / district)** | `/region`: a school joins a district or region by code; methodologists join with a staff code or are appointed by a platform admin (`ADMIN_MAX_IDS`). A poll launched from above for the whole region, selected schools or grades is split into school-level and class-level polls; the homeroom teacher sees where it came from and may add a note, but cannot change the text. Delivery uses the regular poll dispatch within MAX rate limits. A bottom-up summary (“82 % answered, school No. 5 — 40 %”) with CSV export shows numbers only — no parents' names. |
 | 📚 **Template library** | `/library`: shared poll templates and FAQ cards, searchable by topic, type and grade, sorted by popularity, with a “taken N times” counter. One tap to take a template. Publishing is anonymous and checked for phone numbers, e-mails and children's names; reports and moderation by a platform admin; 20 starter templates from the team. Also in the mini app and `GET /api/v1/library`. |
-
-| 🤝 **Meeting sign-up** | `/meet`: the teacher sets time windows for parent consultations (in person or by phone); parents pick a free slot with a button, can cancel or reschedule, and get a reminder 2 hours before. Double booking is prevented by the database. Meetings show up in the teacher's schedule, morning digest and the iCal feed. |
+| 🤝 **Meeting sign-up** | `/meet`: the teacher sets time windows for parent consultations (in person or by phone); parents pick a free slot with a button, can cancel or reschedule, and get a reminder 2 hours before — only in the daytime, 8:00–21:00 in the teacher's time zone (for an 8:30 meeting the reminder comes at 8:00, not 6:30). Double booking is prevented by the database. Meetings show up in the teacher's schedule, morning digest and the iCal feed. |
 | 📈 **Pilot metrics** | Median time to answer a parent (bot or teacher, 7 and 30 days, p90, share answered by the bot, unanswered counted separately) and weekly-cohort teacher retention (D7, D30). Teachers see their answer time in `/stats`; the deputy head sees the school and platform admins (`ADMIN_MAX_IDS`) see everything via `/metrics` and `/api/admin/metrics`. Until a real pilot, numbers exist only on clearly labelled demo history. |
-| 🤒 **Absences**, 💰 **money collection**, ⏱ **usefulness counter**, 📱 **mini app** | Absence notes in one tap, money collections with paid/pending tracking, weekly stats, and a mini app / web dashboard with the same features. |
+| 🤒 **Absences**, 💰 **money collection**, 📱 **mini app** | Absence notes in one tap, money collections with paid/pending tracking, and a mini app / web dashboard with the same features. |
+| ⏱ **Usefulness counter** | `/stats`: questions the bot closed by itself, polls, reminders and the minutes saved, plus weekly totals on Mondays. An answer marked “Это не то” (“Not what I asked”) does not count as closed by the bot, and quiet-hours minutes count only messages from people, not the bot's own reports. |
+
+**Roles.** One person can hold several roles; the bot menu and the mini app tabs are built from them.
+
+| Role | How it appears | What it can do |
+|---|---|---|
+| Homeroom teacher | added the bot to the class chat (or owns the chat) | everything: polls, board, FAQ, shelf, quiet hours |
+| Subject teacher | opened an `/invite` link from the homeroom teacher | board (homework, announcements), shelf |
+| School admin (deputy head) | created a school or joined with the admin code | class summary, school-wide polls, linking the school to an education authority |
+| Education authority methodologist | staff code of the region or appointed by a platform admin | polls for the region, schools or grades; numbers-only summary, no names |
+| Platform admin | id in `ADMIN_MAX_IDS` | creates regions, appoints methodologists, handles library reports |
+| Parent / student | member of a class chat | answers polls, asks the FAQ and the board, gets materials |
 
 The core has no generative AI: buttons, member lists, a database and deterministic search (Snowball stemming + trigrams).
+
+### Website
+
+The service also serves a website:
+
+- `/` — the landing page: what the bot does, a scene from a parents' chat, features, the time-saving estimate
+  (a model calculated by the team, not a survey), how to connect, team. Pixel 3D characters (`site/buddies.js`,
+  sprites drawn by the team's designers) run on canvas without third-party libraries. A live “routine already
+  taken off teachers” counter from `/api/public/stats` (aggregates only) appears once at least 3 classes are
+  connected and 5 polls have been run.
+- `/login` — password-free sign-in through the bot: a QR code and a `max.ru/<bot>?start=login_<code>` link; the
+  bot asks to confirm (an “Это не я” / “Not me” button guards against planted links). The code is single-use and
+  lives 10 minutes. The session is an httpOnly cookie for 30 days (only the SHA-256 of the token is stored); the
+  `Secure` flag is set behind a proxy too when `PUBLIC_URL` is `https://`.
+- “Попробовать демо” (Try the demo) — every visitor gets an own sandbox with a fictional school; nothing leaves it
+  for MAX, it is deleted after a day. When all `DEMO_MAX_SANDBOXES` are busy, the oldest sandbox (older than
+  30 minutes) makes room for the new visitor, so nobody can hold the demo for a whole day.
+- `/app/` — the web dashboard, the same interface as the MAX mini app.
 
 ## Integrations
 
@@ -76,8 +105,9 @@ API for third-party bots, but almost all of them export to Excel or CSV. So the 
   checked against real files** from every journal.
 - **Safe parsing:** no `eval`, 3 MB / 5,000 rows limit, openpyxl in `read_only` + `data_only` mode (formulas are not
   evaluated), zip size checked up front, defusedxml for XML.
-- **Export back:** absence notes and poll results as CSV (UTF-8 with BOM, `;` separator, formula-like cells are
-  prefixed with an apostrophe) — from the bot, the mini app (signed links valid for 24 h) and the open API
+- **Export back:** absence notes and poll results as CSV (UTF-8 with BOM, `;` separator, formula-like cells —
+  also after leading spaces or starting with a tab or line break — are prefixed with an apostrophe; the same
+  `safe_cell` guard covers every CSV export: poll results, the regional summary, the journal) — from the bot, the mini app (signed links valid for 24 h) and the open API
   (`GET /api/v1/export/{absences|polls}.csv`, `GET /api/v1/schedule`).
 - **Dnevnik.ru connector** over its OAuth REST API (`DNEVNIK_ENABLED=true`, per-teacher token stored encrypted
   or a school token in `DNEVNIK_TOKEN`). Endpoints are taken from public descriptions; **not tested against the
@@ -90,7 +120,9 @@ Only the class teacher of a class can import or export; parents and other teache
 ### Ready-made image
 
 The image is built and verified by GitHub Actions on every commit to `main`
-([`.github/workflows/docker.yml`](.github/workflows/docker.yml)): tests on SQLite and PostgreSQL → build → smoke test of `/health` → publish.
+([`.github/workflows/docker.yml`](.github/workflows/docker.yml)): tests on SQLite and on PostgreSQL with Redis →
+build and push to GitHub Container Registry → run the pushed image and check `/health`. Only the job that publishes
+the image and the release has write permissions; tests run read-only.
 
 ```bash
 docker pull ghcr.io/dimon0804/peremena:latest
@@ -98,6 +130,9 @@ docker run -d --name peremena -p 8080:8080 -e MAX_BOT_TOKEN=<token> \
   -v peremena-data:/srv/data ghcr.io/dimon0804/peremena:latest
 curl http://localhost:8080/health
 ```
+
+There is no image on Docker Hub yet: publishing there switches on by itself once the repository gets a
+`DOCKERHUB_TOKEN` secret.
 
 Each [release](https://github.com/dimon0804/peremena/releases) also carries the image as an archive:
 `gunzip -c peremena-image-v1.2.0.tar.gz | docker load`.
@@ -226,6 +261,38 @@ docker run --rm -e MAX_BOT_TOKEN=<token> ghcr.io/dimon0804/peremena check
 
 Locally without Docker (Python 3.12): `pip install -r requirements.txt && python -m app run --port 8080`.
 
+## Bot commands
+
+Every command also has Russian aliases (`/сбор`, `/статус`, `/удалить`…), the full list is in the Russian README.
+
+| Command | What it does |
+|---|---|
+| `/start` | main menu |
+| `/poll` | new poll (roll call) |
+| `/status` | poll status, remind, list |
+| `/faq` | what the bot answers on the teacher's behalf |
+| `/add` | add an answer to the FAQ |
+| `/shelf <query>` | find a material |
+| `/quiet` | working hours, weekends, auto-answer |
+| `/morning` | morning digest now |
+| `/stats` | usefulness counter and answer time |
+| `/meet` | meeting sign-up: slots for the teacher, free times for parents |
+| `/metrics` | pilot metrics (deputy head — own school, platform admin — everything) |
+| `/week` | this week: polls, homework, announcements |
+| `/calendar` | deadlines and homework in Yandex/Google/Apple Calendar |
+| `/journal` | e-journal: upload an export, who is missing from the chat, absences and polls as CSV |
+| `/hw`, `/news`, `/board` | homework, announcement, latest board entries |
+| `/invite` | invite link for a subject teacher |
+| `/school` | school: create, join, summary for the administration |
+| `/region` | education authority: link a school, region-wide poll, methodologist's summary |
+| `/library <query>` | template library: find, take, share |
+| `/chats` | connected classes, refresh the member list, files from the chat history |
+| `/absent` | who is absent today |
+| `/app` | open the mini app |
+| `/cancel` | cancel the current action |
+| `/delete` | for teachers and school staff — “What to delete?”: FAQ, shelf, my data; for everyone else the same as `/forget` |
+| `/forget` | erase my data (with confirmation) |
+
 ## Tests
 
 ```bash
@@ -236,19 +303,49 @@ TEST_DATABASE_URL=postgresql://test:test@127.0.0.1:55432/test python -m pytest -
 
 ## Data and security
 
-- No chat archive. Stored: what the teacher explicitly saved, who answered a poll, and short-lived working data
-  that expires automatically (unanswered questions — 30 days, digest items — 7 days, absence notes — 14 days,
-  answer-time records without any text — 180 days, teacher active days — 400 days, meeting sign-ups — 30 days
-  after the last slot).
-  Parents can erase their data with `/forget`.
+- No chat archive. Stored: what the teacher explicitly saved (FAQ, board, shelf), poll answers, absence notes
+  and short-lived working data that expires by itself:
+
+  | What | Why | Kept for |
+  |---|---|---|
+  | a parent's last question to the bot | the “Pass to the teacher” button | up to 6 hours (1 hour from the mini app) |
+  | a question passed to the teacher | delivering the teacher's reply | 7 days |
+  | an unanswered question | the “three parents asked” hint | 30 days |
+  | a morning digest item (with the message text) | showing it to the teacher | 7 days after shown, 30 if never shown |
+  | an absence note (child, day, reason) | today's list and the weekly summary | 14 days |
+  | a dated lesson from a journal export | “what lessons are tomorrow” | 60 days after the date |
+  | an answer-time record (no text, no asker) | the answer-time metric | 180 days |
+  | a teacher's active day | teacher retention | 400 days |
+  | a meeting sign-up | the teacher's schedule | 30 days after the last slot |
+
+- Personal data is minimal: chat member name, poll answer and the child's name. The bot asks for the child's name
+  once, when a parent first reports an absence, and keeps it in the class list while the parent is in the class:
+  it is erased when they leave the chat or run `/forget`.
+- `/forget` deletes a parent's questions, absence notes, child's name, items in the teacher's inbox and website
+  sessions, cancels future meeting sign-ups, and anonymises answers on closed polls and past meetings (answers on
+  open polls stay until the poll closes — the bot says so).
+- The teacher sees and deletes everything the bot says on their behalf: `/faq`, `/delete`, closed polls with
+  their answers, the mini app.
+- Bot buttons check who pressed them: an absence note from the chat only works in the chat where the button was
+  pressed; a FAQ card is shown, and “Not what I asked” accepted, only if the person could see that card (at most
+  20 times an hour and once per card a day); a question goes only to the teacher of the person's own class.
+  Tests: `tests/test_callback_access.py`.
 - Mini app sign-in is verified by the MAX launch-data signature (HMAC-SHA256); webhooks by a secret header;
   website sign-in is bound to the browser that started it; rate limits on codes and PINs.
 - Demo sandboxes are isolated from real schools and chats and cannot send anything to MAX.
 - A regional methodologist sees aggregates only, never parents' names or answers.
 - Security headers (CSP, nosniff), request size limits, non-root container without extra capabilities.
+- Dependencies are pinned in `requirements.txt` together with transitive ones; on 7 November 2026 FastAPI,
+  Starlette, python-multipart, pydantic and certifi were updated, and `pip-audit` found no known vulnerabilities.
 
-The full documentation — environment variables, bot commands, architecture, migrations — is in the [Russian README](README.md).
+The full documentation — environment variables, all command aliases, architecture, migrations — is in the [Russian README](README.md).
 
 ## Team
 
-Daria Karachevtseva (captain) · Dmitry Doviryak · Nikita Zhadan · Alyona Golovina · Arina Shuklina
+| Member | Role |
+|---|---|
+| Daria Karachevtseva | captain, project lead |
+| Dmitry Doviryak | developer: architecture, backend, MAX Bot API integration |
+| Nikita Zhadan | developer: database, material search, the Roll call module |
+| Alyona Golovina | product analyst: audience research, usefulness metrics |
+| Arina Shuklina | designer: bot dialogue interface, mock-ups, presentation |

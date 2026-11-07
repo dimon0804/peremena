@@ -28,6 +28,7 @@ from .. import keyboards as kb
 from ..core import ctx
 from ..db import session
 from ..demo_ids import is_demo
+from ..integrations.journals.export import safe_cell
 from ..models import (
     Campaign, ClassChat, Poll, PollTarget, Region, RegionCampaign, RegionMember, School, SchoolMember, User,
 )
@@ -388,10 +389,8 @@ def render_summary_text(d: dict) -> str:
 
 
 def _csv_cell(value):
-    """Защита от CSV-инъекции: ячейку, которую Excel принял бы за формулу, начинаем с апострофа."""
-    if isinstance(value, str) and value and value[0] in "=+-@\t\r":
-        return "'" + value
-    return value
+    """Защита от CSV-инъекции — та же, что у выгрузок в журнал (ловит и ведущие пробелы)."""
+    return safe_cell(value)
 
 
 def summary_csv(d: dict) -> bytes:

@@ -31,6 +31,12 @@ from ..models import ClassChat, Meeting, MeetingSlot, User
 from ..timeutil import WEEKDAYS, local_now, to_local, to_utc, zone
 from . import chats
 
+DAY_START, DAY_END = 8, 21  # как у напоминаний сборов: родителям пишем только днём
+
+
+def _is_daytime(tz: str) -> bool:
+    return DAY_START <= local_now(tz).hour < DAY_END
+
 log = logging.getLogger(__name__)
 
 FORMATS = {"office": "очно", "call": "звонок"}
@@ -390,12 +396,15 @@ async def remind_tick() -> int:
                 m = await get(slot.meeting_id)
                 if m is None or m.closed:
                     continue
-                if not await c.kv.add_once(f"mtr:{slot.id}", ttl=15 * 60):
-                    continue
                 if m.teacher_id not in tz_cache:
                     t = await _teacher(m)
                     tz_cache[m.teacher_id] = (t.tz if t else c.settings.default_tz, t.display_name if t else "")
                 tz, tname = tz_cache[m.teacher_id]
+                # ночью родителям не пишем: на встречу в 9:00 напомним в 8:00, а не в 7:00
+                if not _is_daytime(tz):
+                    continue
+                if not await c.kv.add_once(f"mtr:{slot.id}", ttl=15 * 60):
+                    continue
                 if await c.safe_send(user_id=slot.user_id, text=reminder_text(m, slot, tz, tname),
                                      attachments=kb.kb_list(parent_buttons(m))):
                     sent += 1

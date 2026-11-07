@@ -396,9 +396,28 @@ def test_demo_global_limit_and_cleanup_without_token(web):
 
     with web(DEMO_MAX_SANDBOXES="1") as client:
         assert client.post("/api/demo/start", headers=H).status_code == 200
-        assert client.post("/api/demo/start", headers=H).status_code == 503
+        assert client.post("/api/demo/start", headers=H).status_code == 503  # свежую песочницу не отнимаем
         jobs = {j.id for j in maintenance_scheduler(client.app.state.ctx).get_jobs()}
         assert {"demo", "sessions"} <= jobs
+
+
+def test_demo_full_evicts_oldest_sandbox(web):
+    """Все песочницы заняты — самая старая (старше получаса) уступает место, а не держит демо сутки."""
+    from datetime import timedelta
+
+    from sqlalchemy import update
+
+    from app.db import session, utcnow
+    from app.models import DemoSandbox
+
+    async def age():
+        async with session() as s:
+            await s.execute(update(DemoSandbox).values(created_at=utcnow() - timedelta(hours=1)))
+
+    with web(DEMO_MAX_SANDBOXES="1") as client:
+        assert client.post("/api/demo/start", headers=H).status_code == 200
+        client.portal.call(age)
+        assert client.post("/api/demo/start", headers=H).status_code == 200
 
 
 # ---------------------------------------------------------------- заголовки, документация, размер запроса
@@ -408,6 +427,7 @@ def test_security_headers_and_docs_only_in_dev(web):
             r = client.get(path)
             assert r.headers["x-content-type-options"] == "nosniff", path
             assert r.headers["referrer-policy"] == "strict-origin-when-cross-origin", path
+            assert r.headers["strict-transport-security"] == "max-age=31536000", path
             csp = r.headers["content-security-policy"]
             assert "script-src 'self' https://st.max.ru" in csp, path
             # мини-приложение открывается внутри MAX — его во фрейм пускаем, сайт — нет
@@ -418,6 +438,7 @@ def test_security_headers_and_docs_only_in_dev(web):
                           headers={**H, "content-type": "application/json"})
         assert big.status_code == 413
     with web() as client:  # разработка
+        assert "strict-transport-security" not in client.get("/").headers  # без https HSTS не нужен
         assert client.get("/api/docs").status_code == 200
         assert "/api/me" in client.get("/openapi.json").json()["paths"]
 

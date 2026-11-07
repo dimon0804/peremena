@@ -21,7 +21,7 @@ from . import __version__, db, metrics, updates
 from .bot.common import COMMANDS
 from .bot.router import handle_update
 from .config import BASE_DIR, get_settings
-from .core import Ctx, set_ctx
+from .core import Ctx, ctx, set_ctx
 from .max_api import MaxApiError, MaxClient
 from .state import make_kv
 from .events import EventQueue
@@ -203,6 +203,13 @@ def _revalidate(path: str) -> bool:
                                              or path in ("/login", "/app"))
 
 
+def _hsts() -> bool:
+    try:
+        return (ctx().settings.public_url or "").startswith("https://")
+    except Exception:  # контекст ещё не поднят (тесты отдельных слоёв)
+        return False
+
+
 class HttpPolicy:
     """Общие правила HTTP одним ASGI-слоем (раньше — три @app.middleware("http"); каждый такой слой — отдельная
     задача и поток тела ответа, на сотнях запросов в секунду это заметная доля процессора):
@@ -230,6 +237,8 @@ class HttpPolicy:
         if length > BODY_LIMIT and path not in OWN_LIMIT:
             return await JSONResponse({"detail": "Слишком большой запрос"}, status_code=413)(scope, receive, send)
         extra = [(b"x-content-type-options", b"nosniff"), (b"referrer-policy", b"strict-origin-when-cross-origin")]
+        if _hsts():  # сайт открыт по https — браузер больше не пойдёт на него по http
+            extra.append((b"strict-transport-security", b"max-age=31536000"))
         if path not in DEV_ONLY:
             csp = CSP if path == "/app" or path.startswith("/app/") else CSP + "; frame-ancestors 'self'"
             extra.append((b"content-security-policy", csp.encode()))

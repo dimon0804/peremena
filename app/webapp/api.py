@@ -25,6 +25,7 @@ from ..services import (
 )
 from ..timeutil import fmt_dt, local_now, parse_deadline, preset_deadline, to_local, to_utc, utcnow, zone
 from ..demo_ids import is_demo
+from ..integrations.journals.export import safe_cell
 from .auth import InitDataError, validate_init_data
 
 router = APIRouter(prefix="/api")
@@ -281,10 +282,8 @@ def export_url(p) -> str:
 
 
 def _csv_cell(value):
-    """Защита от CSV-инъекции: ячейку, которую Excel принял бы за формулу, начинаем с апострофа."""
-    if isinstance(value, str) and value and value[0] in "=+-@\t\r":
-        return "'" + value
-    return value
+    """Защита от CSV-инъекции — та же, что у выгрузок в журнал (ловит и ведущие пробелы)."""
+    return safe_cell(value)
 
 
 @router.get("/polls/{pid}/export.csv")

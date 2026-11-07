@@ -152,8 +152,9 @@ async def _meeting_of(slot_id: int) -> int:
 
 
 # ====================================================================== напоминание за 2 часа
-def test_reminder_two_hours_before_once(env):
+def test_reminder_two_hours_before_once(env, monkeypatch):
     loop, api, c = env
+    monkeypatch.setattr(meetings, "_is_daytime", lambda tz: True)
     connect(loop)
     m = make_meeting(loop, [future(5), future(6)])
     run(loop, meetings.book(m.slots[0].id, P1))
@@ -255,3 +256,22 @@ def test_forget_and_retention(env):
     assert out["meetings"] == 1 and run(loop, meetings.get(old_id)) is None and run(loop, meetings.get(m.id))
     res = run(loop, retention.forget(P1))
     assert res["meetings"] == 1 and not any(x.user_id for x in slots(loop, m.id))
+
+
+def test_meeting_reminder_waits_for_morning(env, monkeypatch):
+    """Встреча в 9:00 — напоминание не в 7:00, а когда родителям уже можно писать."""
+    loop, api, c = env
+    connect(loop)
+    m = make_meeting(loop, [future(1.5)])
+    run(loop, meetings.book(m.slots[0].id, P1))
+    run(loop, _unremind(m.slots[0].id))
+    monkeypatch.setattr(meetings, "_is_daytime", lambda tz: False)
+    assert run(loop, meetings.remind_tick()) == 0
+    assert not any("Напоминаю" in t for t in api.texts_to(user_id=P1))
+    monkeypatch.setattr(meetings, "_is_daytime", lambda tz: True)
+    assert run(loop, meetings.remind_tick()) == 1
+
+
+async def _unremind(slot_id):
+    async with session() as s:
+        (await s.get(MeetingSlot, slot_id)).reminded = False

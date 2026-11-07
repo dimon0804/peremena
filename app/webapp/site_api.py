@@ -47,7 +47,7 @@ async def auth_start(request: Request, response: Response):
         raise HTTPException(429, "Слишком много попыток входа — попробуйте позже")
     nonce = websession.new_nonce(request.cookies.get(websession.LOGIN_COOKIE))
     response.set_cookie(websession.LOGIN_COOKIE, nonce, max_age=websession.CODE_TTL, httponly=True, samesite="strict",
-                        secure=request.url.scheme == "https", path="/api/auth")
+                        secure=_secure(request), path="/api/auth")
     code = await websession.start_login(request.headers.get("user-agent", ""), nonce)
     pin = await websession.make_pin(code)
     link = c.start_link(f"login_{code}")
@@ -59,7 +59,7 @@ async def auth_start(request: Request, response: Response):
 async def auth_status(request: Request, response: Response, code: str = Query(max_length=64)):
     status, token = await websession.finish_login(code, request.cookies.get(websession.LOGIN_COOKIE))
     if token:
-        secure = request.url.scheme == "https"
+        secure = _secure(request)
         response.set_cookie(websession.COOKIE, token, max_age=websession.SESSION_DAYS * 86400,
                             httponly=True, samesite="lax", secure=secure, path="/")
     return {"status": status}
@@ -73,9 +73,14 @@ async def auth_session(request: Request):
             "demo": bool(user and is_demo(user.user_id)), "demo_enabled": ctx().settings.demo_enabled}
 
 
+def _secure(request: Request) -> bool:
+    """Secure у cookie: за прокси схема может прийти как http, поэтому смотрим и на публичный адрес."""
+    return request.url.scheme == "https" or (ctx().settings.public_url or "").startswith("https://")
+
+
 def _set_session(request: Request, response: Response, token: str, max_age: int) -> None:
     response.set_cookie(websession.COOKIE, token, max_age=max_age, httponly=True, samesite="lax",
-                        secure=request.url.scheme == "https", path="/")
+                        secure=_secure(request), path="/")
 
 
 def _client_ip(request: Request) -> str:
@@ -98,7 +103,8 @@ async def demo_start(request: Request, response: Response):
         raise HTTPException(429, "Слишком много демо-песочниц с одного адреса — попробуйте через час")
     if await demo.live_count() >= c.settings.demo_max_sandboxes:
         await demo.cleanup()  # сначала убираем просроченные
-        if await demo.live_count() >= c.settings.demo_max_sandboxes:
+        # потом уступаем место самой старой: иначе кто-то может занять все песочницы на сутки
+        if await demo.live_count() >= c.settings.demo_max_sandboxes and not await demo.evict_oldest():
             raise HTTPException(503, "Демо сейчас переполнено — попробуйте чуть позже")
     await c.kv.set(key, used + 1, 3600)
     await websession.logout(request.cookies.get(websession.COOKIE))

@@ -17,6 +17,7 @@
 """
 from __future__ import annotations
 
+import html
 import logging
 import math
 from datetime import date, datetime, timedelta, timezone
@@ -337,7 +338,7 @@ def retention_lines(r: dict) -> list[str]:
 
 def render(rep: dict, title: str) -> str:
     demo = rep["answer_30"]["demo"] or rep["retention"]["demo"]
-    lines = [f"📈 <b>Метрики пилота · {title}</b>", ""]
+    lines = [f"📈 <b>Метрики пилота · {html.escape(title)}</b>", ""]
     if demo:
         lines += ["⚠️ <i>Посчитано на демо-данных. Это проверка расчёта, а не результат пилота.</i>", ""]
     for key, label in (("answer_7", "7 дней"), ("answer_30", "30 дней")):

@@ -15,7 +15,7 @@ from datetime import timedelta
 from sqlalchemy import func, select
 
 from ..db import session, utcnow
-from ..models import Metric, Poll, PollTarget
+from ..models import FaqEntry, Metric, Poll, PollTarget
 
 MINUTES = {
     "faq_answer": 2.0,
@@ -86,7 +86,9 @@ async def pilot(teacher_id: int) -> dict:
             select(Metric.kind, func.count(Metric.id)).where(
                 Metric.teacher_id == teacher_id, Metric.kind.in_(("faq_answer", "question_forwarded")))
             .group_by(Metric.kind))).all())
-    by_bot = int(kinds.get("faq_answer", 0))
+        misses = await s.scalar(select(func.coalesce(func.sum(FaqEntry.misses), 0)).where(FaqEntry.teacher_id == teacher_id))
+    # ответ, на который нажали «Это не то», ботом не закрыт: такой вопрос потом уходит учителю
+    by_bot = max(int(kinds.get("faq_answer", 0)) - int(misses or 0), 0)
     forwarded = int(kinds.get("question_forwarded", 0))
     asked = by_bot + forwarded
     from . import metrics

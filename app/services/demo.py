@@ -347,6 +347,17 @@ async def cleanup(ttl_hours: int = TTL_HOURS) -> int:
     return len(old)
 
 
+async def evict_oldest(min_age_minutes: int = 30) -> bool:
+    """Освобождает место под новую песочницу: удаляет самую старую, если ей больше получаса."""
+    async with session() as s:
+        sid = await s.scalar(select(DemoSandbox.id).where(
+            DemoSandbox.created_at < utcnow() - timedelta(minutes=min_age_minutes)).order_by(DemoSandbox.created_at).limit(1))
+    if sid is None:
+        return False
+    await delete_sandbox(sid)
+    return True
+
+
 def not_demo_chat(col):
     """Условие «чат не из демо» для публичной статистики (реальные id чатов — около −10¹³)."""
     return ~col.between(-(DEMO_BASE + DEMO_SPAN), -DEMO_BASE)
@@ -356,4 +367,4 @@ def not_demo_user(col):
     return ~col.between(DEMO_BASE, DEMO_BASE + DEMO_SPAN)
 
 
-__all__ = ["create_sandbox", "sandbox_for", "delete_sandbox", "cleanup", "not_demo_chat", "not_demo_user"]
+__all__ = ["create_sandbox", "sandbox_for", "delete_sandbox", "cleanup", "evict_oldest", "not_demo_chat", "not_demo_user"]

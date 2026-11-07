@@ -85,7 +85,7 @@ async def run_command(uid: int, cmd: str, rest: str) -> None:
         "start": show_start, "help": show_start, "poll": start_poll, "status": show_status_list,
         "faq": show_faq, "add": start_faq_add, "quiet": show_quiet, "morning": send_morning,
         "stats": show_stats, "chats": show_chats, "app": show_app, "my": show_my_polls,
-        "cancel": cancel, "forget": ask_forget, "absent": absence.show_list, "board": staff.show_board, "invite": staff.start_invite, "school": staff.show_school,
+        "cancel": cancel, "forget": ask_forget, "delete": show_delete, "absent": absence.show_list, "board": staff.show_board, "invite": staff.start_invite, "school": staff.show_school,
     }
     await metrics.touch(uid, staff_only=True)  # учитель открыл бота по делу — активный день для удержания
     if cmd == "start" and rest and await staff.handle_start_payload(uid, rest):
@@ -181,6 +181,17 @@ async def ask_forget(uid: int) -> None:
                     "и ваши сообщения во «входящих» учителя. Ответы на закрытых сборах обезличу — учитель увидит, "
                     "что ответ был, но не чей. Ответы на открытых сборах останутся до их закрытия.",
                [[kb.cb("🗑 Да, удалить", "fg:yes"), kb.cb("Нет", "fg:no")]])
+
+
+async def show_delete(uid: int) -> None:
+    """/удалить из ТЗ: учитель просматривает и удаляет всё, что знает бот; остальным — удаление своих данных."""
+    if not (await school.roles(uid)).is_staff:
+        await ask_forget(uid)
+        return
+    await send(uid, "🗑 <b>Что удалить?</b>\n\nКарточки справочника и материалы полки удаляются по одной "
+                    "кнопкой «Удалить» внутри. «Мои данные» стирают то, что бот знает о вас лично.",
+               [[kb.cb("📖 Справочник", "m:faq"), kb.cb("🗂 Полка", "m:shelf")],
+                [kb.cb("🗑 Мои данные", "m:forget")]])
 
 
 async def do_forget(uid: int) -> None:
@@ -720,6 +731,8 @@ async def forward_question(uid: int, chat_id: int | None = None) -> None:
         await send(uid, "Напишите вопрос ещё раз — я передам его учителю.")
         return
     chat_ids = q.get("chats") or []
+    if chat_id is not None and chat_id not in chat_ids:
+        chat_id = None  # передать можно только учителю своего класса
     if chat_id is None:
         teachers: dict[int, int] = {}
         for cid in chat_ids:

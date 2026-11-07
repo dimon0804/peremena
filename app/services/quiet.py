@@ -12,7 +12,7 @@ import logging
 import time
 from datetime import datetime, timedelta
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import func, or_, select, update
 
 from .. import keyboards as kb
 from ..core import ctx
@@ -271,6 +271,9 @@ def digest_since(teacher: User, now: datetime | None = None):
     return to_utc(max(end, now - timedelta(hours=96)))
 
 
+PEOPLE_KINDS = ("message", "question", "chat_question", "clarify", "not_that")
+
+
 async def deliver_digest(teacher: User, include_empty: bool = False) -> str:
     """Собирает и отправляет сводку: "sent" — ушла, "empty" — слать нечего, "failed" — не доставлена."""
     built = await build_digest(teacher, include_empty)
@@ -283,7 +286,11 @@ async def deliver_digest(teacher: User, include_empty: bool = False) -> str:
     if shown_ids:
         async with session() as s:
             await s.execute(update(InboxItem).where(InboxItem.id.in_(shown_ids)).values(delivered=True))
-        await stats.add(teacher.user_id, "quiet_held", len(shown_ids))
+            # в «сэкономленное время» идут только сообщения людей, а не отчёты и подсказки самого бота
+            held = await s.scalar(select(func.count(InboxItem.id)).where(
+                InboxItem.id.in_(shown_ids), InboxItem.kind.in_(PEOPLE_KINDS)))
+        if held:
+            await stats.add(teacher.user_id, "quiet_held", held)
     return "sent"
 
 

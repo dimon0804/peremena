@@ -111,7 +111,7 @@ async def show_list(uid: int) -> None:
 
 
 # ---------------------------------------------------------------- кнопки ab:*
-async def on_cb(cid: str, uid: int, user: dict, tail: str) -> None:
+async def on_cb(cid: str, uid: int, user: dict, tail: str, src_chat: int | None = None) -> None:
     parts = tail.split(":")
     action = parts[0]
     if action == "start":
@@ -130,6 +130,10 @@ async def on_cb(cid: str, uid: int, user: dict, tail: str) -> None:
         chat_id, author, key = int(parts[1]), int(parts[2]), parts[3]
         if uid != author:
             await ack(cid, "Эту кнопку может нажать только автор сообщения")
+            return
+        # кнопка живёт под сообщением в чате класса: chat_id из payload должен с ним совпадать
+        if src_chat != chat_id and not (src_chat is None and await chats.is_present(chat_id, uid)):
+            await ack(cid, "Эта кнопка не для этого чата")
             return
         await chats.touch_member(chat_id, user)
         day = _day(key, await _tz_of(chat_id))

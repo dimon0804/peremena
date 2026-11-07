@@ -21,7 +21,7 @@ from ..core import ctx
 from ..db import session, utcnow
 from . import meetings, metrics
 from ..models import (Absence, InboxItem, Lesson, Member, OpenQuestion, Poll, PollTarget, QuestionTiming,
-                      TeacherActivity, User)
+                      TeacherActivity, User, WebSession)
 
 log = logging.getLogger(__name__)
 
@@ -74,6 +74,7 @@ async def forget(user_id: int) -> dict:
             # user_id уникален в пределах сбора — отрицательный id строки не совпадёт ни с кем из живых
             t.user_id, t.name, t.message_id = -t.id, FORGOTTEN_NAME, None
         out["answers"] = len(closed)
+        out["sessions"] = (await s.execute(delete(WebSession).where(WebSession.user_id == user_id))).rowcount
         u = await s.get(User, user_id)
         if u:
             u.first_name, u.last_name, u.username = "", None, None

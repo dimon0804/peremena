@@ -500,3 +500,5 @@ section { padding-block: clamp(64px, 10vw, 128px); position: relative; }
   .perch { transition: transform .2s cubic-bezier(0.23, 1, 0.32, 1); }
   .quest-slot:hover .perch { transform: translateY(-6px); }
 }
+.max-msg .mention { color: #7b5cff; font-weight: 600; }
+.max-dark .max-msg .mention { color: #b9a6ff; }

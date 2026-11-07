@@ -41,8 +41,8 @@
       if (r.ok) {
         const s = await r.json();
         if (s.bot_link) $$("[data-bot-link]").forEach((a) => (a.href = s.bot_link));
-        // счётчик показываем, когда есть чем гордиться — пустые нули на главной не нужны
-        if (s.classes > 0 || s.minutes_saved > 0) {
+        // счётчик показываем, когда подключились живые классы, а не только наш тестовый чат
+        if (s.classes >= 3 && s.polls >= 5) {
           const live = $("#live");
           live.hidden = false;
           // пока сэкономлено меньше двух часов, честнее показывать минуты, чем «0 часов»

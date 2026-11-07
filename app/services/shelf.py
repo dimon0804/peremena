@@ -111,14 +111,23 @@ async def visible_materials(user_id: int, teacher_view: bool) -> list[Material]:
         return list((await s.scalars(select(Material).where(Material.chat_id.in_(chat_ids)))).all())
 
 
-def _doc_text(m: Material) -> str:
-    return f"{m.title} {m.filename.rsplit('.', 1)[0].replace('_', ' ')}"
+MONTHS = ("январь января", "февраль февраля", "март марта", "апрель апреля", "май мая", "июнь июня",
+          "июль июля", "август августа", "сентябрь сентября", "октябрь октября", "ноябрь ноября", "декабрь декабря")
+
+
+def _doc_text(m: Material, chat_title: str = "") -> str:
+    # кроме подписи и имени файла ищем по классу и месяцу: «памятка 9Б», «что отправляли в октябре»
+    when = m.sent_at or m.created_at
+    month = MONTHS[when.month - 1] if when else ""
+    return f"{m.title} {m.filename.rsplit('.', 1)[0].replace('_', ' ')} {chat_title} {month}"
 
 
 async def find(user_id: int, query: str, teacher_view: bool, limit: int = 5) -> list[search.Hit[Material]]:
     items = await visible_materials(user_id, teacher_view)
+    titles = await chat_titles([m.chat_id for m in items])
     q = query.strip().lstrip("#")
-    hits = search.rank(q, items, lambda m: m.tags, _doc_text, limit=limit, min_score=0.25)
+    hits = search.rank(q, items, lambda m: m.tags, lambda m: _doc_text(m, titles.get(m.chat_id) or ""),
+                       limit=limit, min_score=0.25)
     if not hits:
         # подстрока в имени файла — на случай «Памятка_ПБ.pdf»
         ql = search.normalize(q)

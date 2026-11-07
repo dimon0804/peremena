@@ -133,7 +133,7 @@ async def sync_members(chat_id: int) -> int:
             m.present = True
         for uid, m in existing.items():
             if uid not in seen:
-                m.present = False
+                m.present, m.child_name = False, None  # ушёл из класса — имя ребёнка больше не нужно
         chat = await s.get(ClassChat, chat_id)
         if chat:
             chat.members_synced_at = utcnow()
@@ -156,6 +156,8 @@ async def touch_member(chat_id: int, user: dict, present: bool = True) -> None:
         m.name = display_name(user.get("first_name") or user.get("name"), user.get("last_name"))
         m.is_bot = bool(user.get("is_bot"))
         m.present = present
+        if not present:
+            m.child_name = None  # ушёл из класса — имя ребёнка больше не нужно
 
 
 async def is_present(chat_id: int, user_id: int) -> bool:

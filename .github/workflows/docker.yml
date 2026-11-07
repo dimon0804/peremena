@@ -11,9 +11,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+# по умолчанию только чтение; запись выдаётся одной джобе, которая публикует образ и релиз
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 env:
   IMAGE: ghcr.io/${{ github.repository }}
@@ -56,6 +56,9 @@ jobs:
     needs: test
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
     env:
       HAS_DOCKERHUB: ${{ secrets.DOCKERHUB_TOKEN != '' }}
     steps:
