@@ -466,6 +466,7 @@ async def metrics_endpoint(request: Request):
 SITE_DIR = BASE_DIR / "site"
 # шрифты сайта лежат рядом (site/fonts); в Windows и slim-образах .woff2 может не быть в таблице типов
 mimetypes.add_type("font/woff2", ".woff2")
+mimetypes.add_type("image/webp", ".webp")  # в slim-образе нет /etc/mime.types: без этого портреты уходят как text/plain
 
 
 @app.get("/login", include_in_schema=False)

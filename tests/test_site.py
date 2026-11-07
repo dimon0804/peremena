@@ -110,3 +110,19 @@ def test_login_by_pin_without_camera(env):
     # неизвестный код — понятный ответ, а не поиск по справочнику
     loop.run_until_complete(handle_update(msg_update(TEACHER, "/login 000000", mid="p3")))
     assert "нет или он устарел" in api.texts_to(user_id=TEACHER["user_id"])[-1]
+
+
+def test_team_portraits_are_served_as_webp():
+    """В slim-образе Python не знает .webp; с nosniff браузер не обязан показывать картинку с типом text/plain."""
+    from starlette.applications import Starlette
+    from starlette.routing import Mount
+    from starlette.staticfiles import StaticFiles
+
+    from app import main  # регистрирует типы файлов сайта
+
+    site = Starlette(routes=[Mount("/", StaticFiles(directory=main.SITE_DIR, html=True))])
+    with TestClient(site) as client:
+        r = client.get("/img/team/doviryak.webp")
+        assert r.status_code == 200 and r.headers["content-type"] == "image/webp"
+        assert client.get("/img/chars/teacher.png").headers["content-type"] == "image/png"
+        assert client.get("/buddies.js").headers["content-type"].startswith("text/javascript")
