@@ -95,11 +95,11 @@
         </figure>
       </div>
     </div>
-    <!-- школьный коридор: персонажи стоят на бегущей строке, на клик отвечают репликой -->
+    <!-- школьный коридор на бегущей строке: двое стоят по краям, двое гуляют между ними; на клик отвечают репликой -->
     <div class="wrap squad">
       <button type="button" class="buddy" data-buddy="teacher" data-turn="0.38" data-say="Сбор запущен, считать буду не я|Ответили 25 из 27|Двоим бот напомнит сам" aria-label="Классная руководительница: сказать реплику"><span class="buddy-say" aria-live="polite"></span><canvas aria-hidden="true"></canvas></button>
-      <button type="button" class="buddy" data-buddy="chemist" data-turn="0.2" data-say="Домашку отправил в 9Б|Лабораторная в четверг|Халаты не забываем" aria-label="Учитель химии: сказать реплику"><span class="buddy-say" aria-live="polite"></span><canvas aria-hidden="true"></canvas></button>
-      <button type="button" class="buddy" data-buddy="student" data-turn="-0.2" data-say="Что задали по алгебре?|Бот уже ответил|Ура, перемена!" aria-label="Ученик: сказать реплику"><span class="buddy-say" aria-live="polite"></span><canvas aria-hidden="true"></canvas></button>
+      <button type="button" class="buddy" data-walk data-buddy="chemist" data-turn="0.2" data-say="Домашку отправил в 9Б|Лабораторная в четверг|Халаты не забываем" aria-label="Учитель химии: сказать реплику"><span class="buddy-say" aria-live="polite"></span><canvas aria-hidden="true"></canvas></button>
+      <button type="button" class="buddy" data-walk data-buddy="student" data-turn="-0.2" data-say="Что задали по алгебре?|Бот уже ответил|Ура, перемена!" aria-label="Ученик: сказать реплику"><span class="buddy-say" aria-live="polite"></span><canvas aria-hidden="true"></canvas></button>
       <button type="button" class="buddy" data-buddy="coder" data-turn="-0.38" data-say="Сводка по параллели готова|Расписание из журнала загружено|Ставить ничего не надо, всё в MAX" aria-label="Завуч с ноутбуком: сказать реплику"><span class="buddy-say" aria-live="polite"></span><canvas aria-hidden="true"></canvas></button>
     </div>
   </section>
@@ -300,7 +300,7 @@
   </section>
 
   <!-- что дальше: модули, которые команда делает сейчас.
-       Как править: одна карточка = один <li class="quest">. Номер — в .quest-no, название — в <h3>, описание — в <p>.
+       Как править: одна карточка = один <li class="quest-slot"> с персонажем над карточкой <div class="quest">. Номер — в .quest-no, название — в <h3>, описание — в <p>.
        Статус — в .quest-status: data-status="wip" (в работе) или "ready" (готово, карточка подсвечивается), текст внутри меняется вручную.
        Цифры сюда не пишем, пока их нет в работающем боте. -->
   <section class="next s-black" id="next">
@@ -310,29 +310,41 @@
         <p class="lead">Четыре модуля, которые мы добавили во втором туре. Все уже работают в боте и есть в демо.</p>
       </div>
       <ol class="quests">
-        <li class="quest" data-feature="journals">
+        <li class="quest-slot">
+          <button type="button" class="buddy perch" data-buddy="coder" data-turn="0.4" data-say="Выгрузку забрал, домашка уже на доске|Пропуски отдал обратно таблицей" aria-label="Завуч с ноутбуком: сказать реплику"><span class="buddy-say" aria-live="polite"></span><canvas aria-hidden="true"></canvas></button>
+          <div class="quest" data-feature="journals">
           <span class="quest-no" aria-hidden="true">01</span>
           <h3>Электронные журналы</h3>
           <p>Учитель присылает боту выгрузку из журнала, и домашка ложится на доску, а расписание — в ответы на «какие уроки завтра». Пропуски и итоги сборов уходят обратно таблицей.</p>
           <span class="quest-status" data-status="ready">готово</span>
+        </div>
         </li>
-        <li class="quest" data-feature="consultations">
+        <li class="quest-slot">
+          <button type="button" class="buddy perch" data-buddy="teacher" data-turn="0.35" data-say="Свободно: среда, 15:00|Двое на одно время не запишутся" aria-label="Классная руководительница: сказать реплику"><span class="buddy-say" aria-live="polite"></span><canvas aria-hidden="true"></canvas></button>
+          <div class="quest" data-feature="consultations">
           <span class="quest-no" aria-hidden="true">02</span>
           <h3>Запись на консультации</h3>
           <p>Учитель отмечает свободные окна, а родитель выбирает время кнопкой в боте. Два человека на одно время не запишутся, и список встреч всегда перед глазами.</p>
           <span class="quest-status" data-status="ready">готово</span>
+        </div>
         </li>
-        <li class="quest" data-feature="region">
+        <li class="quest-slot">
+          <button type="button" class="buddy perch" data-buddy="chemist" data-turn="-0.3" data-say="Шаблон взял из библиотеки|Сбор пришёл от управления" aria-label="Учитель химии: сказать реплику"><span class="buddy-say" aria-live="polite"></span><canvas aria-hidden="true"></canvas></button>
+          <div class="quest" data-feature="region">
           <span class="quest-no" aria-hidden="true">03</span>
           <h3>Уровень региона</h3>
           <p>Управление образования запускает сбор во все подключённые школы и видит итог по школам и классам, без имён родителей. Удачные шаблоны сборов и ответов учителя берут из общей библиотеки.</p>
           <span class="quest-status" data-status="ready">готово</span>
+        </div>
         </li>
-        <li class="quest" data-feature="metrics">
+        <li class="quest-slot">
+          <button type="button" class="buddy perch" data-buddy="student" data-turn="-0.35" data-say="Ответ пришёл за пару секунд|Учительнице больше не пишут в 23:00" aria-label="Ученик: сказать реплику"><span class="buddy-say" aria-live="polite"></span><canvas aria-hidden="true"></canvas></button>
+          <div class="quest" data-feature="metrics">
           <span class="quest-no" aria-hidden="true">04</span>
           <h3>Метрики</h3>
           <p>Сколько родитель ждёт ответа и сколько учителей пользуются ботом через месяц. Бот считает это сам: учитель видит своё время ответа, завуч — по школе.</p>
           <span class="quest-status" data-status="ready">готово</span>
+        </div>
         </li>
       </ol>
     </div>

@@ -465,9 +465,10 @@ section { padding-block: clamp(64px, 10vw, 128px); position: relative; }
 /* главный экран: персонажи стоят на бегущей строке, как в школьном коридоре */
 .squad { position: relative; display: flex; justify-content: space-between; align-items: flex-end; gap: 12px;
   margin-top: clamp(40px, 6vw, 72px); padding-inline: clamp(8px, 4vw, 64px); }
-.squad .buddy:nth-child(2) { margin-right: auto; margin-left: clamp(8px, 6vw, 96px); }
-.squad .buddy:nth-child(3) { margin-left: auto; margin-right: clamp(8px, 6vw, 96px); }
-@media (max-width: 559px) { .squad { padding-inline: 4px; } .squad .buddy:nth-child(2), .squad .buddy:nth-child(3) { margin-inline: 0; }
+/* гуляющие едут по коридору через transform из buddies.js; до старта скрипта стоят у левого края дорожки */
+.squad .buddy[data-walk] { position: absolute; left: 0; bottom: 0; z-index: 2; }
+.squad .buddy[data-walk] + .buddy[data-walk] { z-index: 3; }
+@media (max-width: 559px) { .squad { padding-inline: 4px; }
   .buddy-say { max-width: 150px; font-size: 13px; } .squad .buddy:first-child .buddy-say { left: 0; transform: translate(0, 6px); }
   .squad .buddy:first-child.is-talking .buddy-say { transform: none; }
   .squad .buddy:first-child .buddy-say::after { left: 20px; }
@@ -484,3 +485,13 @@ section { padding-block: clamp(64px, 10vw, 128px); position: relative; }
 @media (min-width: 900px) { .notfound .inner { padding-right: 240px; } .buddy-lost { position: absolute; right: 24px; bottom: 0; margin: 0; } }
 .buddy-login { display: none; }
 @media (min-width: 1100px) { .buddy-login { display: block; position: absolute; left: calc(50% - 280px - 210px); top: 180px; width: 150px; z-index: 1; } }
+
+/* «Что нового»: персонаж сидит на верхнем крае карточки, как на вкладке */
+.quest-slot { display: flex; flex-direction: column; min-width: 0; }
+.quest-slot .quest { flex: 1; }
+.perch { width: clamp(64px, 7vw, 92px); margin: 0 0 -6px 14px; z-index: 1; }
+.quest-slot:nth-child(2n) .perch { align-self: flex-end; margin: 0 64px -6px 0; }
+@media (hover: hover) and (pointer: fine) {
+  .perch { transition: transform .2s cubic-bezier(0.23, 1, 0.32, 1); }
+  .quest-slot:hover .perch { transform: translateY(-6px); }
+}
