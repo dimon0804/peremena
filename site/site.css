@@ -125,7 +125,7 @@ section { padding-block: clamp(64px, 10vw, 128px); position: relative; }
 @media (max-width: 479px) { .top .wrap { gap: 10px; } .top-actions .btn.ghost[data-cabinet] { display: none; } }
 
 /* --- первый экран --- */
-.hero { padding-block: clamp(48px, 8vw, 104px) clamp(64px, 9vw, 120px); overflow: hidden; }
+.hero { padding-block: clamp(48px, 8vw, 104px) 0; overflow: hidden; }
 .hero-grid { position: relative; display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr); gap: clamp(32px, 5vw, 72px); align-items: center; }
 .hero h1 { font-size: clamp(42px, 6.6vw, 82px); line-height: .98; letter-spacing: -.025em; margin-bottom: 28px; }
 .hero h1 .hl { display: inline-block; color: var(--accent); font: 700 1.12em/.9 var(--pixel); text-transform: uppercase; letter-spacing: .01em;
@@ -364,8 +364,12 @@ section { padding-block: clamp(64px, 10vw, 128px); position: relative; }
 .team li { display: flex; flex-direction: column; gap: 2px; position: relative; }
 .team b { font-weight: 700; margin-top: 14px; }
 .team li > span:last-child { color: var(--muted); font-size: 15px; line-height: 1.45; }
-.ava { aspect-ratio: 4 / 5; background: var(--violet); color: #fff; display: grid; place-items: center; font: 700 clamp(34px, 4.6vw, 56px)/1 var(--pixel);
-  letter-spacing: .04em; -webkit-font-smoothing: none; box-shadow: inset 0 0 0 2px #b78bff, inset 0 -8px 0 rgba(12, 0, 23, .25); }
+/* портреты команды — пиксельные персонажи на родном чёрном фоне, как экран выбора героя */
+.ava { aspect-ratio: 4 / 5; background: #000; display: block; position: relative; overflow: hidden;
+  box-shadow: 0 0 0 2px #b78bff; transition: transform .26s cubic-bezier(0.23, 1, 0.32, 1); will-change: transform; }
+.ava img { display: block; width: 100%; height: 100%; object-fit: cover; transition: transform .26s cubic-bezier(0.23, 1, 0.32, 1); }
+.ava::after { content: ""; position: absolute; inset: 0; box-shadow: inset 0 0 0 2px #b78bff, inset 0 -10px 0 rgba(135, 66, 238, .55); pointer-events: none; }
+.captain .ava::after { box-shadow: inset 0 0 0 2px var(--magenta), inset 0 -10px 0 rgba(221, 66, 238, .6); }
 .ribbon { position: relative; margin: -42px -6px 0; background: var(--magenta); color: #1a0526; font-size: 13px; font-weight: 700;
   text-align: center; padding: 6px 4px; box-shadow: 0 0 0 2px #7a0f99; }
 .captain .ribbon + b { margin-top: 18px; }
@@ -438,3 +442,45 @@ section { padding-block: clamp(64px, 10vw, 128px); position: relative; }
   .btn { transition: background-color .15s ease; }
   .btn:active { transform: none; }
 }
+
+/* --- пиксельные персонажи в 3D (buddies.js) --- */
+.buddy { position: relative; display: block; flex: none; padding: 0; border: 0; background: none; color: inherit; cursor: pointer;
+  width: clamp(72px, 11vw, 150px); aspect-ratio: 5 / 8; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+.buddy canvas { display: block; width: 100%; height: 100%; }
+/* на ночном фоне контур фигурки сливается с ним — лёгкий ореол отделяет её */
+.s-black .buddy canvas { filter: drop-shadow(0 0 1px rgba(216, 180, 254, .55)) drop-shadow(0 0 10px rgba(135, 66, 238, .35)); }
+.buddy:focus-visible { outline: 3px solid var(--focus); outline-offset: 4px; }
+/* реплика: пиксельное облачко над головой */
+.buddy-say { position: absolute; left: 50%; bottom: calc(100% - 4px); z-index: 2; width: max-content; max-width: 210px;
+  padding: 8px 12px 9px; background: #fff; color: #0b0614; font: 700 14px/1.3 var(--font); text-align: center; white-space: normal;
+  box-shadow: 0 0 0 2px #0b0614, 0 4px 0 2px #0b0614; pointer-events: none;
+  opacity: 0; transform: translate(-50%, 6px) scale(.96); transform-origin: 50% 100%;
+  transition: opacity .18s cubic-bezier(0.23, 1, 0.32, 1), transform .18s cubic-bezier(0.23, 1, 0.32, 1); }
+.buddy-say::after { content: ""; position: absolute; left: calc(50% - 6px); top: 100%; width: 12px; height: 8px; background: #fff;
+  clip-path: polygon(0 0, 100% 0, 100% 50%, 66% 50%, 66% 100%, 33% 100%, 33% 50%, 0 50%); margin-top: 2px; }
+.buddy-say:empty { display: none; }
+.buddy.is-talking .buddy-say { opacity: 1; transform: translate(-50%, 0) scale(1); }
+@media (prefers-reduced-motion: reduce) { .buddy-say { transition: opacity .18s ease; transform: translate(-50%, 0); } }
+
+/* главный экран: персонажи стоят на бегущей строке, как в школьном коридоре */
+.squad { position: relative; display: flex; justify-content: space-between; align-items: flex-end; gap: 12px;
+  margin-top: clamp(40px, 6vw, 72px); padding-inline: clamp(8px, 4vw, 64px); }
+.squad .buddy:nth-child(2) { margin-right: auto; margin-left: clamp(8px, 6vw, 96px); }
+.squad .buddy:nth-child(3) { margin-left: auto; margin-right: clamp(8px, 6vw, 96px); }
+@media (max-width: 559px) { .squad { padding-inline: 4px; } .squad .buddy:nth-child(2), .squad .buddy:nth-child(3) { margin-inline: 0; }
+  .buddy-say { max-width: 150px; font-size: 13px; } .squad .buddy:first-child .buddy-say { left: 0; transform: translate(0, 6px); }
+  .squad .buddy:first-child.is-talking .buddy-say { transform: none; }
+  .squad .buddy:first-child .buddy-say::after { left: 20px; }
+  .squad .buddy:last-child .buddy-say { left: auto; right: 0; transform: translate(0, 6px); }
+  .squad .buddy:last-child.is-talking .buddy-say { transform: none; }
+  .squad .buddy:last-child .buddy-say::after { left: auto; right: 20px; } }
+
+/* «Как подключить»: учительница указкой показывает на шаги */
+.buddy-guide { width: clamp(120px, 14vw, 180px); margin: 36px 0 0 clamp(0px, 4vw, 48px); }
+@media (max-width: 767px) { .buddy-guide { display: none; } }
+
+/* 404 и вход */
+.buddy-lost { width: clamp(110px, 16vw, 170px); margin: 8px 0 28px; }
+@media (min-width: 900px) { .notfound .inner { padding-right: 240px; } .buddy-lost { position: absolute; right: 24px; bottom: 0; margin: 0; } }
+.buddy-login { display: none; }
+@media (min-width: 1100px) { .buddy-login { display: block; position: absolute; left: calc(50% - 280px - 210px); top: 180px; width: 150px; z-index: 1; } }

@@ -95,6 +95,13 @@
         </figure>
       </div>
     </div>
+    <!-- школьный коридор: персонажи стоят на бегущей строке, на клик отвечают репликой -->
+    <div class="wrap squad">
+      <button type="button" class="buddy" data-buddy="teacher" data-turn="0.38" data-say="Сбор запущен, считать буду не я|Ответили 25 из 27|Двоим бот напомнит сам" aria-label="Классная руководительница: сказать реплику"><span class="buddy-say" aria-live="polite"></span><canvas aria-hidden="true"></canvas></button>
+      <button type="button" class="buddy" data-buddy="chemist" data-turn="0.2" data-say="Домашку отправил в 9Б|Лабораторная в четверг|Халаты не забываем" aria-label="Учитель химии: сказать реплику"><span class="buddy-say" aria-live="polite"></span><canvas aria-hidden="true"></canvas></button>
+      <button type="button" class="buddy" data-buddy="student" data-turn="-0.2" data-say="Что задали по алгебре?|Бот уже ответил|Ура, перемена!" aria-label="Ученик: сказать реплику"><span class="buddy-say" aria-live="polite"></span><canvas aria-hidden="true"></canvas></button>
+      <button type="button" class="buddy" data-buddy="coder" data-turn="-0.38" data-say="Сводка по параллели готова|Расписание из журнала загружено|Ставить ничего не надо, всё в MAX" aria-label="Завуч с ноутбуком: сказать реплику"><span class="buddy-say" aria-live="polite"></span><canvas aria-hidden="true"></canvas></button>
+    </div>
   </section>
 
   <!-- бегущая строка в духе хакатона; слова дублируются, поэтому скрыта от экранных дикторов -->
@@ -257,6 +264,7 @@
       <div>
         <h2 class="caps">Как подключить</h2>
         <p class="lead">Займёт несколько минут. Родителям ничего устанавливать не нужно, бот пишет им в тот же MAX.</p>
+        <button type="button" class="buddy buddy-guide" data-buddy="teacher" data-turn="0.5" data-say="Начните с первого шага|Это займёт пару минут|Родителям ставить ничего не надо" aria-label="Учительница с указкой: сказать реплику"><span class="buddy-say" aria-live="polite"></span><canvas aria-hidden="true"></canvas></button>
       </div>
       <ol class="steps">
         <li><div class="say"><h3>Откройте бота</h3><p>Найдите в MAX бота «Перемена» и нажмите «Начать».</p></div></li>
@@ -338,11 +346,11 @@
         <p class="lead">Мы команда СИЭЛВИ-ДИДЖИТАЛ из РКСИ, Ростов&#8209;на&#8209;Дону. «Перемену» делаем для хакатона «Идея фикс», направление «Арсенал мастера».</p>
       </div>
       <ul class="team">
-        <li class="captain"><span class="ava" aria-hidden="true">ДК</span><span class="ribbon">Капитан команды</span><b>Дарья Карачевцева</b><span>Руководитель проекта</span></li>
-        <li><span class="ava" aria-hidden="true">ДД</span><b>Дмитрий Довиряк</b><span>Архитектура, бэкенд, интеграция с MAX</span></li>
-        <li><span class="ava" aria-hidden="true">НЖ</span><b>Никита Жадан</b><span>База данных, поиск по материалам, «Перекличка»</span></li>
-        <li><span class="ava" aria-hidden="true">АГ</span><b>Алёна Головина</b><span>Исследование аудитории, метрики пользы</span></li>
-        <li><span class="ava" aria-hidden="true">АШ</span><b>Арина Шуклина</b><span>Интерфейс диалогов, макеты, презентация</span></li>
+        <li class="captain"><span class="ava" aria-hidden="true"><img src="/img/team/karachevtseva.webp" alt="" width="400" height="500" loading="lazy" decoding="async"></span><span class="ribbon">Капитан команды</span><b>Дарья Карачевцева</b><span>Руководитель проекта</span></li>
+        <li><span class="ava" aria-hidden="true"><img src="/img/team/doviryak.webp" alt="" width="400" height="500" loading="lazy" decoding="async"></span><b>Дмитрий Довиряк</b><span>Архитектура, бэкенд, интеграция с MAX</span></li>
+        <li><span class="ava" aria-hidden="true"><img src="/img/team/zhadan.webp" alt="" width="400" height="500" loading="lazy" decoding="async"></span><b>Никита Жадан</b><span>База данных, поиск по материалам, «Перекличка»</span></li>
+        <li><span class="ava" aria-hidden="true"><img src="/img/team/golovina.webp" alt="" width="400" height="500" loading="lazy" decoding="async"></span><b>Алёна Головина</b><span>Исследование аудитории, метрики пользы</span></li>
+        <li><span class="ava" aria-hidden="true"><img src="/img/team/shuklina.webp" alt="" width="400" height="500" loading="lazy" decoding="async"></span><b>Арина Шуклина</b><span>Интерфейс диалогов, макеты, презентация</span></li>
       </ul>
     </div>
   </section>
@@ -372,5 +380,6 @@
   </div>
 </footer>
 <script src="/site.js"></script>
+<script src="/buddies.js"></script>
 </body>
 </html>
